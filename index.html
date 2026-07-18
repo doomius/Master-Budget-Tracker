@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,14 +14,19 @@
     <div id="app-busy-overlay" class="app-busy-overlay hidden" aria-hidden="true">
         <div class="app-busy-spinner"></div>
     </div>
+    <button type="button" class="mobile-nav-toggle" id="btn-mobile-nav-toggle" aria-label="Open navigation menu">
+        <span class="icon">☰</span>
+    </button>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="app-sidebar">
+            <button type="button" class="sidebar-close-btn" id="btn-mobile-nav-close" aria-label="Close navigation menu">✕</button>
             <div class="sidebar-brand">
                 <div class="brand-logo">✨</div>
                 <h1>Budgetify</h1>
             </div>
-            
+
             <nav class="sidebar-nav">
                 <button class="nav-btn active" data-tab="dashboard" id="btn-tab-dashboard">
                     <span class="icon">📅</span> Dashboard
@@ -383,7 +389,7 @@
                                 <div id="seasonal-expenses-content" class="accordion-panel">
                                 <div class="table-responsive">
                                     <table class="data-table">
-                                        <thead><tr><th data-seasonal-sort="name" style="cursor:pointer;">Expense</th><th data-seasonal-sort="month" style="cursor:pointer;">Event Date</th><th data-seasonal-sort="amount" style="cursor:pointer;">Total Budget</th><th data-seasonal-sort="cycles" style="cursor:pointer;">Funding Plan</th><th>Actions</th></tr></thead>
+                                        <thead><tr><th data-seasonal-sort="name" style="cursor:pointer;">Expense</th><th data-seasonal-sort="month" style="cursor:pointer;">Start Date</th><th data-seasonal-sort="amount" style="cursor:pointer;">Total Budget</th><th data-seasonal-sort="cycles" style="cursor:pointer;">Billing Plan</th><th>Frequency</th><th>Charge</th><th>Actions</th></tr></thead>
                                         <tbody id="seasonal-expenses-body"></tbody>
                                     </table>
                                 </div>
@@ -974,6 +980,22 @@
         </form>
     </dialog>
 
+    <!-- Mobile Gig Earnings Entry Modal -->
+    <dialog id="gig-entry-dialog" class="glass-modal gig-entry-dialog">
+        <form method="dialog" id="gig-entry-form">
+            <h3 id="gig-entry-title">Edit Earnings</h3>
+            <p class="muted-text" id="gig-entry-subtitle"></p>
+            <div class="form-group">
+                <label for="gig-entry-input">Amount (numbers and + - * / only)</label>
+                <input type="text" id="gig-entry-input" class="custom-input gig-entry-input" inputmode="decimal" autocomplete="off" placeholder="$0.00">
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-gig-entry">Cancel</button>
+                <button type="submit" class="action-btn solid-btn" id="btn-save-gig-entry">Save</button>
+            </div>
+        </form>
+    </dialog>
+
     <!-- Manual Planned Transfer Modal -->
     <dialog id="manual-transfer-dialog" class="glass-modal">
         <form method="dialog" id="manual-transfer-form">
@@ -1041,8 +1063,8 @@
                 <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-recurring"> Recurring monthly charge</label></div>
             </div>
             <div class="form-row hidden" id="bill-recurrence-dates-group">
-                <div class="form-group"><label for="bill-recurring-start">Recurring Start Month</label><input type="month" id="bill-recurring-start" class="custom-input"><small class="muted-text">The first month this item should appear.</small></div>
-                <div class="form-group"><label for="bill-recurring-end">Final Payment Month</label><input type="month" id="bill-recurring-end" class="custom-input"><small class="muted-text">Optional. Leave blank to continue indefinitely.</small></div>
+                <div class="form-group"><label for="bill-recurring-start">Start Date</label><input type="date" id="bill-recurring-start" class="custom-input"><small class="muted-text">The first day this item should appear.</small></div>
+                <div class="form-group"><label for="bill-recurring-end">End Date</label><input type="date" id="bill-recurring-end" class="custom-input"><small class="muted-text">Optional. Last day this item appears in the ledger; leave blank to continue indefinitely.</small></div>
             </div>
             <div class="form-row">
                 <div class="form-group"><label for="bill-budget-frequency">Budget Method</label><select id="bill-budget-frequency" class="custom-select"><option value="charge">Budget When Charged</option><option value="monthly">Spread Evenly Each Month</option></select></div><div class="form-group"><label for="bill-charge-frequency">Subscription Frequency</label><select id="bill-charge-frequency" class="custom-select"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="biweekly">Every 2 Weeks</option><option value="fourweekly">Every 4 Weeks</option><option value="quarterly">Every 3 Months</option><option value="annual">Annually</option></select></div>
@@ -1072,36 +1094,23 @@
                 <select id="alloc-cycle" class="custom-select">
                     <option value="1st">1st of Month</option>
                     <option value="15th">15th of Month</option>
+                    <option value="both">Split Between 1st &amp; 15th</option>
                 </select>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="alloc-frequency">Frequency</label>
-                    <select id="alloc-frequency" class="custom-select">
-                        <option value="monthly">Monthly</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="yearly">Yearly</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="alloc-start-date">Start Date</label>
-                    <input type="date" id="alloc-start-date" class="custom-input">
-                </div>
             </div>
             <p class="muted-text" id="alloc-frequency-preview"></p>
             <div class="form-row">
                 <div class="form-group">
-                    <label for="alloc-jason">Jason Amount</label>
-                    <div class="input-prefix-wrapper">
+                    <label class="checkbox-label"><input type="checkbox" id="alloc-jason-enabled"> Jason</label>
+                    <div class="input-prefix-wrapper hidden" id="alloc-jason-group">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="alloc-jason" class="custom-input" placeholder="Leave blank for no change">
+                        <input type="number" step="0.01" id="alloc-jason" class="custom-input" placeholder="Allocation amount">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label for="alloc-asia">Asia Amount</label>
-                    <div class="input-prefix-wrapper">
+                    <label class="checkbox-label"><input type="checkbox" id="alloc-asia-enabled"> Asia</label>
+                    <div class="input-prefix-wrapper hidden" id="alloc-asia-group">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="alloc-asia" class="custom-input" placeholder="Leave blank for no change">
+                        <input type="number" step="0.01" id="alloc-asia" class="custom-input" placeholder="Allocation amount">
                     </div>
                 </div>
             </div>
@@ -1113,8 +1122,24 @@
                 <div class="form-group"><label for="alloc-offset-asia">Following Cycle — Asia</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="alloc-offset-asia" class="custom-input" placeholder="Leave blank for no change"></div></div>
             </div>
             <div class="form-group">
-                <label class="checkbox-label"><input type="checkbox" id="alloc-apply-future" checked> Make this a recurring allocation (applies to future months)</label>
-            </div>            <div class="modal-buttons">
+                <label class="checkbox-label"><input type="checkbox" id="alloc-recurring"> Recurring charge</label>
+                <small class="muted-text">Unchecked = one-time allocation for this bill cycle only.</small>
+            </div>
+            <div class="hidden" id="alloc-recurrence-dates-group">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="alloc-frequency">Frequency</label>
+                        <select id="alloc-frequency" class="custom-select">
+                            <option value="monthly">Monthly</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="yearly">Yearly</option>
+                        </select>
+                    </div>
+                    <div class="form-group"><label for="alloc-start-date">Start Date</label><input type="date" id="alloc-start-date" class="custom-input"><small class="muted-text">First day this allocation appears; can be in a future month.</small></div>
+                    <div class="form-group"><label for="alloc-end-date">End Date</label><input type="date" id="alloc-end-date" class="custom-input"><small class="muted-text">Optional. Last day this allocation appears.</small></div>
+                </div>
+            </div>
+            <div class="modal-buttons">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-alloc">Cancel</button>
                 <button type="submit" class="action-btn solid-btn">Save Allocation</button>
             </div>
@@ -1128,10 +1153,30 @@
             <div class="form-group"><label for="seasonal-name">Expense Name</label><input type="text" id="seasonal-name" required class="custom-input" placeholder="e.g. State Fair, Thanksgiving, Christmas"></div>
             <div class="form-row">
                 <div class="form-group"><label for="seasonal-amount">Total Budget</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="seasonal-amount" required class="custom-input"></div></div>
-                <div class="form-group"><label for="seasonal-month">Event Month</label><select id="seasonal-month" class="custom-select"><option value="0">January</option><option value="1">February</option><option value="2">March</option><option value="3">April</option><option value="4">May</option><option value="5">June</option><option value="6">July</option><option value="7">August</option><option value="8">September</option><option value="9">October</option><option value="10">November</option><option value="11">December</option></select></div>
-                <div class="form-group"><label for="seasonal-day">Event Day</label><input type="number" min="1" max="31" id="seasonal-day" required class="custom-input" value="1"></div>
+                <div class="form-group"><label for="seasonal-cycles">Total Number of Billing Cycles</label><input type="number" min="1" max="48" id="seasonal-cycles" required class="custom-input" value="4"><small class="muted-text">The total is divided evenly across this many 1st/15th cycles.</small></div>
             </div>
-            <div class="form-group"><label for="seasonal-cycles">Semi-monthly Funding Cycles</label><input type="number" min="1" max="24" id="seasonal-cycles" required class="custom-input" value="4"><small class="muted-text">The total is divided evenly across 1st/15th cycles leading up to the event.</small></div>
+            <div class="form-row">
+                <div class="form-group"><label for="seasonal-start-date">Start Date</label><input type="date" id="seasonal-start-date" required class="custom-input"><small class="muted-text">First charge date.</small></div>
+                <div class="form-group"><label for="seasonal-end-date">End Date</label><input type="date" id="seasonal-end-date" class="custom-input"><small class="muted-text">Optional. Stops generating cycles after this date even if some remain.</small></div>
+            </div>
+            <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem;">
+                <input type="checkbox" id="seasonal-recurring" style="cursor: pointer;">
+                <label for="seasonal-recurring" style="margin: 0; cursor: pointer;">Repeats every year (based on Start Date)</label>
+            </div>
+            <div class="form-row" id="seasonal-frequency-group">
+                <div class="form-group"><label for="seasonal-frequency">Frequency</label><select id="seasonal-frequency" class="custom-select"><option value="yearly">Yearly</option><option value="quarterly">Quarterly</option><option value="monthly">Monthly</option></select><small class="muted-text">How often the whole expense (and its billing cycles) repeats, starting from Start Date.</small></div>
+            </div>
+            <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem;">
+                <input type="checkbox" id="seasonal-has-charge" style="cursor: pointer;">
+                <label for="seasonal-has-charge" style="margin: 0; cursor: pointer;">This expense has an actual charge that posts to a checking account</label>
+            </div>
+            <div id="seasonal-charge-group">
+                <div class="form-row">
+                    <div class="form-group"><label for="seasonal-charge-amount">Charge Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="seasonal-charge-amount" class="custom-input"></div></div>
+                    <div class="form-group"><label for="seasonal-charge-date">Charge Date</label><input type="date" id="seasonal-charge-date" class="custom-input"><small class="muted-text">Posts this date each occurrence (year/quarter/month kept, per Frequency).</small></div>
+                </div>
+                <div class="form-group"><label for="seasonal-charge-source">Charge Paid From</label><select id="seasonal-charge-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option></select></div>
+            </div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-seasonal">Cancel</button><button type="submit" class="action-btn solid-btn">Save Seasonal Expense</button></div>
         </form>
     </dialog>
@@ -1212,6 +1257,7 @@
             <div class="form-row" id="loan-payment-settings-row">
                 <div class="form-group" id="loan-payment-strategy-group"><label for="loan-payment-strategy">Automatic Monthly Payment</label><select id="loan-payment-strategy" class="custom-select"><option value="none">Do not schedule automatically</option><option value="balance">Full Card Balance</option><option value="interestSaving">Interest-Saving Balance</option><option value="minimum">Minimum Payment</option></select></div>
                 <div class="form-group"><label for="loan-payment-source">Pay From</label><select id="loan-payment-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option><optgroup label="Credit Cards" id="loan-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group"><label for="loan-first-payment-date">First Payment Date (optional)</label><input type="date" id="loan-first-payment-date" class="custom-input"></div>
                 <div class="form-group"><label for="loan-payment-end-date">Payment End Date (optional)</label><input type="date" id="loan-payment-end-date" class="custom-input"></div>
                 <div class="form-group"><label for="loan-splitter-cycle">Bill Splitter Transfer Cycle</label><select id="loan-splitter-cycle" class="custom-select"><option value="1st">1st of Month</option><option value="15th">15th of Month</option><option value="both">Split Between 1st &amp; 15th</option></select></div>
                 <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1.5rem;">
@@ -1604,6 +1650,10 @@
                         <option value="15th">15th of Month</option>
                         <option value="both">Split Between 1st &amp; 15th</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label for="bill-settings-first-payment">First Payment Date (optional)</label>
+                    <input type="date" id="bill-settings-first-payment" class="custom-input">
                 </div>
             </div>
 
