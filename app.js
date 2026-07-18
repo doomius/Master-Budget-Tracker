@@ -1106,6 +1106,35 @@ function parseFormula(value) {
     return parseFloat(trimmed) || 0;
 }
 
+function isMobileViewport() {
+    return window.matchMedia('(max-width: 900px)').matches;
+}
+
+function closeMobileSidebar() {
+    const sidebar = document.querySelector('.app-sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (sidebar) sidebar.classList.remove('mobile-open');
+    if (backdrop) backdrop.classList.remove('visible');
+}
+
+function openGigEntryDialog(date, key, label) {
+    const dialog = document.getElementById('gig-entry-dialog');
+    const input = document.getElementById('gig-entry-input');
+    const subtitle = document.getElementById('gig-entry-subtitle');
+    if (!dialog || !input) return;
+
+    const rec = state.deliveryEarnings.find(item => item.date === date);
+    const currentVal = rec ? (rec[key + 'Formula'] || (rec[key] ? String(rec[key]) : '')) : '';
+
+    dialog.dataset.date = date;
+    dialog.dataset.key = key;
+    subtitle.textContent = `${label} — ${date}`;
+    input.value = currentVal;
+
+    dialog.showModal();
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+
 // Date -> record index for state.deliveryEarnings, used only by the hot ensureDeliveryEarningForDate
 // path below (called ~30-40x per month while simulating the balance-adjusted calendar transfers).
 // Everywhere else in the file still reads/writes the array directly with .find()/.push()/.filter(),
@@ -1288,8 +1317,80 @@ function setupEventListeners() {
             const btnTarget = e.currentTarget;
             const tab = btnTarget.dataset.tab;
             switchToTab(tab);
+            closeMobileSidebar();
         });
     });
+
+    // Mobile sidebar toggle
+    const mobileSidebar = document.querySelector('.app-sidebar');
+    const mobileToggleBtn = document.getElementById('btn-mobile-nav-toggle');
+    const mobileCloseBtn = document.getElementById('btn-mobile-nav-close');
+    const mobileBackdrop = document.getElementById('sidebar-backdrop');
+    if (mobileToggleBtn) {
+        mobileToggleBtn.addEventListener('click', () => {
+            mobileSidebar.classList.add('mobile-open');
+            mobileBackdrop.classList.add('visible');
+        });
+    }
+    if (mobileCloseBtn) {
+        mobileCloseBtn.addEventListener('click', closeMobileSidebar);
+    }
+    if (mobileBackdrop) {
+        mobileBackdrop.addEventListener('click', closeMobileSidebar);
+    }
+
+    // Re-render delivery grid if crossing the mobile breakpoint (readonly attr depends on it)
+    let _lastIsMobile = isMobileViewport();
+    window.addEventListener('resize', () => {
+        const nowMobile = isMobileViewport();
+        if (nowMobile !== _lastIsMobile) {
+            _lastIsMobile = nowMobile;
+            renderApp();
+        }
+        if (!nowMobile) closeMobileSidebar();
+    });
+
+    // Mobile gig earnings entry dialog
+    const gigEntryDialog = document.getElementById('gig-entry-dialog');
+    const gigEntryInput = document.getElementById('gig-entry-input');
+    const gigEntryForm = document.getElementById('gig-entry-form');
+    const gigEntryCancelBtn = document.getElementById('btn-cancel-gig-entry');
+    if (gigEntryInput) {
+        gigEntryInput.addEventListener('input', (e) => {
+            const filtered = e.target.value.replace(/[^0-9+\-*/.=() ]/g, '');
+            if (filtered !== e.target.value) {
+                e.target.value = filtered;
+            }
+        });
+        gigEntryInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                gigEntryForm.requestSubmit();
+            }
+        });
+    }
+    if (gigEntryCancelBtn) {
+        gigEntryCancelBtn.addEventListener('click', () => gigEntryDialog.close());
+    }
+    if (gigEntryForm) {
+        gigEntryForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const date = gigEntryDialog.dataset.date;
+            const key = gigEntryDialog.dataset.key;
+            const rawVal = gigEntryInput.value.trim();
+            const parsedVal = parseFormula(rawVal);
+
+            const rec = state.deliveryEarnings.find(item => item.date === date);
+            if (rec) {
+                rec[key + 'Formula'] = rawVal;
+                rec[key] = parsedVal;
+                rec.total = (rec.cash || 0) + (rec.sideGigs || 0) + (rec.grubHub || 0) + (rec.uberEats || 0);
+                saveDatabase();
+                renderApp();
+            }
+            gigEntryDialog.close();
+        });
+    }
 
     // Segmented Dashboard toggles (Personal vs Joint)
     document.querySelectorAll('#dashboard-toggle-container .segment-btn').forEach(btn => {
@@ -2152,9 +2253,15 @@ function setupEventListeners() {
             ? 'personalChecking'
             : (document.getElementById('bill-payment-source').value || 'jointChecking');
         const isRecurring = document.getElementById('bill-recurring').checked || chargeFrequency !== 'monthly';
+        // Start/End are full calendar dates; recurringStartMonth/recurringEndMonth are derived from
+        // them so the existing month-granularity recurrence machinery (templates, propagation,
+        // recurrence indexes) keeps working, while the *Date fields add day-level occurrence
+        // filtering within the first/final month.
         const selectedRecurringStart = document.getElementById('bill-recurring-start').value;
-        const recurringStartMonth = isRecurring ? (chargeFrequency !== 'monthly' && frequencyStartDate ? frequencyStartDate.slice(0, 7) : selectedRecurringStart) : '';
-        const recurringEndMonth = isRecurring ? document.getElementById('bill-recurring-end').value : '';
+        const recurringStartDate = isRecurring ? (chargeFrequency !== 'monthly' && frequencyStartDate ? frequencyStartDate : selectedRecurringStart) : '';
+        const recurringStartMonth = recurringStartDate ? recurringStartDate.slice(0, 7) : '';
+        const recurringEndDate = isRecurring ? document.getElementById('bill-recurring-end').value : '';
+        const recurringEndMonth = recurringEndDate ? recurringEndDate.slice(0, 7) : '';
         const editId = document.getElementById('bill-edit-id').value;
         const oldCycleKey = document.getElementById('bill-edit-cycle').value;
 
@@ -2204,7 +2311,9 @@ function setupEventListeners() {
             weeklyOccurrences: previewOccurrences,
             isRecurring,
             recurringStartMonth,
+            recurringStartDate,
             recurringEndMonth,
+            recurringEndDate,
             manualTransferAmount: (existing && existing.isMortgage) ? frequencyAmount : (existing?.manualTransferAmount ?? frequencyAmount),
             manualSamePaymentAmount: (existing && existing.isMortgage) ? samePaymentAmount : (existing?.manualSamePaymentAmount ?? samePaymentAmount),
             manualOccurrencePaymentAmount: (existing && existing.isMortgage) ? occurrencePaymentAmount : (existing?.manualOccurrencePaymentAmount ?? occurrencePaymentAmount)
@@ -2260,24 +2369,41 @@ function setupEventListeners() {
             if (!document.getElementById('alloc-offset-asia').value) document.getElementById('alloc-offset-asia').value = document.getElementById('alloc-asia').value;
         }
     });
+    // Per-person checkboxes reveal the amount field; unchecking clears it so a hidden field never
+    // silently contributes an amount on save.
+    [['alloc-jason-enabled', 'alloc-jason-group', 'alloc-jason'], ['alloc-asia-enabled', 'alloc-asia-group', 'alloc-asia']].forEach(([cbId, groupId, inputId]) => {
+        document.getElementById(cbId).addEventListener('change', (e) => {
+            document.getElementById(groupId).classList.toggle('hidden', !e.target.checked);
+            if (!e.target.checked) document.getElementById(inputId).value = '';
+        });
+    });
+    document.getElementById('alloc-recurring').addEventListener('change', (e) => {
+        document.getElementById('alloc-recurrence-dates-group').classList.toggle('hidden', !e.target.checked);
+    });
     document.getElementById('allocation-form').addEventListener('submit', (e) => {
         e.preventDefault();
         const name = document.getElementById('alloc-name').value.trim();
         const cycle = document.getElementById('alloc-cycle').value;
-        const frequency = document.getElementById('alloc-frequency').value;
-        const startDate = document.getElementById('alloc-start-date').value;
+        const isRecurringAlloc = document.getElementById('alloc-recurring').checked;
+        // Frequency/start date only apply to recurring allocations; a one-time allocation lands in
+        // the currently viewed month's chosen cycle with no schedule.
+        const frequency = isRecurringAlloc ? document.getElementById('alloc-frequency').value : 'monthly';
+        const startDate = isRecurringAlloc ? document.getElementById('alloc-start-date').value : '';
         const occurrenceCount = getAllocationOccurrenceCount(frequency, startDate, state.currentYear, state.currentMonth);
-        const jasonInput = readOptionalAllocationAmount('alloc-jason');
-        const asiaInput = readOptionalAllocationAmount('alloc-asia');
+        const jasonEnabled = document.getElementById('alloc-jason-enabled').checked;
+        const asiaEnabled = document.getElementById('alloc-asia-enabled').checked;
+        const jasonInput = jasonEnabled ? readOptionalAllocationAmount('alloc-jason') : null;
+        const asiaInput = asiaEnabled ? readOptionalAllocationAmount('alloc-asia') : null;
         const offsetEnabled = document.getElementById('alloc-offset-enabled').checked;
         const offsetJasonInput = readOptionalAllocationAmount('alloc-offset-jason');
         const offsetAsiaInput = readOptionalAllocationAmount('alloc-offset-asia');
-        const applyFuture = document.getElementById('alloc-apply-future').checked || frequency !== 'monthly';
+        const applyFuture = isRecurringAlloc;
+        const allocEndDate = isRecurringAlloc ? document.getElementById('alloc-end-date').value : '';
         const editId = document.getElementById('alloc-edit-id').value;
         const editCycleKey = document.getElementById('alloc-edit-cycle').value;
         if (!name || [jasonInput, asiaInput, offsetJasonInput, offsetAsiaInput].some(Number.isNaN)) return;
-        if ((frequency === 'weekly' || frequency === 'yearly') && !startDate) { alert('Select a start date for this allocation frequency.'); return; }
-        if (!editId && jasonInput === null && asiaInput === null) { alert('Enter an amount for Jason, Asia, or both.'); return; }
+        if (isRecurringAlloc && (frequency === 'weekly' || frequency === 'yearly') && !startDate) { alert('Select a start date for this allocation frequency.'); return; }
+        if (!editId && jasonInput === null && asiaInput === null) { alert('Check Jason, Asia, or both and enter an amount.'); return; }
 
         ensureYearMonthInitialized(state.currentYear, state.currentMonth);
         const key = `${state.currentYear}-${state.currentMonth}`;
@@ -2294,12 +2420,15 @@ function setupEventListeners() {
         const resolvedAsia = resolvedSourceAsia === null ? null : resolvedSourceAsia * occurrenceCount;
         const seriesId = existing?.seriesId || 'alloc-series-' + Math.random().toString(36).substr(2, 9);
         const role = existing?.role || 'base';
-        const cycleKey = cycle === '1st' ? 'cycle1st' : 'cycle15th';
+        // 'both' allocations are stored once in cycle1st with cycle:'both'; the cycle totals split
+        // their amounts half/half across the two cycles (see getAllocationCycleTotal).
+        const cycleKey = cycle === '15th' ? 'cycle15th' : 'cycle1st';
         const allocation = { id: existing?.id || 'alloc-' + Math.random().toString(36).substr(2, 9), seriesId, role, name, jason: resolvedJason, asia: resolvedAsia, sourceJason: resolvedSourceJason, sourceAsia: resolvedSourceAsia, cycle, frequency, startDate, occurrenceCount };
         if (occurrenceCount > 0) mBills[cycleKey].contributions.push(allocation);
 
         if (offsetEnabled && !existing) {
-            const next = cycle === '1st' ? { year: state.currentYear, month: state.currentMonth, cycle: '15th', cycleKey: 'cycle15th' } : { ...shiftCalendarPeriod(state.currentYear, state.currentMonth, 1), cycle: '1st', cycleKey: 'cycle1st' };
+            // For 'both'-cycle allocations the offset lands in the 15th cycle (same as a 1st-cycle base).
+            const next = cycle !== '15th' ? { year: state.currentYear, month: state.currentMonth, cycle: '15th', cycleKey: 'cycle15th' } : { ...shiftCalendarPeriod(state.currentYear, state.currentMonth, 1), cycle: '1st', cycleKey: 'cycle1st' };
             ensureYearMonthInitialized(next.year, next.month);
             const offsetJason = offsetJasonInput === null ? resolvedJason : offsetJasonInput;
             const offsetAsia = offsetAsiaInput === null ? resolvedAsia : offsetAsiaInput;
@@ -2307,7 +2436,18 @@ function setupEventListeners() {
         }
 
         if (applyFuture) {
-            const template = state.allocationTemplates[seriesId] || { seriesId, startIndex: state.currentYear * 12 + MONTH_ORDER.indexOf(state.currentMonth) };
+            // startIndex marks the month BEFORE the first auto-generated month (template generation
+            // is `targetIndex <= startIndex ? skip`). Derived from the Start Date's month when set
+            // (allocations can start in a future month); default stays "generate from next month on"
+            // since the current month's occurrence is pushed directly above.
+            let startIndex = state.currentYear * 12 + MONTH_ORDER.indexOf(state.currentMonth);
+            if (startDate) {
+                const sd = new Date(startDate + 'T00:00:00');
+                if (!Number.isNaN(sd.getTime())) startIndex = sd.getFullYear() * 12 + sd.getMonth() - 1;
+            }
+            const template = state.allocationTemplates[seriesId] || { seriesId, startIndex };
+            if (startDate) template.startIndex = startIndex;
+            template.endDate = allocEndDate || '';
             if (role === 'offset') {
                 if (jasonInput !== null) template.offsetJason = jasonInput;
                 if (asiaInput !== null) template.offsetAsia = asiaInput;
@@ -2332,21 +2472,32 @@ function setupEventListeners() {
         saveDatabase(); renderApp(); document.getElementById('allocation-dialog').close();
         logSystem(`${existing ? 'Updated' : 'Added'} personal allocation: ${name}`);
     });    document.getElementById('btn-cancel-seasonal').addEventListener('click', () => document.getElementById('seasonal-dialog').close());
+    document.getElementById('seasonal-recurring').addEventListener('change', (e) => document.getElementById('seasonal-frequency-group').classList.toggle('hidden', !e.target.checked));
+    document.getElementById('seasonal-has-charge').addEventListener('change', (e) => document.getElementById('seasonal-charge-group').classList.toggle('hidden', !e.target.checked));
     document.getElementById('seasonal-form').addEventListener('submit', (e) => {
         e.preventDefault();
         const editId = document.getElementById('seasonal-edit-id').value;
         const name = document.getElementById('seasonal-name').value.trim();
         const amount = parseFloat(document.getElementById('seasonal-amount').value);
-        const month = parseInt(document.getElementById('seasonal-month').value);
-        const day = parseInt(document.getElementById('seasonal-day').value);
         const cycles = parseInt(document.getElementById('seasonal-cycles').value);
-        if (!name || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(month) || !Number.isInteger(day) || !Number.isInteger(cycles)) return;
+        const startDate = document.getElementById('seasonal-start-date').value;
+        const endDate = document.getElementById('seasonal-end-date').value;
+        const isRecurring = document.getElementById('seasonal-recurring').checked;
+        const frequency = document.getElementById('seasonal-frequency').value;
+        const hasCharge = document.getElementById('seasonal-has-charge').checked;
+        const chargeAmount = parseFloat(document.getElementById('seasonal-charge-amount').value);
+        const chargeDate = document.getElementById('seasonal-charge-date').value;
+        const chargeSource = document.getElementById('seasonal-charge-source').value;
+        if (!name || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(cycles) || !startDate) return;
+        if (endDate && endDate < startDate) { alert('End date cannot be before the start date.'); return; }
+        if (hasCharge && (!Number.isFinite(chargeAmount) || chargeAmount <= 0 || !chargeDate)) { alert('Enter a charge amount and charge date, or uncheck "has an actual charge".'); return; }
         const id = editId || 'seasonal-' + Math.random().toString(36).substr(2, 9);
         removeSeasonalInstallments(id);
-        const definition = { id, name, amount, month, day: Math.min(31, Math.max(1, day)), cycles: Math.min(24, Math.max(1, cycles)) };
+        const definition = { id, name, amount, startDate, endDate, cycles: Math.min(48, Math.max(1, cycles)), isRecurring, frequency, hasCharge, chargeAmount: hasCharge ? chargeAmount : undefined, chargeDate: hasCharge ? chargeDate : undefined, chargeSource: hasCharge ? chargeSource : undefined };
         const index = state.seasonalExpenses.findIndex(item => item.id === id);
         if (index > -1) state.seasonalExpenses[index] = definition; else state.seasonalExpenses.push(definition);
         applySeasonalExpensesForMonth(state.currentYear, state.currentMonth);
+        applySeasonalChargeForMonth(state.currentYear, state.currentMonth);
         saveDatabase(); renderApp(); document.getElementById('seasonal-dialog').close();
     });
     // Loan Dialog Submit
@@ -2519,6 +2670,7 @@ function setupEventListeners() {
         const paymentStrategy = type === 'credit' ? document.getElementById('loan-payment-strategy').value : 'none';
         const paymentSource = document.getElementById('loan-payment-source').value;
         const paymentEndDate = document.getElementById('loan-payment-end-date').value;
+        const firstPaymentDate = document.getElementById('loan-first-payment-date').value;
         const splitterCycleOverride = document.getElementById('loan-splitter-cycle').value;
         const isExemptFromSplitter = document.getElementById('loan-exempt-splitter').checked;
         
@@ -2555,7 +2707,7 @@ function setupEventListeners() {
                 loan.paymentPlans = JSON.parse(JSON.stringify(tempEditingPaymentPlans));
                 loan.paymentStrategy = paymentStrategy;
                 loan.paymentSource = paymentSource;
-                loan.paymentStrategyStartDate = formatLocalDate(new Date());
+                loan.paymentStrategyStartDate = firstPaymentDate || formatLocalDate(new Date());
                 loan.paymentEndDate = paymentEndDate;
                 loan.splitterCycleOverride = splitterCycleOverride;
                 
@@ -2588,7 +2740,7 @@ function setupEventListeners() {
                 paymentPlans: JSON.parse(JSON.stringify(tempEditingPaymentPlans)),
                 paymentStrategy: paymentStrategy,
                 paymentSource: paymentSource,
-                paymentStrategyStartDate: formatLocalDate(new Date()),
+                paymentStrategyStartDate: firstPaymentDate || formatLocalDate(new Date()),
                 paymentEndDate: paymentEndDate,
                 splitterCycleOverride: splitterCycleOverride,
                 
@@ -2834,16 +2986,26 @@ function setupEventListeners() {
     document.getElementById('btn-add-seasonal').addEventListener('click', () => {
         document.getElementById('seasonal-form').reset(); document.getElementById('seasonal-edit-id').value = '';
         document.getElementById('seasonal-modal-title').textContent = 'Add Seasonal Expense';
-        document.getElementById('seasonal-month').value = String(new Date().getMonth()); document.getElementById('seasonal-cycles').value = '4';
+        document.getElementById('seasonal-cycles').value = '4';
+        document.getElementById('seasonal-start-date').value = formatLocalDate(new Date());
+        document.getElementById('seasonal-end-date').value = '';
+        document.getElementById('seasonal-frequency').value = 'yearly';
+        document.getElementById('seasonal-frequency-group').classList.add('hidden');
+        document.getElementById('seasonal-charge-source').value = 'personal';
+        document.getElementById('seasonal-charge-group').classList.add('hidden');
         document.getElementById('seasonal-dialog').showModal();
     });
     // Quick add allocation trigger
     document.getElementById('btn-add-allocation').addEventListener('click', () => {
         document.getElementById('allocation-form').reset();
-        document.getElementById('alloc-apply-future').checked = true;
         document.getElementById('alloc-edit-id').value = '';
         document.getElementById('alloc-edit-cycle').value = '';
         document.getElementById('alloc-offset-fields').classList.add('hidden');
+        document.getElementById('alloc-jason-group').classList.add('hidden');
+        document.getElementById('alloc-asia-group').classList.add('hidden');
+        document.getElementById('alloc-recurring').checked = true;
+        document.getElementById('alloc-recurrence-dates-group').classList.remove('hidden');
+        document.getElementById('alloc-end-date').value = '';
         document.getElementById('alloc-frequency').value = 'monthly';
         document.getElementById('alloc-start-date').value = state.currentYear + '-' + String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0') + '-01';
         document.getElementById('alloc-frequency-preview').textContent = '1 monthly occurrence in ' + MONTH_NAMES[state.currentMonth] + '; entered amounts are applied once.';
@@ -4255,6 +4417,7 @@ function getCalculatedTransferForJason(year, monthShort, cycle) {
     autopopulateBillsForMonth(year, monthShort);
     applyAllocationTemplatesForMonth(year, monthShort);
     applySeasonalExpensesForMonth(year, monthShort);
+    applySeasonalChargeForMonth(year, monthShort);
 
     const allBills = ['cycle1st', 'cycle15th'].flatMap(cycleKey => (mBills[cycleKey].bills || []).map(bill => normalizeBillSplitterItem(bill, cycleKey)));
     const cycleKey = cycle === '1st' ? 'cycle1st' : 'cycle15th';
@@ -4267,8 +4430,10 @@ function getCalculatedTransferForJason(year, monthShort, cycle) {
         if (bill.ownership !== 'personal') jointBudget += allocatedAmount;
     });
 
-    // Preserve sign: negative "offset" allocations are meant to net against other allocations, not add to them.
-    const jasonAllocations = (cycleData.contributions || []).reduce((sum, item) => sum + (Number(item.jason) || 0), 0);
+    // Preserve sign: negative "offset" allocations are meant to net against other allocations, not
+    // add to them. 'both'-cycle allocations are stored once (in cycle1st) with cycle:'both' and
+    // split half/half across both cycles, mirroring how 'both'-cycle bills are already split.
+    const jasonAllocations = getAllocationCycleTotal(mBills, cycleKey, 'jason');
     const jointShare = Math.round(jointBudget * 50 + 1e-8) / 100;
     return Math.round((jasonAllocations + jointShare) * 100 + 1e-8) / 100;
 }
@@ -4289,6 +4454,7 @@ function getCalculatedTransferForAsia(year, monthShort, cycle) {
     autopopulateBillsForMonth(year, monthShort);
     applyAllocationTemplatesForMonth(year, monthShort);
     applySeasonalExpensesForMonth(year, monthShort);
+    applySeasonalChargeForMonth(year, monthShort);
 
     const allBills = ['cycle1st', 'cycle15th'].flatMap(cycleKey => (mBills[cycleKey].bills || []).map(bill => normalizeBillSplitterItem(bill, cycleKey)));
     const cycleKey = cycle === '1st' ? 'cycle1st' : 'cycle15th';
@@ -4302,7 +4468,7 @@ function getCalculatedTransferForAsia(year, monthShort, cycle) {
     });
 
     // Preserve sign: negative "offset" allocations are meant to net against other allocations, not add to them.
-    const asiaAllocations = (cycleData.contributions || []).reduce((sum, item) => sum + (Number(item.asia) || 0), 0);
+    const asiaAllocations = getAllocationCycleTotal(mBills, cycleKey, 'asia');
     const jointShare = Math.round(jointBudget * 50 + 1e-8) / 100;
     return Math.round((asiaAllocations + jointShare) * 100 + 1e-8) / 100;
 }
@@ -6510,7 +6676,7 @@ function resetBillSplitterForm() {
     document.getElementById('bill-budget-amount-label').textContent = 'Transfer Amount';
     document.getElementById('bill-budget-preview').textContent = '';
     const currentMonthNumber = String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0');
-    document.getElementById('bill-recurring-start').value = `${state.currentYear}-${currentMonthNumber}`;
+    document.getElementById('bill-recurring-start').value = `${state.currentYear}-${currentMonthNumber}-01`;
     document.getElementById('bill-frequency-start').value = `${state.currentYear}-${currentMonthNumber}-01`;
     document.getElementById('bill-recurring-end').value = '';
     document.getElementById('bill-recurrence-dates-group').classList.add('hidden');
@@ -6541,8 +6707,15 @@ function openBillSplitterEditor(bill, cycleKey) {
     document.getElementById('bill-due-day').value = bill.dueDay;
     document.getElementById('bill-payment-source').value = bill.paymentSource;
     document.getElementById('bill-recurring').checked = bill.isRecurring;
-    document.getElementById('bill-recurring-start').value = bill.recurringStartMonth || '';
-    document.getElementById('bill-recurring-end').value = bill.recurringEndMonth || '';
+    // The start field is a full date now; legacy bills that only stored recurringStartMonth display
+    // as that month's first day.
+    document.getElementById('bill-recurring-start').value = bill.recurringStartDate || (bill.recurringStartMonth ? `${bill.recurringStartMonth}-01` : '');
+    // The end field is a full date now; legacy bills that only stored recurringEndMonth display as
+    // that month's last day.
+    document.getElementById('bill-recurring-end').value = bill.recurringEndDate
+        || (bill.recurringEndMonth
+            ? (() => { const [y, m] = bill.recurringEndMonth.split('-').map(Number); return `${bill.recurringEndMonth}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; })()
+            : '');
     document.getElementById('bill-recurrence-dates-group').classList.toggle('hidden', !bill.isRecurring);
     document.getElementById('bill-budget-frequency').value = bill.budgetFrequency || 'monthly';
     document.getElementById('bill-charge-frequency').value = bill.chargeFrequency || 'monthly';
@@ -6659,18 +6832,35 @@ function openBillSplitterEditor(bill, cycleKey) {
 
     document.getElementById('joint-bill-dialog').showModal();
 }
-function getAllocationOccurrenceCount(frequency, startDate, year, month) {
+// Sums a person's allocation contributions for one cycle across both storage arrays, since 'both'
+// (split 1st & 15th) allocations are stored once in cycle1st.contributions but contribute half to
+// each cycle's total — mirroring how 'both'-cycle bills are already split in cycle total math.
+function getAllocationCycleTotal(mBills, cycleKey, person) {
+    let total = 0;
+    ['cycle1st', 'cycle15th'].forEach(ck => {
+        (mBills[ck]?.contributions || []).forEach(item => {
+            const amount = Number(item[person]) || 0;
+            if (item.cycle === 'both') total += amount / 2;
+            else if (ck === cycleKey) total += amount;
+        });
+    });
+    return total;
+}
+function getAllocationOccurrenceCount(frequency, startDate, year, month, endDate = '') {
     const monthIndex = MONTH_ORDER.indexOf(month);
     if (monthIndex < 0) return 0;
     const first = new Date(Number(year), monthIndex, 1);
     const last = new Date(Number(year), monthIndex + 1, 0);
     const start = startDate ? new Date(`${startDate}T00:00:00`) : first;
     if (Number.isNaN(start.getTime()) || last < start) return 0;
+    const end = endDate ? new Date(`${endDate}T00:00:00`) : null;
+    if (end && !Number.isNaN(end.getTime()) && first > end) return 0;
     if (frequency === 'yearly') return first.getMonth() === start.getMonth() && first.getFullYear() >= start.getFullYear() ? 1 : 0;
     if (frequency !== 'weekly') return 1;
     let count = 0;
     for (let day = 1; day <= last.getDate(); day++) {
         const date = new Date(Number(year), monthIndex, day);
+        if (end && !Number.isNaN(end.getTime()) && date > end) break;
         if (date >= start && date.getDay() === start.getDay()) count++;
     }
     return count;
@@ -6732,7 +6922,7 @@ function applyAllocationTemplatesForMonth(year, month) {
             const skipped = state.allocationRecurrenceSkips?.[`${recurrenceKey}|${key}`];
             return !skipped && !(Number.isFinite(Number(stoppedAt)) && Number(stoppedAt) <= targetIndex);
         };
-        const occurrenceCount = getAllocationOccurrenceCount(template.frequency || 'monthly', template.startDate || '', year, month);
+        const occurrenceCount = getAllocationOccurrenceCount(template.frequency || 'monthly', template.startDate || '', year, month, template.endDate || '');
         const templateAmount = value => value === null || value === undefined || value === ''
             ? null
             : (template.signedValues ? Number(value) : -Math.abs(Number(value))) * occurrenceCount;
@@ -6746,45 +6936,169 @@ function openAllocationEditor(allocation, cycleKey) {
     document.getElementById('alloc-edit-id').value = allocation.id;
     document.getElementById('alloc-edit-cycle').value = cycleKey;
     document.getElementById('alloc-name').value = allocation.name;
-    document.getElementById('alloc-cycle').value = cycleKey === 'cycle15th' ? '15th' : '1st';
-    document.getElementById('alloc-jason').value = allocation.sourceJason ?? allocation.jason ?? '';
-    document.getElementById('alloc-asia').value = allocation.sourceAsia ?? allocation.asia ?? '';
+    document.getElementById('alloc-cycle').value = allocation.cycle === 'both' ? 'both' : (cycleKey === 'cycle15th' ? '15th' : '1st');
+    const jasonAmount = allocation.sourceJason ?? allocation.jason;
+    const asiaAmount = allocation.sourceAsia ?? allocation.asia;
+    const hasJason = jasonAmount !== null && jasonAmount !== undefined && jasonAmount !== '';
+    const hasAsia = asiaAmount !== null && asiaAmount !== undefined && asiaAmount !== '';
+    document.getElementById('alloc-jason-enabled').checked = hasJason;
+    document.getElementById('alloc-asia-enabled').checked = hasAsia;
+    document.getElementById('alloc-jason-group').classList.toggle('hidden', !hasJason);
+    document.getElementById('alloc-asia-group').classList.toggle('hidden', !hasAsia);
+    document.getElementById('alloc-jason').value = hasJason ? jasonAmount : '';
+    document.getElementById('alloc-asia').value = hasAsia ? asiaAmount : '';
     document.getElementById('alloc-frequency').value = allocation.frequency || 'monthly';
     document.getElementById('alloc-start-date').value = allocation.startDate || '';
     const occurrenceCount = getAllocationOccurrenceCount(allocation.frequency || 'monthly', allocation.startDate || '', state.currentYear, state.currentMonth);
     document.getElementById('alloc-frequency-preview').textContent = `${occurrenceCount} ${(allocation.frequency || 'monthly')} occurrence${occurrenceCount === 1 ? '' : 's'} in ${MONTH_NAMES[state.currentMonth]}.`;
     document.getElementById('alloc-offset-enabled').checked = false;
     document.getElementById('alloc-offset-fields').classList.add('hidden');
-    document.getElementById('alloc-apply-future').checked = true;
+    const template = allocation.seriesId ? state.allocationTemplates[allocation.seriesId] : null;
+    document.getElementById('alloc-recurring').checked = !!template;
+    document.getElementById('alloc-recurrence-dates-group').classList.toggle('hidden', !template);
+    document.getElementById('alloc-end-date').value = template ? (template.endDate || '') : '';
     document.getElementById('allocation-dialog').showModal();
 }
-function getSeasonalFundingDates(expense, eventYear) {
-    const eventDay = Math.min(expense.day, new Date(eventYear, expense.month + 1, 0).getDate());
-    const eventDate = new Date(eventYear, expense.month, eventDay);
+// Adds `n` occurrences of `frequency` (yearly/quarterly/monthly) to `date`, preserving day-of-month
+// where possible (clamped to the target month's length, e.g. Jan 31 + 1 month -> Feb 28/29).
+function addSeasonalInterval(date, frequency, n) {
+    const monthsToAdd = frequency === 'monthly' ? n : frequency === 'quarterly' ? n * 3 : n * 12;
+    const day = date.getDate();
+    const target = new Date(date.getFullYear(), date.getMonth() + monthsToAdd, 1);
+    const daysInTarget = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    target.setDate(Math.min(day, daysInTarget));
+    return target;
+}
+// Generates one occurrence's semi-monthly installment dates going FORWARD from `occurrenceStart`
+// (not backward from a one-time event like the old model) — the first installment lands on the
+// nearest 1st/15th cycle on or after occurrenceStart, then alternates 1st/15th for up to `cycles`
+// installments, stopping early if endDate is set and would be exceeded.
+function getSeasonalFundingDates(expense, occurrenceStart) {
+    const start = occurrenceStart || (expense.startDate ? new Date(expense.startDate + 'T00:00:00') : null);
+    if (!start || Number.isNaN(start.getTime())) return [];
+    const end = expense.endDate ? new Date(expense.endDate + 'T00:00:00') : null;
+    let cursor;
+    if (start.getDate() <= 1) cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    else if (start.getDate() <= 15) cursor = new Date(start.getFullYear(), start.getMonth(), 15);
+    else cursor = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+    const totalCycles = Math.max(1, Number(expense.cycles) || 1);
     const dates = [];
-    let cursor = new Date(eventYear, expense.month, eventDay >= 15 ? 15 : 1);
-    if (cursor >= eventDate) { if (cursor.getDate() === 15) cursor.setDate(1); else { cursor.setMonth(cursor.getMonth() - 1); cursor.setDate(15); } }
-    while (dates.length < expense.cycles) { dates.unshift(new Date(cursor)); if (cursor.getDate() === 15) cursor.setDate(1); else { cursor.setMonth(cursor.getMonth() - 1); cursor.setDate(15); } }
+    while (dates.length < totalCycles) {
+        if (end && cursor > end) break;
+        dates.push(new Date(cursor));
+        cursor = cursor.getDate() === 1 ? new Date(cursor.getFullYear(), cursor.getMonth(), 15) : new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    }
     return dates;
+}
+// A recurring expense's billing-cycle installments repeat every `frequency` interval anchored to
+// startDate, in perpetuity (unless endDate stops it). Returns each occurrence's start date whose
+// installments could plausibly land in (targetYear, targetMonthIndex).
+function getSeasonalOccurrenceStarts(expense, targetYear, targetMonthIndex) {
+    if (!expense.startDate) return [];
+    const start = new Date(expense.startDate + 'T00:00:00');
+    if (Number.isNaN(start.getTime())) return [];
+    const end = expense.endDate ? new Date(expense.endDate + 'T00:00:00') : null;
+    const targetMonthsFromEpoch = targetYear * 12 + targetMonthIndex;
+    // Cycles alternate 1st/15th, so roughly cycles/2 months are spanned by one occurrence.
+    const spanMonths = Math.ceil(Math.max(1, Number(expense.cycles) || 1) / 2) + 1;
+    if (!expense.isRecurring) {
+        const startMonthsFromEpoch = start.getFullYear() * 12 + start.getMonth();
+        if (startMonthsFromEpoch > targetMonthsFromEpoch || startMonthsFromEpoch < targetMonthsFromEpoch - spanMonths) return [];
+        return [start];
+    }
+    const frequency = expense.frequency || 'yearly';
+    const starts = [];
+    for (let n = 0; n < 5000; n++) {
+        const occStart = addSeasonalInterval(start, frequency, n);
+        if (end && occStart > end) break;
+        const occMonthsFromEpoch = occStart.getFullYear() * 12 + occStart.getMonth();
+        if (occMonthsFromEpoch > targetMonthsFromEpoch) break;
+        if (occMonthsFromEpoch >= targetMonthsFromEpoch - spanMonths) starts.push(occStart);
+    }
+    return starts;
 }
 function removeSeasonalInstallments(expenseId) {
     Object.values(state.monthlyBills || {}).forEach(monthData => ['cycle1st','cycle15th'].forEach(cycleKey => { monthData[cycleKey].bills = (monthData[cycleKey].bills || []).filter(item => item.seasonalExpenseId !== expenseId); recalculateBillCycleTotals(monthData); }));
+    Object.values(state.personalCalendar || {}).forEach(list => { for (let i = list.length - 1; i >= 0; i--) if (list[i].seasonalExpenseId === expenseId) list.splice(i, 1); });
+    for (let i = state.jointRegister.length - 1; i >= 0; i--) if (state.jointRegister[i].seasonalExpenseId === expenseId) state.jointRegister.splice(i, 1);
 }
 function applySeasonalExpensesForMonth(year, month) {
     const mBills = state.monthlyBills?.[`${year}-${month}`]; if (!mBills) return;
     const monthIndex = MONTH_ORDER.indexOf(month);
-    (state.seasonalExpenses || []).forEach(expense => [year, year + 1].forEach(eventYear => getSeasonalFundingDates(expense, eventYear).forEach(date => {
-        if (date.getFullYear() !== year || date.getMonth() !== monthIndex) return;
-        const cycleKey = date.getDate() === 15 ? 'cycle15th' : 'cycle1st'; const id = `${expense.id}-${date.toISOString().slice(0,10)}`;
-        if (mBills[cycleKey].bills.some(item => item.id === id)) return;
-        const installment = Math.round((expense.amount / expense.cycles) * 100) / 100;
-        mBills[cycleKey].bills.push(normalizeBillSplitterItem({ id, account: `${expense.name} Funding`, category: 'expense', budgetAmount: installment, paymentAmount: 0, amount: -installment, dueDay: 0, entryType: 'calculation', ownership: 'joint', cycleAllocation: date.getDate() === 15 ? '15th' : '1st', seasonalExpenseId: expense.id, seasonalEventYear: eventYear, isRecurring: false }, cycleKey));
-    }))); recalculateBillCycleTotals(mBills);
+    (state.seasonalExpenses || []).forEach(expense => getSeasonalOccurrenceStarts(expense, year, monthIndex).forEach(occStart => {
+        getSeasonalFundingDates(expense, occStart).forEach(date => {
+            if (date.getFullYear() !== year || date.getMonth() !== monthIndex) return;
+            const cycleKey = date.getDate() === 15 ? 'cycle15th' : 'cycle1st'; const id = `${expense.id}-${formatLocalDate(date)}`;
+            if (mBills[cycleKey].bills.some(item => item.id === id)) return;
+            const totalCycles = Math.max(1, Number(expense.cycles) || 1);
+            const installment = Math.round((expense.amount / totalCycles) * 100) / 100;
+            mBills[cycleKey].bills.push(normalizeBillSplitterItem({ id, account: expense.name, category: 'expense', budgetAmount: installment, paymentAmount: 0, amount: -installment, dueDay: 0, entryType: 'calculation', ownership: 'joint', cycleAllocation: date.getDate() === 15 ? '15th' : '1st', seasonalExpenseId: expense.id, isRecurring: false }, cycleKey));
+        });
+    })); recalculateBillCycleTotals(mBills);
+}
+// The actual one-time charge (e.g. the $500 State Fair bill) posts as a real ledger transaction on
+// its own chargeDate, independent of the Bill Splitter savings installments above, and repeats on
+// the same yearly/quarterly/monthly cadence as the rest of the expense.
+function getSeasonalChargeOccurrenceDate(expense, targetYear, targetMonthIndex) {
+    if (!expense.hasCharge || !expense.chargeDate) return null;
+    const chargeStart = new Date(expense.chargeDate + 'T00:00:00');
+    if (Number.isNaN(chargeStart.getTime())) return null;
+    const end = expense.endDate ? new Date(expense.endDate + 'T00:00:00') : null;
+    const targetMonthsFromEpoch = targetYear * 12 + targetMonthIndex;
+    if (!expense.isRecurring) {
+        const startMonthsFromEpoch = chargeStart.getFullYear() * 12 + chargeStart.getMonth();
+        return startMonthsFromEpoch === targetMonthsFromEpoch ? chargeStart : null;
+    }
+    const frequency = expense.frequency || 'yearly';
+    for (let n = 0; n < 5000; n++) {
+        const occ = addSeasonalInterval(chargeStart, frequency, n);
+        if (end && occ > end) break;
+        const occMonthsFromEpoch = occ.getFullYear() * 12 + occ.getMonth();
+        if (occMonthsFromEpoch > targetMonthsFromEpoch) break;
+        if (occMonthsFromEpoch === targetMonthsFromEpoch) return occ;
+    }
+    return null;
+}
+function applySeasonalChargeForMonth(year, month) {
+    const monthIndex = MONTH_ORDER.indexOf(month);
+    const key = `${year}-${month}`;
+    (state.seasonalExpenses || []).forEach(expense => {
+        const linkId = `seasonal-charge-${expense.id}-${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+        const occDate = expense.hasCharge ? getSeasonalChargeOccurrenceDate(expense, year, monthIndex) : null;
+        const source = expense.chargeSource === 'joint' ? 'joint' : 'personal';
+        const amount = occDate ? Math.max(0, Math.round((Number(expense.chargeAmount) || 0) * 100) / 100) : 0;
+        const dateStr = occDate ? formatLocalDate(occDate) : null;
+
+        const existingJoint = state.jointRegister.find(tx => tx.seasonalChargeId === linkId);
+        const existingPersonal = Object.values(state.personalCalendar || {}).flat().find(tx => tx.seasonalChargeId === linkId);
+        const existing = existingJoint || existingPersonal;
+        if (existing && amount > 0 && existing.date === dateStr && Math.abs((Number(existing.amount) || 0) + amount) < 0.005
+            && ((existingJoint && source === 'joint') || (existingPersonal && source === 'personal'))) return;
+
+        Object.values(state.personalCalendar || {}).forEach(list => { for (let i = list.length - 1; i >= 0; i--) if (list[i].seasonalChargeId === linkId) list.splice(i, 1); });
+        for (let i = state.jointRegister.length - 1; i >= 0; i--) if (state.jointRegister[i].seasonalChargeId === linkId) state.jointRegister.splice(i, 1);
+        if (amount <= 0) return;
+
+        const tx = { id: (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9), type: source === 'joint' ? 'expense' : undefined, name: expense.name, description: expense.name, date: dateStr, amount: -amount, seasonalChargeId: linkId, seasonalExpenseId: expense.id };
+        ensureYearMonthInitialized(year, month);
+        if (source === 'joint') state.jointRegister.push(tx);
+        else { if (!state.personalCalendar[key]) state.personalCalendar[key] = []; state.personalCalendar[key].push(tx); }
+    });
 }
 function openSeasonalEditor(expense) {
     document.getElementById('seasonal-modal-title').textContent = 'Edit Seasonal Expense'; document.getElementById('seasonal-edit-id').value = expense.id;
     document.getElementById('seasonal-name').value = expense.name; document.getElementById('seasonal-amount').value = expense.amount;
-    document.getElementById('seasonal-month').value = String(expense.month); document.getElementById('seasonal-day').value = expense.day; document.getElementById('seasonal-cycles').value = expense.cycles;
+    document.getElementById('seasonal-cycles').value = expense.cycles;
+    document.getElementById('seasonal-start-date').value = expense.startDate || '';
+    document.getElementById('seasonal-end-date').value = expense.endDate || '';
+    document.getElementById('seasonal-recurring').checked = !!expense.isRecurring;
+    document.getElementById('seasonal-frequency').value = expense.frequency || 'yearly';
+    document.getElementById('seasonal-frequency-group').classList.toggle('hidden', !expense.isRecurring);
+    document.getElementById('seasonal-has-charge').checked = !!expense.hasCharge;
+    document.getElementById('seasonal-charge-amount').value = expense.chargeAmount || '';
+    document.getElementById('seasonal-charge-date').value = expense.chargeDate || '';
+    document.getElementById('seasonal-charge-source').value = expense.chargeSource || 'personal';
+    document.getElementById('seasonal-charge-group').classList.toggle('hidden', !expense.hasCharge);
     document.getElementById('seasonal-dialog').showModal();
 }
 function renderBillSplitterMetrics(mBills, allBills) {
@@ -7005,6 +7319,7 @@ function renderBillsTab() {
     autopopulateBillsForMonth(state.currentYear, state.currentMonth);
     applyAllocationTemplatesForMonth(state.currentYear, state.currentMonth);
     applySeasonalExpensesForMonth(state.currentYear, state.currentMonth);
+    applySeasonalChargeForMonth(state.currentYear, state.currentMonth);
     const mBills = state.monthlyBills[key];
     if (!mBills) return;
 
@@ -7019,9 +7334,10 @@ function renderBillsTab() {
             const allocatedAmount = bill.cycleAllocation === 'both' ? bill.budgetAmount / 2 : (assignedCycle === cycleKey ? bill.budgetAmount : 0);
             if (bill.ownership !== 'personal') jointBudget += allocatedAmount;
         });
-        // Preserve sign: negative "offset" allocations are meant to net against other allocations, not add to them.
-        const jasonAllocations = (cycleData.contributions || []).reduce((sum, item) => sum + (Number(item.jason) || 0), 0);
-        const asiaAllocations = (cycleData.contributions || []).reduce((sum, item) => sum + (Number(item.asia) || 0), 0);
+        // Preserve sign: negative "offset" allocations are meant to net against other allocations,
+        // not add to them. 'both'-cycle allocations split half/half via getAllocationCycleTotal.
+        const jasonAllocations = getAllocationCycleTotal(mBills, cycleKey, 'jason');
+        const asiaAllocations = getAllocationCycleTotal(mBills, cycleKey, 'asia');
         const jointShare = Math.round(jointBudget * 50 + 1e-8) / 100;
         return {
             jasonTotal: Math.round((jasonAllocations + jointShare) * 100 + 1e-8) / 100,
@@ -7206,12 +7522,14 @@ function renderBillsTab() {
     });
     let displayAllocations = allocationEntries;
     if (currentCycle !== 'month') {
-        displayAllocations = displayAllocations.filter(entry => entry.cycle === currentCycle);
+        // 'both'-cycle allocations physically live in the cycle1st array (alloc.cycle === 'both'),
+        // not the array-iteration cycle — check the actual stored value, same pattern as bills.
+        displayAllocations = displayAllocations.filter(entry => entry.alloc.cycle === currentCycle || entry.alloc.cycle === 'both');
     }
     const allocationSort = state.billTrackerSorts?.allocations || { key: 'name', direction: 'asc' };
     displayAllocations.sort((a, b) => {
         const value = entry => {
-            if (allocationSort.key === 'cycle') return entry.cycle === '1st' ? 1 : 15;
+            if (allocationSort.key === 'cycle') return entry.alloc.cycle === '1st' ? 1 : entry.alloc.cycle === 'both' ? 8 : 15;
             if (allocationSort.key === 'jason' || allocationSort.key === 'asia') return Number(entry.alloc[allocationSort.key]) || 0;
             return String(entry.alloc.name || '').toLowerCase();
         };
@@ -7232,7 +7550,8 @@ function renderBillsTab() {
             };
             const jasonHtml = formatAllocationAmount(alloc.jason, alloc.jason !== null && alloc.jason !== undefined && Number(alloc.jason) !== 0);
             const asiaHtml = formatAllocationAmount(alloc.asia, alloc.asia !== null && alloc.asia !== undefined && Number(alloc.asia) !== 0);
-            row.innerHTML = `<td><strong>${escapeHTML(alloc.name)}</strong><br><span class="muted-text">${(alloc.frequency || 'monthly').charAt(0).toUpperCase() + (alloc.frequency || 'monthly').slice(1)}${alloc.frequency === 'weekly' ? ' Â· ' + (alloc.occurrenceCount || 0) + ' occurrences this month' : ''}</span></td><td><span class="card-icon info" style="font-size:.75rem;padding:2px 6px;">Due on ${cycle}</span></td><td class="font-heading">${jasonHtml}</td><td class="font-heading">${asiaHtml}</td><td class="table-actions-cell"><button class="action-btn small-btn outline-btn edit-alloc-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-alloc-btn">Delete</button></td>`;
+            const cycleDisplay = alloc.cycle === 'both' ? '1st & 15th' : cycle;
+            row.innerHTML = `<td><strong>${escapeHTML(alloc.name)}</strong><br><span class="muted-text">${(alloc.frequency || 'monthly').charAt(0).toUpperCase() + (alloc.frequency || 'monthly').slice(1)}${alloc.frequency === 'weekly' ? ' Â· ' + (alloc.occurrenceCount || 0) + ' occurrences this month' : ''}</span></td><td><span class="card-icon info" style="font-size:.75rem;padding:2px 6px;">Due on ${cycleDisplay}</span></td><td class="font-heading">${jasonHtml}</td><td class="font-heading">${asiaHtml}</td><td class="table-actions-cell"><button class="action-btn small-btn outline-btn edit-alloc-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-alloc-btn">Delete</button></td>`;
             row.querySelector('.edit-alloc-btn').addEventListener('click', () => openAllocationEditor(alloc, cycleKey));
             row.querySelector('.delete-alloc-btn').addEventListener('click', () => {
                 if (!confirm(`Delete ${alloc.name} from ${state.currentMonth} ${state.currentYear}?`)) return;
@@ -7254,7 +7573,7 @@ function renderBillsTab() {
         const value = expense => {
             if (seasonalSort.key === 'amount') return Number(expense.amount) || 0;
             if (seasonalSort.key === 'cycles') return Number(expense.cycles) || 0;
-            if (seasonalSort.key === 'month') return (Number(expense.month) || 0) * 100 + (Number(expense.day) || 0);
+            if (seasonalSort.key === 'month') return expense.startDate || '';
             return String(expense[seasonalSort.key] || '').toLowerCase();
         };
         const first = value(a); const second = value(b);
@@ -7264,7 +7583,10 @@ function renderBillsTab() {
     sortedSeasonalExpenses.forEach(expense => {
         const row = document.createElement('tr');
         const installment = expense.amount / expense.cycles;
-        row.innerHTML = `<td><strong>${escapeHTML(expense.name)}</strong></td><td>${MONTH_NAMES[MONTH_ORDER[expense.month]]} ${expense.day}</td><td>$${expense.amount.toFixed(2)}</td><td>${expense.cycles} cycles × $${installment.toFixed(2)}</td><td><button class="action-btn small-btn outline-btn edit-seasonal-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-seasonal-btn">Delete</button></td>`;
+        const seasonalDateRange = expense.startDate + (expense.endDate ? ` &ndash; ${expense.endDate}` : '');
+        const frequencyLabel = expense.isRecurring ? `Repeats ${expense.frequency || 'yearly'}` : 'One-time';
+        const chargeLabel = expense.hasCharge ? `$${Number(expense.chargeAmount || 0).toFixed(2)} on ${expense.chargeDate} (${expense.chargeSource === 'joint' ? 'Joint' : 'Personal'})` : '&mdash;';
+        row.innerHTML = `<td><strong>${escapeHTML(expense.name)}</strong></td><td>${seasonalDateRange}</td><td>$${expense.amount.toFixed(2)}</td><td>${expense.cycles} cycles × $${installment.toFixed(2)}</td><td>${frequencyLabel}</td><td>${chargeLabel}</td><td><button class="action-btn small-btn outline-btn edit-seasonal-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-seasonal-btn">Delete</button></td>`;
         row.querySelector('.edit-seasonal-btn').addEventListener('click', () => openSeasonalEditor(expense));
         row.querySelector('.delete-seasonal-btn').addEventListener('click', () => {
             if (!confirm(`Delete ${expense.name} and its generated funding entries?`)) return;
@@ -7272,7 +7594,7 @@ function renderBillsTab() {
         });
         seasonalBody.appendChild(row);
     });
-    setupTableColumnFilters('#seasonal-expenses-content thead', 'seasonal', () => document.getElementById('seasonal-expenses-body'), [4]);
+    setupTableColumnFilters('#seasonal-expenses-content thead', 'seasonal', () => document.getElementById('seasonal-expenses-body'), [6]);
     applyColumnFilters(seasonalBody, 'seasonal');
     // The card itself (header + "Add Seasonal Expense" button) always stays visible so there's a way
     // to add the first one — only the "no items" placeholder text is skipped when empty, leaving the
@@ -7409,28 +7731,29 @@ function renderDeliveryTab() {
                 const val = gRecord[k];
                 return val ? `$${val.toFixed(2)}` : '$0.00';
             };
+            const mobileReadonly = isMobileViewport() ? 'readonly' : '';
             colsHtml = `
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="cash" placeholder="$0.00" ${gRecord.noEarnCash ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('cash')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="cash" data-label="Cash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnCash ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('cash')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="cash" ${gRecord.noEarnCash ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="sideGigs" placeholder="$0.00" ${gRecord.noEarnSideGigs ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('sideGigs')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="sideGigs" data-label="Door Dash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnSideGigs ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('sideGigs')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="sideGigs" ${gRecord.noEarnSideGigs ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="grubHub" placeholder="$0.00" ${gRecord.noEarnGrubHub ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('grubHub')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="grubHub" data-label="Grub Hub" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnGrubHub ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('grubHub')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="grubHub" ${gRecord.noEarnGrubHub ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="uberEats" placeholder="$0.00" ${gRecord.noEarnUberEats ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('uberEats')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="uberEats" data-label="Uber Eats" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnUberEats ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('uberEats')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="uberEats" ${gRecord.noEarnUberEats ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
@@ -7460,7 +7783,13 @@ function renderDeliveryTab() {
         // 1. Gig input change/focus/blur/keydown listeners
         row.querySelectorAll('.gig-input').forEach(input => {
             const key = input.dataset.key;
-            
+
+            input.addEventListener('click', (e) => {
+                if (input.hasAttribute('readonly') && !input.disabled) {
+                    openGigEntryDialog(gRecord.date, key, input.dataset.label);
+                }
+            });
+
             input.addEventListener('focus', (e) => {
                 const rec = state.deliveryEarnings.find(item => item.date === gRecord.date);
                 if (rec) {
@@ -8521,11 +8850,18 @@ function countWeekdayOccurrences(year, month, weekday) {
 }
 
 function getBillOccurrenceDates(rawBill, year, month) {
+    // Day-level end date: no occurrences past it (recurringEndMonth already stops later months at
+    // month granularity; this trims occurrences within the final month itself).
+    const endDateFilter = dates => {
+        let filtered = rawBill.recurringStartDate ? dates.filter(d => d >= rawBill.recurringStartDate) : dates;
+        if (rawBill.recurringEndDate) filtered = filtered.filter(d => d <= rawBill.recurringEndDate);
+        return filtered;
+    };
     const legacyFrequency = ['weekly','biweekly','fourweekly','quarterly','annual'].includes(rawBill.budgetFrequency) ? rawBill.budgetFrequency : 'monthly';
     const frequency = rawBill.chargeFrequency || legacyFrequency;
     const monthIndex = MONTH_ORDER.indexOf(month);
     if (monthIndex < 0) return [];
-    if (frequency === 'monthly') return [getBillChargeDate(year, month, rawBill.dueDay)];
+    if (frequency === 'monthly') return endDateFilter([getBillChargeDate(year, month, rawBill.dueDay)]);
 
     let anchor = rawBill.frequencyStartDate ? new Date(rawBill.frequencyStartDate + 'T00:00:00') : null;
     if (!anchor || Number.isNaN(anchor.getTime())) {
@@ -8542,7 +8878,7 @@ function getBillOccurrenceDates(rawBill, year, month) {
         const difference = (year - anchor.getFullYear()) * 12 + monthIndex - anchor.getMonth();
         if (difference < 0 || difference % intervalMonths !== 0) return [];
         const day = Math.min(anchor.getDate(), monthEnd.getDate());
-        return [formatLocalDate(new Date(year, monthIndex, day))];
+        return endDateFilter([formatLocalDate(new Date(year, monthIndex, day))]);
     }
 
     const intervalDays = frequency === 'biweekly' ? 14 : frequency === 'fourweekly' ? 28 : 7;
@@ -8553,7 +8889,7 @@ function getBillOccurrenceDates(rawBill, year, month) {
         dates.push(formatLocalDate(occurrence));
         occurrence.setDate(occurrence.getDate() + intervalDays);
     }
-    return dates;
+    return endDateFilter(dates);
 }
 
 function calculateBillFundingAmount(rawBill, year, month) {
@@ -10185,7 +10521,9 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
     const dueDay = Math.min(Number(card.dueDay) || 1, daysInMonth);
     const dueDate = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dueDay).padStart(2, '0')}`;
-    if (!isLoan && card.paymentStrategyStartDate && dueDate < card.paymentStrategyStartDate) return;
+    // First payment date applies to both credit cards and installment loans (loans always auto-pay,
+    // so this is the only way to delay a loan's first automatic payment).
+    if (card.paymentStrategyStartDate && dueDate < card.paymentStrategyStartDate) return;
     if (card.paymentEndDate && dueDate > card.paymentEndDate) return;
 
     const key = `${year}-${month}`;
@@ -10875,6 +11213,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-limit-field').value = loan.isChargeCard ? '' : (loan.limit || 5000);
     document.getElementById('loan-payment-strategy').value = loan.paymentStrategy || 'none';
     document.getElementById('loan-payment-source').value = loan.paymentSource || 'personal';
+    document.getElementById('loan-first-payment-date').value = loan.paymentStrategyStartDate || '';
     document.getElementById('loan-payment-end-date').value = loan.paymentEndDate || '';
     document.getElementById('loan-splitter-cycle').value = loan.splitterCycleOverride || (Number(loan.dueDay) <= 14 ? '1st' : '15th');
     document.getElementById('loan-exempt-splitter').checked = !!loan.isExemptFromSplitter;
@@ -11082,6 +11421,7 @@ function openEditBillSettingModal(id) {
         document.getElementById('bill-settings-date-type').value = 'dayOfMonth';
         document.getElementById('bill-settings-ownership').value = 'joint';
         document.getElementById('bill-settings-cycle').value = '1st';
+        document.getElementById('bill-settings-first-payment').value = '';
         document.getElementById('bill-settings-frequency').value = 'monthly';
         recurringFields.classList.remove('hidden');
     } else {
@@ -11126,6 +11466,7 @@ function openEditBillSettingModal(id) {
         document.getElementById('bill-settings-recurring').checked = !!setting.recurring;
         document.getElementById('bill-settings-source').value = setting.source;
         document.getElementById('bill-settings-cycle').value = setting.cycleAllocation || '1st';
+        document.getElementById('bill-settings-first-payment').value = setting.firstPaymentDate || '';
         
         if (setting.recurring) {
             recurringFields.classList.remove('hidden');
@@ -11172,6 +11513,7 @@ function setupBillTrackerListeners() {
             const recurring = document.getElementById('bill-settings-recurring').checked;
             const source = document.getElementById('bill-settings-source').value;
             const cycleAllocation = document.getElementById('bill-settings-cycle').value;
+            const firstPaymentDate = document.getElementById('bill-settings-first-payment').value;
             
             let frequency = 'monthly';
             let startMonth = 'Jan';
@@ -11198,7 +11540,8 @@ function setupBillTrackerListeners() {
                     source,
                     frequency,
                     startMonth,
-                    cycleAllocation
+                    cycleAllocation,
+                    firstPaymentDate
                 };
                 state.billTrackerSettings.push(newSetting);
             } else {
@@ -11220,6 +11563,7 @@ function setupBillTrackerListeners() {
                     setting.frequency = frequency;
                     setting.startMonth = startMonth;
                     setting.cycleAllocation = cycleAllocation;
+                    setting.firstPaymentDate = firstPaymentDate;
                 }
             }
             
@@ -11319,7 +11663,30 @@ function syncBillTrackerBillsToAllMonths() {
         if (periodIndex >= currentIndex) {
             activeSettings.forEach(setting => {
                 const billId = `bill-settings-${setting.id}`;
-                
+
+                // First Payment Date gate: don't materialize the bill in months before the first
+                // payment, and within the first month only if the payment day falls on/after it.
+                if (setting.firstPaymentDate) {
+                    const fp = new Date(setting.firstPaymentDate + 'T00:00:00');
+                    if (!Number.isNaN(fp.getTime())) {
+                        const fpIndex = fp.getFullYear() * 12 + fp.getMonth();
+                        const paymentDay = setting.dateType === 'dayOfWeek' ? 1 : (Number(setting.paymentDate) || 1);
+                        const beforeFirstPayment = periodIndex < fpIndex || (periodIndex === fpIndex && paymentDay < fp.getDate());
+                        if (beforeFirstPayment) {
+                            // Match on billTrackerSettingId, not the exact row id — recurrence
+                            // inheritance also creates month-suffixed copies of the synced row.
+                            ['cycle1st', 'cycle15th'].forEach(cycleKey => {
+                                mBills[cycleKey].bills = mBills[cycleKey].bills.filter(b => {
+                                    if (b.billTrackerSettingId !== setting.id) return true;
+                                    removeBillLedgerEntries(b.id, Number(y), m, b, true);
+                                    return false;
+                                });
+                            });
+                            return;
+                        }
+                    }
+                }
+
                 // Determine cycle Allocation
                 let targetCycleKey = 'cycle1st';
                 if (setting.frequency === 'weekly' || setting.frequency === 'biweekly') {
