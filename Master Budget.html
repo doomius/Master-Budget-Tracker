@@ -1,0 +1,1838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Budget & Bills Calendar (2027)</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app-busy-overlay" class="app-busy-overlay hidden" aria-hidden="true">
+        <div class="app-busy-spinner"></div>
+    </div>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="app-sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-logo">✨</div>
+                <h1>Budgetify</h1>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <button class="nav-btn active" data-tab="dashboard" id="btn-tab-dashboard">
+                    <span class="icon">📅</span> Dashboard
+                </button>
+                <button class="nav-btn" data-tab="delivery" id="btn-tab-delivery">
+                    <span class="icon">🚗</span> Delivery Earnings
+                </button>
+                <button class="nav-btn" data-tab="savings" id="btn-tab-savings">
+                    <span class="icon">💰</span> Savings Tracker
+                </button>
+                <button class="nav-btn" data-tab="bills" id="btn-tab-bills">
+                    <span class="icon">⚖️</span> Bills Splitter
+                </button>
+                <button class="nav-btn" data-tab="billtracker" id="btn-tab-billtracker">
+                    <span class="icon">📋</span> Bill Tracker
+                </button>
+                <button class="nav-btn" data-tab="loans" id="btn-tab-loans">
+                    <span class="icon">🏦</span> Installment Loans
+                </button>
+                <button class="nav-btn" data-tab="creditcards" id="btn-tab-creditcards">
+                    <span class="icon">💳</span> Credit Cards
+                </button>
+                <button class="nav-btn" data-tab="sync" id="btn-tab-sync">
+                    <span class="icon">🔄</span> Sync Settings
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button class="action-btn outline-btn" id="btn-reset-data">Reset to Excel Data</button>
+                <button class="action-btn solid-btn" id="btn-export-data">Backup JSON</button>
+                <button class="action-btn outline-btn" id="btn-trigger-import">Import JSON</button>
+                <input type="file" id="import-file-input" accept=".json" style="display: none;">
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="app-main">
+            <!-- Top Dashboard Bar -->
+            <div class="main-sticky-dashboard">
+            <header class="app-header">
+                <!-- 1. LEFT SIDE: Controls & Selectors -->
+                <div class="header-controls" style="display: flex; align-items: center; gap: 0.75rem;">
+                    <!-- Segmented Dashboard Toggle -->
+                    <div class="segmented-control" id="dashboard-toggle-container">
+                        <button class="segment-btn active" data-type="personal" id="btn-dash-personal">Personal</button>
+                        <button class="segment-btn" data-type="joint" id="btn-dash-joint">Joint</button>
+                    </div>
+
+                    <!-- Segmented View Toggle -->
+                    <div class="segmented-control" id="view-toggle-container">
+                        <button class="segment-btn active" data-mode="calendar" id="btn-view-calendar">📅 Calendar</button>
+                        <button class="segment-btn" data-mode="list" id="btn-view-list">📝 List</button>
+                    </div>
+
+                    <!-- Segmented List Scope Toggle (Hidden by default, shown in List View) -->
+                    <div class="segmented-control hidden" id="scope-toggle-container">
+                        <button class="segment-btn active" data-scope="month" id="btn-scope-month">Month</button>
+                        <button class="segment-btn" data-scope="year" id="btn-scope-year">Full Year</button>
+                    </div>
+
+                    <!-- Segmented Cycle Filter (Shown in List View) -->
+                    <div class="segmented-control hidden" id="cycle-filter-container">
+                        <button class="segment-btn active" data-cycle="all" id="btn-cycle-all">All Days</button>
+                        <button class="segment-btn" data-cycle="1st" id="btn-cycle-1st">1st - 14th</button>
+                        <button class="segment-btn" data-cycle="2nd" id="btn-cycle-2nd">15th - End</button>
+                    </div>
+
+                    <!-- Segmented Bills Splitter Cycle Filter (Shown in Bills Tab) -->
+                    <div class="segmented-control hidden" id="bills-metrics-cycle-toggle">
+                        <button type="button" class="segment-btn active" data-bills-metrics-cycle="month">Month</button>
+                        <button type="button" class="segment-btn" data-bills-metrics-cycle="1st">1st Cycle</button>
+                        <button type="button" class="segment-btn" data-bills-metrics-cycle="15th">15th Cycle</button>
+                    </div>
+
+                </div>
+
+                <!-- 2. CENTERED: Title & Subtitle & Period Nav -->
+                <div class="header-title" style="text-align: center;">
+                    <h2 id="current-tab-title">Monthly Dashboard</h2>
+                    <p id="current-tab-subtitle">Personal checking calendar and cash flows</p>
+                    <div class="month-select-wrapper" id="header-period-nav" style="display: flex; justify-content: center; align-items: center; gap: 0.6rem; margin-top: 0.5rem;">
+                        <button type="button" class="calendar-nav-btn" id="btn-header-prev" title="Previous Month">←</button>
+                        <select id="month-select" class="custom-select" style="font-weight: 600; text-align: center; width: auto; min-width: 105px;">
+                            <option value="Jan">Jan</option>
+                            <option value="Feb">Feb</option>
+                            <option value="Mar">Mar</option>
+                            <option value="Apr">Apr</option>
+                            <option value="May">May</option>
+                            <option value="Jun">Jun</option>
+                            <option value="Jul">Jul</option>
+                            <option value="Aug">Aug</option>
+                            <option value="Sep">Sep</option>
+                            <option value="Oct">Oct</option>
+                            <option value="Nov">Nov</option>
+                            <option value="Dec">Dec</option>
+                        </select>
+                        <select id="year-select" class="custom-select" style="font-weight: 600; text-align: center; width: auto; min-width: 88px;">
+                            <option value="2026">2026</option>
+                            <option value="2027">2027</option>
+                            <option value="2028">2028</option>
+                            <option value="2029">2029</option>
+                            <option value="2030">2030</option>
+                        </select>
+                        <button type="button" class="calendar-nav-btn" id="btn-header-next" title="Next Month">→</button>
+                        <button type="button" class="action-btn small-btn solid-btn" id="btn-header-today" title="Go to Today" style="margin-left: 0.4rem; padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Today</button>
+                    </div>
+                </div>
+
+                <!-- 3. RIGHT SIDE: Action Buttons -->
+                <div class="header-right" style="display: flex; align-items: center; gap: 0.75rem; margin-left: auto;">
+                    <button type="button" class="action-btn outline-btn" id="btn-toggle-metrics" title="Toggle metrics dashboard visibility" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">📊 Hide Metrics</button>
+                    <button type="button" class="action-btn outline-btn" id="btn-toggle-layout-maximize" title="Toggle full-screen view" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⤢ Expand View</button>
+                </div>
+            </header>
+
+            <!-- Dashboard Summary Widgets -->
+            <section class="summary-cards" id="summary-cards">
+                <div class="glass-card summary-card">
+                    <div class="card-header">
+                        <span>Personal Net Cash Flow</span>
+                        <span class="card-icon positive">💵</span>
+                    </div>
+                    <div class="card-value" id="net-cash-flow">$0.00</div>
+                    <div class="card-sub" id="net-cash-flow-sub">Sum of personal cash flows</div>
+                </div>
+                <div class="glass-card summary-card">
+                    <div class="card-header">
+                        <span>Joint Bills Shared Total</span>
+                        <span class="card-icon negative">🧾</span>
+                    </div>
+                    <div class="card-value" id="joint-bills-total">$0.00</div>
+                    <div class="card-sub" id="joint-bills-sub">Total joint bills in period</div>
+                </div>
+                <div class="glass-card summary-card">
+                    <div class="card-header">
+                        <span>Delivery Side Gigs</span>
+                        <span class="card-icon info">🚀</span>
+                    </div>
+                    <div class="card-value" id="gig-earnings-total">$0.00</div>
+                    <div class="card-sub" id="gig-earnings-sub">20% Tax Reserve: $0.00</div>
+                </div>
+                <div class="glass-card summary-card" id="card-remaining-balance">
+                    <div class="card-header">
+                        <span id="remaining-balance-title">Remaining Balance</span>
+                        <span class="card-icon info" id="remaining-balance-icon">💰</span>
+                    </div>
+                    <div class="card-value" id="remaining-balance-val">$0.00</div>
+                    <div class="card-sub" id="remaining-balance-sub">Cycle-end balance projection</div>
+                </div>
+            </section>
+            </div>
+
+            <!-- Tab View Contents -->
+            <section class="tab-view-container">
+                
+                <!-- 1. DASHBOARD VIEW (Calendar & List) -->
+                <div id="view-dashboard" class="tab-view active">
+                    <!-- Calendar View Wrapper -->
+                    <div class="view-grid" id="dashboard-calendar-view">
+                        <div class="calendar-card glass-card">
+                            <div class="calendar-header-grid" style="margin-top: 0.5rem;">
+                                <div>Sunday</div>
+                                <div>Monday</div>
+                                <div>Tuesday</div>
+                                <div>Wednesday</div>
+                                <div>Thursday</div>
+                                <div>Friday</div>
+                                <div>Saturday</div>
+                            </div>
+                            <div class="calendar-days-grid" id="calendar-days">
+                                <!-- Calendar days injected via javascript -->
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-details-card glass-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                <h3 id="quick-add-title" style="margin: 0;">Transaction Quick-Add</h3>
+                                <button type="button" class="action-btn outline-btn" id="btn-configure-payroll" title="Configure Payroll Tracker" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 4px; height: 28px;">⚙️ Payroll</button>
+                            </div>
+                            <form id="quick-add-form" class="detail-form">
+                                <div class="form-group">
+                                    <label for="trans-date">Date</label>
+                                    <input type="date" id="trans-date" required class="custom-input">
+                                </div>
+                                <div class="form-group hidden" id="joint-type-group">
+                                    <label for="joint-trans-type">Transaction Type</label>
+                                    <select id="joint-trans-type" class="custom-select">
+                                        <option value="expense">Expense / Bill</option>
+                                        <option value="contribution">Joint Contribution</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="personal-type-group">
+                                    <label for="personal-trans-type">Transaction Type</label>
+                                    <select id="personal-trans-type" class="custom-select">
+                                        <option value="transaction">Personal Transaction</option>
+                                        <option value="savings-transfer">Savings Transfer</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="trans-desc">Description</label>
+                                    <input type="text" id="trans-desc" placeholder="e.g. Payday, Walmart, Gas" required class="custom-input" list="checking-description-suggestions" autocomplete="off">
+                                </div>
+                                
+                                <div id="form-amount-row">
+                                    <div class="form-group" id="single-amount-group">
+                                        <label for="trans-amount" id="trans-amount-label">Amount</label>
+                                        <div class="input-prefix-wrapper">
+                                            <span class="input-prefix">$</span>
+                                            <input type="number" step="0.01" id="trans-amount" placeholder="Negative for expenses" required class="custom-input">
+                                        </div>
+                                        <small id="trans-amount-hint" class="hidden">Negative moves money from Personal into Savings; positive moves money from Savings into Personal.</small>
+                                    </div>
+                                    <div class="hidden" id="joint-contribution-group">
+                                        <div class="form-row">
+                                            <div class="form-group"><label for="contribution-direction">Contribution Type</label><select id="contribution-direction" class="custom-select"><option value="deposit">Deposit into Joint</option><option value="withdrawal">Withdrawal from Joint</option></select></div>
+                                            <div class="form-group hidden" id="contribution-recipient-group"><label for="contribution-recipient">Withdrawal To</label><select id="contribution-recipient" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div>
+                                        </div>
+                                        <div class="form-row" id="contribution-deposit-fields">
+                                            <div class="form-group"><label for="trans-jason-amount">Jason Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="trans-jason-amount" placeholder="Jason's deposit" class="custom-input"></div></div>
+                                            <div class="form-group"><label for="trans-asia-amount">Asia Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="trans-asia-amount" placeholder="Asia's deposit" class="custom-input"></div></div>
+                                        </div>
+                                        <div class="form-group hidden" id="contribution-withdrawal-field"><label for="contribution-withdrawal-amount">Withdrawal Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="contribution-withdrawal-amount" class="custom-input"></div></div>
+                                    </div>
+                                </div>
+                                <button type="submit" class="action-btn solid-btn full-width" id="btn-add-transaction">Add Transaction</button>
+                            </form>
+                            
+                            <hr class="card-divider">
+                            
+                            <div class="inline-day-highlights hidden">
+                                <h3 id="highlights-title">Today's Highlights</h3>
+                                <div id="today-highlights-list" class="highlights-list"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- List View Wrapper (Hidden by default) -->
+                    <div class="glass-card list-view-card hidden" id="dashboard-list-view" style="padding: 2rem;">
+                        <div class="list-view-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                            <h3 id="list-view-title">Personal Ledger</h3>
+                        </div>
+                        <div class="table-responsive" id="list-view-table-container">
+                            <!-- Injected table -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. BILLS SPLITTER VIEW -->
+                <div id="view-bills" class="tab-view">
+                    <div class="bills-sticky-metrics">
+                        <div class="table-card-header" style="margin-top:0;">
+                            <h3 id="bills-metrics-title">Bill Splitter Metrics</h3>
+                            <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="bills-metrics-cards" data-key="metrics">&#9660;</button>
+                        </div>
+                        <section class="summary-cards" id="bills-metrics-cards">
+                            <div class="glass-card summary-card"><div class="card-header"><span id="bills-expenses-title">Joint Expenses</span><span class="card-icon negative">&#128203;</span></div><div class="card-value negative" id="bills-expenses-total">$0.00</div><div class="card-sub" id="bills-expenses-sub">1st: $0.00 | 15th: $0.00</div></div>
+                            <div class="glass-card summary-card"><div class="card-header"><span>Jason Personal Allocations</span><span class="card-icon info">J</span></div><div class="card-value" id="bills-jason-allocations">$0.00</div><div class="card-sub" id="bills-jason-allocations-sub">1st: $0.00 | 15th: $0.00</div></div>
+                            <div class="glass-card summary-card"><div class="card-header"><span>Asia Personal Allocations</span><span class="card-icon info">A</span></div><div class="card-value" id="bills-asia-allocations">$0.00</div><div class="card-sub" id="bills-asia-allocations-sub">1st: $0.00 | 15th: $0.00</div></div>
+                            <div class="glass-card summary-card"><div class="card-header"><span id="bills-balance-title">Joint Remaining Balance</span><span class="card-icon info">&#128176;</span></div><div class="card-value" id="bills-balance-total">$0.00</div><div class="card-sub" id="bills-balance-sub">End of 1st: $0.00 | End of month: $0.00</div></div>
+                        </section>
+                    </div>
+                    <div class="bills-splitter-layout">
+                        <div class="glass-card split-totals-card">
+                            <div class="table-card-header" style="margin-bottom: 1.25rem;">
+                                <h3 style="margin: 0;">Transfer Calculations</h3>
+                                <div style="display:flex; gap:0.5rem; align-items:center;">
+                                    <button type="button" class="action-btn outline-btn" id="btn-toggle-manual-transfers" title="Toggle Manual Planned Transfers" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 4px; height: 28px;">⚙️ Extra Transfers</button>
+                                    <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="transfer-calc-body" data-key="transfers">&#9660;</button>
+                                </div>
+                            </div>
+                            <div class="split-columns" id="transfer-calc-body">
+                                <div class="split-col jason-split">
+                                    <div class="col-avatar">J</div>
+                                    <h4>Jason Pays Joint</h4>
+                                    <div class="transfer-cycle-breakdown"><span>Transfer on 1st <strong id="jason-transfer-1st">$0.00</strong></span><span>Transfer on 15th <strong id="jason-transfer-15th">$0.00</strong></span></div>
+                                    <div class="split-amount-highlight" id="jason-transfer">$0.00</div>
+                                    <p class="sub-text">Monthly total, including manual planned transfers</p>
+                                </div>
+                                <div class="split-separator">&harr;</div>
+                                <div class="split-col asia-split">
+                                    <div class="col-avatar">A</div>
+                                    <h4>Asia Pays Joint</h4>
+                                    <div class="transfer-cycle-breakdown"><span>Transfer on 1st <strong id="asia-transfer-1st">$0.00</strong></span><span>Transfer on 15th <strong id="asia-transfer-15th">$0.00</strong></span></div>
+                                    <div class="split-amount-highlight" id="asia-transfer">$0.00</div>
+                                    <p class="sub-text">Monthly total, including manual planned transfers</p>
+                                </div>
+                            </div>
+                        </div>
+
+
+                        <div class="bills-tables-grid">
+                            <!-- Left: Joint Bills -->
+                            <div class="glass-card bills-table-card" id="joint-expenses-card">
+                                <div class="table-card-header">
+                                    <div>
+                                        <h3 id="bill-tracker-title">Joint Expenses</h3>
+                                        <div class="segmented-control" id="bill-ownership-toggle" style="margin-top:.45rem;">
+                                            <button type="button" class="segment-btn active" data-bill-ownership="joint">Joint</button>
+                                            <button type="button" class="segment-btn" data-bill-ownership="personal">Personal</button>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                                        <button class="action-btn small-btn solid-btn" id="btn-add-joint-bill">+ Add Joint Expense</button>
+                                        <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="joint-expenses-content" data-key="jointBills">&#9660;</button>
+                                    </div>
+                                </div>
+                                <div id="joint-expenses-content" class="accordion-panel">
+                                <div style="display:flex;gap:.5rem;padding:0 1rem 1rem;flex-wrap:wrap;"><select id="bill-category-filter" class="custom-select" style="width:auto;"><option value="all">All Categories</option><option value="bill">Bills</option><option value="expense">Expenses</option><option value="utility">Utilities</option><option value="savings">Savings / Investments</option></select><select id="bill-sort-select" class="custom-select" style="width:auto;"><option value="name">Sort: Name</option><option value="category">Sort: Category</option><option value="cycle">Sort: Cycle</option><option value="budget-desc">Sort: Highest Budget</option><option value="payment-desc">Sort: Highest Payment</option></select></div>
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr><th data-bill-sort="account" style="cursor:pointer;">Item</th><th data-bill-sort="category" style="cursor:pointer;">Classification / Type</th><th>Source</th><th data-bill-sort="cycleAllocation" style="cursor:pointer;">Cycle</th><th data-bill-sort="dueDay" id="bill-date-header" style="cursor:pointer;">Day</th><th data-bill-sort="budgetAmount" style="cursor:pointer;">Transfer Budget</th><th data-bill-sort="paymentAmount" style="cursor:pointer;">Actual Payment</th><th data-bill-sort="paymentSource" style="cursor:pointer;">Paid From</th><th data-bill-sort="isRecurring" style="cursor:pointer;">Recurring</th><th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="joint-bills-body">
+                                            <!-- Dynamic rows -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Personal Allocations to Joint -->
+                            <div class="glass-card bills-table-card" id="personal-allocations-card">
+                                <div class="table-card-header">
+                                    <h3>Personal Allocations / Individual Cash</h3>
+                                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                                        <button class="action-btn small-btn solid-btn" id="btn-add-allocation">+ Add Allocation</button>
+                                        <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="personal-allocations-content" data-key="personalAllocations">&#9660;</button>
+                                    </div>
+                                </div>
+                                <div id="personal-allocations-content" class="accordion-panel">
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th data-allocation-sort="name" style="cursor:pointer;">Name</th>
+                                                <th data-allocation-sort="cycle" style="cursor:pointer;">Due Cycle</th>
+                                                <th data-allocation-sort="jason" style="cursor:pointer;">Jason Amt</th>
+                                                <th data-allocation-sort="asia" style="cursor:pointer;">Asia Amt</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="personal-allocations-body">
+                                            <!-- Dynamic rows -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                                </div>
+                            </div>
+
+                            <div class="glass-card bills-table-card" id="seasonal-expenses-card">
+                                <div class="table-card-header">
+                                    <h3>Seasonal Expenses</h3>
+                                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                                        <button class="action-btn small-btn solid-btn" id="btn-add-seasonal">+ Add Seasonal Expense</button>
+                                        <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="seasonal-expenses-content" data-key="seasonal">&#9660;</button>
+                                    </div>
+                                </div>
+                                <div id="seasonal-expenses-content" class="accordion-panel">
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead><tr><th data-seasonal-sort="name" style="cursor:pointer;">Expense</th><th data-seasonal-sort="month" style="cursor:pointer;">Event Date</th><th data-seasonal-sort="amount" style="cursor:pointer;">Total Budget</th><th data-seasonal-sort="cycles" style="cursor:pointer;">Funding Plan</th><th>Actions</th></tr></thead>
+                                        <tbody id="seasonal-expenses-body"></tbody>
+                                    </table>
+                                </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2.5 BILL TRACKER VIEW -->
+                <div id="view-billtracker" class="tab-view">
+                    <div class="loans-layout">
+                        <!-- Add Bill settings and list -->
+                        <div class="loans-forms-grid" style="grid-template-columns: 1fr;">
+                            <div class="glass-card loan-card-details">
+                                <div class="table-card-header">
+                                    <h3>Bill Settings & Auto-Sync</h3>
+                                    <button class="action-btn small-btn solid-btn" id="btn-add-bill-tracker-setting">+ Add Bill Setting</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Bill Name</th>
+                                                <th>Classification</th>
+                                                <th>Estimated Cost</th>
+                                                <th>Payment Date</th>
+                                                <th>Statement Date</th>
+                                                <th>Auto Pay</th>
+                                                <th>Payment Source</th>
+                                                <th>Recurring</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="billtracker-table-body">
+                                            <!-- Dynamic bill tracker settings -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. DELIVERY EARNINGS VIEW -->
+                <div id="view-delivery" class="tab-view">
+                    <div class="delivery-layout">
+                        <div class="delivery-stats glass-card">
+                            <div class="stat-box">
+                                <h4>Platform breakdown</h4>
+                                <div class="platform-bars" id="platform-bars">
+                                    <!-- Dynamic bars -->
+                                </div>
+                            </div>
+                            <div class="stat-box-divider"></div>
+                            <div class="stat-box">
+                                <h4>Weekly Summary</h4>
+                                <div class="weekly-totals-list" id="weekly-totals-list">
+                                    <!-- Dynamic list -->
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="glass-card delivery-grid-card">
+                            <div class="table-card-header">
+                                <div><h3>Delivery Earnings Log</h3><button type="button" class="action-btn small-btn solid-btn" id="btn-bulk-delivery-budget">Set Daily Budgets</button> <button type="button" class="action-btn small-btn danger-btn" id="btn-reset-delivery-week" title="Reset all actuals and budgets for this week">Reset Week</button> <button type="button" class="action-btn small-btn outline-btn" id="btn-off-delivery-week" title="Mark all days in this week as off-days">Mark Week Off</button></div>
+                                <div class="table-actions">
+                                    <button class="action-btn small-btn outline-btn" id="btn-prev-delivery-week">&lt; Prev Week</button>
+                                    <span id="delivery-week-label">Week of Jan 1st</span>
+                                    <button class="action-btn small-btn outline-btn" id="btn-next-delivery-week">Next Week &gt;</button>
+                                </div>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table delivery-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Day</th>
+                                            <th>Cash ($)</th>
+                                            <th>Door Dash ($)</th>
+                                            <th>Grub Hub ($)</th>
+                                            <th>Uber Eats ($)</th>
+                                            <th>Daily Total</th>
+                                            <th>Budget ($)</th>
+                                            <th>Difference ($)</th>
+                                            <th>Off-Day Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="delivery-log-body">
+                                        <!-- Editable daily rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Yearly Weekly Delivery Summary Card -->
+                    <div class="glass-card delivery-year-summary-card">
+                        <div class="table-card-header">
+                            <div>
+                                <h3 id="delivery-year-summary-title">Yearly Weekly Delivery Summary</h3>
+                                <p class="muted-text">Weekly actual earnings vs. budgeted earnings for the full year.</p>
+                                <div id="delivery-year-summary-totals-header"></div>
+                            </div>
+                            <div class="delivery-summary-header-actions" style="display: flex; gap: 0.5rem; align-items: center;">
+                                <button type="button" class="action-btn small-btn outline-btn" id="btn-expand-all-delivery-summary">Expand All</button>
+                                <button type="button" class="action-btn small-btn outline-btn" id="btn-collapse-all-delivery-summary">Collapse All</button>
+                                <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-delivery-year">Hide Details</button>
+                            </div>
+                        </div>
+                        <div id="delivery-year-summary-content">
+                            <!-- Injected by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. SAVINGS TRACKER VIEW -->
+                <div id="view-savings" class="tab-view">
+                    <div class="table-card-header savings-section-header">
+                        <h3>Savings Metrics</h3>
+                        <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-savings-metrics">Hide Metrics</button>
+                    </div>
+                    <section class="summary-cards savings-summary-cards" id="savings-metrics-panel">
+                        <div class="glass-card summary-card">
+                            <div class="card-header"><span>Current Savings Balance</span><button type="button" class="savings-settings-btn" id="btn-open-savings-balance" title="Edit starting balance" aria-label="Edit starting balance">⚙️</button></div>
+                            <div class="card-value positive" id="savings-current-display">$0.00</div>
+                            <div class="card-sub" id="savings-current-sub">Starting balance plus completed activity</div>
+                        </div>
+                        <div class="glass-card summary-card">
+                            <div class="card-header"><span>Projected Period Transfers</span><span class="card-icon info">&harr;</span></div>
+                            <div class="card-value" id="savings-period-total">$0.00</div>
+                            <div class="card-sub" id="savings-period-total-sub">Future transfers in the selected period</div>
+                        </div>
+                        <div class="glass-card summary-card">
+                            <div class="card-header"><span>Projected End-of-Period Balance</span><span class="card-icon positive">+</span></div>
+                            <div class="card-value positive" id="savings-projected-display">$0.00</div>
+                            <div class="card-sub" id="savings-projected-sub">Includes transfers and interest through period end</div>
+                        </div>
+                        <div class="glass-card summary-card">
+                            <div class="card-header"><span>End of Year Projection</span><span class="card-icon info">📈</span></div>
+                            <div class="card-value positive" id="savings-year-projection-display">$0.00</div>
+                            <div class="card-sub" id="savings-year-projection-sub">Estimated savings balance on Dec 31st</div>
+                        </div>
+                    </section>
+
+                    <div class="table-card-header savings-view-header">
+                        <h3 id="savings-ledger-title">Savings Calendar</h3>
+                        <div class="table-actions">
+                            <div class="segmented-control" id="savings-view-toggle"><button class="segment-btn active" data-savings-mode="calendar">Calendar</button><button class="segment-btn" data-savings-mode="list">List</button></div>
+                            <div class="segmented-control hidden" id="savings-scope-toggle"><button class="segment-btn active" data-savings-scope="month">Month</button><button class="segment-btn" data-savings-scope="year">Full Year</button></div>
+                        </div>
+                    </div>
+                    <div class="view-grid savings-calendar-layout" id="savings-calendar-layout">
+                        <div id="savings-calendar-view" class="calendar-card glass-card">
+                            <div class="calendar-header-grid"><div>Sunday</div><div>Monday</div><div>Tuesday</div><div>Wednesday</div><div>Thursday</div><div>Friday</div><div>Saturday</div></div>
+                            <div class="calendar-days-grid" id="savings-calendar-days"></div>
+                        </div>
+                        <div class="sidebar-details-card glass-card" id="savings-entry-sidebar">
+                            <h3>Add Savings Entry</h3>
+                            <form id="savings-transfer-form" class="detail-form">
+                                <div class="form-group"><label for="savings-entry-type">Entry Type</label><select id="savings-entry-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
+                                <div class="form-group"><label for="savings-transfer-date">Date</label><input type="date" id="savings-transfer-date" required class="custom-input"></div>
+                                <div class="form-group"><label for="savings-transfer-description">Description</label><input type="text" id="savings-transfer-description" required class="custom-input" placeholder="e.g. Emergency fund transfer"></div>
+                                <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="Positive in, negative out"></div><small id="savings-entry-hint">Positive adds to Savings and subtracts from Personal. Negative does the reverse.</small></div>
+                                <button type="submit" class="action-btn solid-btn full-width" id="btn-add-savings-entry">Add Savings Transfer</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div id="savings-list-view" class="glass-card hidden">
+                        <div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Type</th><th>Amount</th><th>Running Balance</th><th>Actions</th></tr></thead><tbody id="savings-list-body"></tbody></table></div>
+                    </div>
+
+                    <div class="glass-card savings-year-summary-card">
+                        <div class="table-card-header">
+                            <div><h3 id="savings-year-summary-title">Yearly Savings Summary</h3><p class="muted-text" id="savings-year-summary-caption">Monthly transfers, withdrawals, interest, and end-of-month balances.</p></div>
+                            <div class="savings-summary-header-actions"><div class="savings-year-projection"><span>End-of-Year Projection</span><strong id="savings-year-projection">$0.00</strong></div><button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-savings-year">Hide Details</button></div>
+                        </div>
+                        <div id="savings-year-summary-content"><div class="table-responsive"><table class="data-table"><thead><tr><th>Month</th><th>Transfers In</th><th>Withdrawals</th><th>Interest</th><th>Net Activity</th><th>End Balance</th></tr></thead><tbody id="savings-year-summary-body"></tbody><tfoot id="savings-year-summary-foot"></tfoot></table></div></div>
+                    </div>
+                </div>
+                <!-- 5. INSTALLMENT LOANS VIEW -->
+                <div id="view-loans" class="tab-view">
+                    <div class="loans-layout" id="loans-overview-layout">
+                        <!-- Loan Overview Grid -->
+                        <div class="loans-overview-grid" id="loans-overview-grid">
+                            <!-- Loan widgets injected here -->
+                        </div>
+                        
+                        <!-- Add Loan and Repayment Log -->
+                        <div class="loans-forms-grid">
+                            <div class="glass-card loan-card-details">
+                                <div class="table-card-header">
+                                    <h3>Installment Loan Payoff Targets</h3>
+                                    <button class="action-btn small-btn solid-btn" id="btn-add-loan">+ New Loan Target</button>
+                                </div>
+                                <div class="table-responsive">
+                                     <table class="data-table">
+                                         <thead>
+                                             <tr>
+                                                 <th>Target Name</th>
+                                                 <th>Starting Bal</th>
+                                                 <th>Current Bal</th>
+                                                 <th>Paid To Date</th>
+                                                 <th>Monthly Min</th>
+                                                 <th>Progress</th>
+                                                 <th>Actions</th>
+                                             </tr>
+                                         </thead>
+                                         <tbody id="loans-table-body">
+                                             <!-- Dynamic loans -->
+                                         </tbody>
+                                     </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Proposed Future Loan Payments -->
+                        <div class="loans-forms-grid" style="margin-top: 1.5rem;">
+                            <div class="glass-card" style="padding: 1.5rem;">
+                                <div class="table-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                    <h3 style="margin: 0;">Proposed Future Loan Payments</h3>
+                                    <button class="action-btn small-btn solid-btn" id="btn-add-proposed-loan-payment" data-target-type="loan">+ Add Proposed Payment</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Payment Date</th>
+                                                <th>Source Account</th>
+                                                <th>Target Card/Loan</th>
+                                                <th>Amount</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="proposed-loan-payments-body">
+                                            <!-- Dynamic proposed loan payments -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. CREDIT CARDS VIEW -->
+                <div id="view-creditcards" class="tab-view">
+                    <div class="loans-layout" id="creditcards-overview-layout">
+                        <!-- Cards Overview Grid -->
+                        <div class="loans-overview-grid" id="creditcards-overview-grid">
+                            <!-- Card widgets injected here -->
+                        </div>
+                        
+                        <!-- Add Card and Payoffs List -->
+                        <div class="loans-forms-grid">
+                            <div class="glass-card loan-card-details">
+                                <div class="table-card-header">
+                                    <h3>Credit Card Payoff Targets</h3>
+                                    <button class="action-btn small-btn solid-btn" id="btn-add-creditcard">+ New Card Target</button>
+                                </div>
+                                <div class="table-responsive">
+                                     <table class="data-table">
+                                         <thead>
+                                             <tr>
+                                                 <th>Target Name</th>
+                                                 <th>Starting Bal</th>
+                                                 <th>Current Bal</th>
+                                                 <th>Paid To Date</th>
+                                                 <th>Monthly Min</th>
+                                                 <th>Progress</th>
+                                                 <th>Actions</th>
+                                             </tr>
+                                         </thead>
+                                         <tbody id="creditcards-table-body">
+                                             <!-- Dynamic credit cards -->
+                                         </tbody>
+                                     </table>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Proposed Future Payments -->
+                        <div class="loans-forms-grid" style="margin-top: 1.5rem;">
+                            <div class="glass-card" style="padding: 1.5rem;">
+                                <div class="table-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                    <h3 style="margin: 0;">Proposed Future Payments</h3>
+                                    <button class="action-btn small-btn solid-btn" id="btn-add-proposed-payment" data-target-type="credit">+ Add Proposed Payment</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Payment Date</th>
+                                                <th>Source Account</th>
+                                                <th>Target Card/Loan</th>
+                                                <th>Amount</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="proposed-payments-body">
+                                            <!-- Dynamic proposed payments -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Credit Card Sub-Dashboard Layout -->
+                    <div class="cc-dashboard-layout hidden" id="cc-dashboard-layout" style="display: flex; flex-direction: column; gap: 1.5rem;">
+                        <div class="cc-sticky-dashboard" id="cc-sticky-dashboard">
+                        <div class="glass-card cc-dashboard-toolbar" id="cc-dashboard-toolbar" style="padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 1rem;">
+                                <button class="action-btn outline-btn" id="btn-cc-back" style="padding: 0.4rem 1rem;">← Back</button>
+                                <h3 id="cc-dashboard-title" style="margin: 0; font-family: var(--font-heading); font-size: 1.25rem; color: #a5b4fc;">Discover Card Dashboard</h3>
+                            </div>
+                            
+                            <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                                <!-- CC Calendar/List Toggle -->
+                                <div class="segmented-control" id="cc-view-toggle">
+                                    <button class="segment-btn active" data-mode="calendar" id="btn-cc-view-calendar">📅 Calendar</button>
+                                    <button class="segment-btn" data-mode="list" id="btn-cc-view-list">📝 List</button>
+                                </div>
+                                
+                                <!-- CC Month/Year Scope (Hidden by default, shown in list view) -->
+                                <div class="segmented-control hidden" id="cc-scope-toggle">
+                                    <button class="segment-btn active" data-scope="month" id="btn-cc-scope-month">Month</button>
+                                    <button class="segment-btn" data-scope="year" id="btn-cc-scope-year">Year</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card-payoff-summary" id="card-payoff-widgets">
+                            <div class="glass-card payoff-metric"><span>Current Balance</span><strong id="payoff-current-balance">$0.00</strong></div>
+                            <div class="glass-card payoff-metric"><span>APR</span><strong id="payoff-apr">0%</strong></div>
+                            <div class="glass-card payoff-metric"><span>Minimum Payment</span><strong id="payoff-minimum">$0.00</strong></div>
+                            <div class="glass-card payoff-metric"><span>At Minimum Payment</span><strong id="payoff-min-estimate">—</strong></div>
+                        </div>
+                        </div>
+
+                        <div class="glass-card payoff-planner hidden">
+                                <div><strong>Payoff Planner</strong><div class="muted-text">Calculate a monthly payment and optionally schedule future payments.</div></div>
+                                <label>Pay off by <input type="date" id="payoff-target-date" class="custom-input"></label>
+                                <label>Pay from <select id="payoff-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option></select></label>
+                                <button type="button" id="btn-calculate-payoff" class="action-btn outline-btn">Calculate</button>
+                                <div id="payoff-suggestion" class="payoff-suggestion">Choose a target date.</div>
+                                <button type="button" id="btn-apply-payoff-plan" class="action-btn solid-btn" disabled>Schedule Future Payments</button>
+                            </div>
+
+                        <div class="glass-card" id="card-payment-plans-summary" style="padding:1.25rem;">
+                            <div class="table-card-header"><h3>Active Payment Plans</h3></div>
+                            <div id="card-payment-plans-summary-list"></div>
+                        </div>
+
+                        <!-- Calendar View Container for CC -->
+                        <div class="view-grid" id="cc-calendar-view-container">
+                            <div class="calendar-card glass-card">
+                                <div class="calendar-header-grid" style="margin-top: 0.5rem;">
+                                    <div>Sunday</div>
+                                    <div>Monday</div>
+                                    <div>Tuesday</div>
+                                    <div>Wednesday</div>
+                                    <div>Thursday</div>
+                                    <div>Friday</div>
+                                    <div>Saturday</div>
+                                </div>
+                                <div class="calendar-days-grid" id="cc-calendar-days">
+                                    <!-- Dynamic credit card days -->
+                                </div>
+                            </div>
+                            
+                            <div class="sidebar-details-card glass-card">
+                                <h3 id="cc-quick-add-title">Quick-Add Charge</h3>
+                                <form id="cc-quick-add-form" class="detail-form">
+                                    <div class="form-group">
+                                        <label for="cc-trans-date">Date</label>
+                                        <input type="date" id="cc-trans-date" required class="custom-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="cc-trans-merchant">Merchant</label>
+                                        <input type="text" id="cc-trans-merchant" autocomplete="off" placeholder="e.g. Amazon, Costco, Shell" class="custom-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="cc-trans-desc">Description</label>
+                                        <input type="text" id="cc-trans-desc" autocomplete="off" placeholder="e.g. Groceries, Gas fill-up" required class="custom-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="cc-trans-kind">Transaction Type</label>
+                                        <select id="cc-trans-kind" class="custom-select">
+                                            <option value="charge">Charge</option>
+                                            <option value="payment">Payment</option>
+                                            <option value="credit">Credit / Reversal</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="cc-trans-amount">Amount</label>
+                                        <div class="input-prefix-wrapper">
+                                            <span class="input-prefix">$</span>
+                                            <input type="number" step="0.01" min="0.01" id="cc-trans-amount" placeholder="Amount (positive)" required class="custom-input">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <label for="cc-trans-owner">Ownership</label>
+                                            <select id="cc-trans-owner" class="custom-select">
+                                                <option value="personal">Personal</option>
+                                                <option value="joint">Joint</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="cc-trans-trip">Trip</label>
+                                            <input type="text" id="cc-trans-trip" class="custom-input" placeholder="Optional trip name">
+                                        </div>
+                                    </div>
+                                    <div class="form-row" id="cc-recurring-options" style="align-items: center; gap: 0.75rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <input type="checkbox" id="cc-trans-recurring" style="cursor:pointer;">
+                                            <label for="cc-trans-recurring" style="font-size:0.85rem; margin:0; cursor:pointer; white-space:nowrap;">Recurring charge?</label>
+                                        </div>
+                                        <div class="form-group hidden" id="cc-recurring-day-group" style="margin:0; flex:1;">
+                                            <label for="cc-trans-recurring-day" style="font-size:0.75rem;">Charge day each month</label>
+                                            <input type="number" min="1" max="31" id="cc-trans-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="action-btn solid-btn full-width">Add Charge</button>
+                                </form>
+                                
+                                <hr class="card-divider">
+                                
+                                <div class="inline-day-highlights hidden">
+                                    <h3>Day Highlights</h3>
+                                    <div id="cc-today-highlights-list" class="highlights-list"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- List View Container for CC -->
+                        <div class="glass-card list-view-card hidden" id="cc-list-view-container" style="padding: 2rem;">
+                            <div class="list-view-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap;">
+                                <h3 id="cc-list-view-title">Card Transaction Ledger</h3>
+                                <div id="cc-filter-summary" class="muted-text"></div>
+                            </div>
+
+                            <form id="cc-list-add-form" class="cc-list-tools">
+                                <input type="date" id="cc-list-add-date" required class="custom-input" aria-label="Transaction date">
+                                <input type="text" id="cc-list-add-merchant" autocomplete="off" class="custom-input" placeholder="Merchant" aria-label="Merchant">
+                                <input type="text" id="cc-list-add-desc" autocomplete="off" required class="custom-input" placeholder="Description" aria-label="Description">
+                                <input type="number" step="0.01" min="0.01" id="cc-list-add-amount" required class="custom-input" placeholder="Amount" aria-label="Transaction amount">
+                                <select id="cc-list-add-kind" class="custom-select" aria-label="Transaction type">
+                                    <option value="charge">Charge</option>
+                                    <option value="payment">Payment</option>
+                                    <option value="credit">Credit / Reversal</option>
+                                </select>
+                                <select id="cc-list-add-owner" class="custom-select" aria-label="Transaction owner">
+                                    <option value="personal">Personal</option>
+                                    <option value="joint">Joint</option>
+                                </select>
+                                <input type="text" id="cc-list-add-trip" class="custom-input" placeholder="Trip (optional)" aria-label="Trip name">
+                                <button type="submit" class="action-btn solid-btn">Add Charge</button>
+                            </form>
+
+                            <div class="cc-list-tools cc-filter-tools">
+                                <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="Search description">
+                                <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
+                                    <option value="all">All merchants</option>
+                                </select>
+                                <select id="cc-list-filter-owner" class="custom-select">
+                                    <option value="all">All ownership</option>
+                                    <option value="personal">Personal</option>
+                                    <option value="joint">Joint</option>
+                                </select>
+                                <select id="cc-list-filter-trip" class="custom-select" aria-label="Filter by trip">
+                                    <option value="all">All trips</option>
+                                </select>
+                                <button type="button" id="btn-clear-cc-filters" class="action-btn outline-btn">Clear Filters</button>
+                            </div>
+
+                            <div class="table-responsive" id="cc-list-view-table-container">
+                                <!-- Card transactions table -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. SYNC SETTINGS VIEW -->
+                <div id="view-sync" class="tab-view">
+                    <div class="sync-layout glass-card">
+                        <h3>Google Sheets Synchronization</h3>
+                        <p class="muted-text">This web application is configured to run fully offline. When you are ready to sync your data with Google Sheets, you can configure the API parameters below.</p>
+                        
+                        <form id="sync-settings-form" class="sync-form">
+                            <div class="form-group">
+                                <label for="sheet-id">Google Spreadsheet ID</label>
+                                <input type="text" id="sheet-id" placeholder="17PpBOFNMRUHLd1GVXWRijSJqEbRtR57ZofRFi_UZV9s" class="custom-input">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="client-id">OAuth Client ID</label>
+                                    <input type="text" id="client-id" placeholder="your-client-id.apps.googleusercontent.com" class="custom-input">
+                                </div>
+                                <div class="form-group">
+                                    <label for="api-key">API Key</label>
+                                    <input type="password" id="api-key" placeholder="AIzaSy..." class="custom-input">
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="sync-on-edit">
+                                    <span class="checkmark"></span>
+                                    Enable real-time dynamic sync (updates Google Sheet cells on change)
+                                </label>
+                            </div>
+                            
+                            <div class="button-row">
+                                <button type="button" class="action-btn outline-btn" id="btn-test-connection">Test Connection</button>
+                                <button type="submit" class="action-btn solid-btn">Save Sync Settings</button>
+                            </div>
+                        </form>
+
+                        <div class="sync-logs-box">
+                            <h4>Local Sync Engine Output Log</h4>
+                            <div class="logs-container" id="logs-container">
+                                <div class="log-entry system">[SYSTEM]: Sync engine active. Local modifications are indexed. Ready to connect to Google Sheets.</div>
+                                <div class="log-entry info">[INFO]: Local data version 2027.0.1 successfully initialized.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL DIALOGS -->
+    
+    <!-- Bulk Delivery Budget Modal -->
+    <dialog id="delivery-budget-dialog" class="glass-modal">
+        <form method="dialog" id="delivery-budget-form">
+            <h3>Bulk Adjust Delivery Log</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="delivery-budget-start">Start Date</label>
+                    <input type="date" id="delivery-budget-start" class="custom-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="delivery-budget-end">End Date</label>
+                    <input type="date" id="delivery-budget-end" class="custom-input" required>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="delivery-bulk-action">Action to Perform</label>
+                    <select id="delivery-bulk-action" class="custom-select">
+                        <option value="set-budget">Set Daily Budgets</option>
+                        <option value="mark-off">Mark as Days Off</option>
+                        <option value="reset">Reset Budgets &amp; Days Off</option>
+                    </select>
+                </div>
+                <div class="form-group" id="delivery-bulk-amount-group">
+                    <label for="delivery-budget-amount">Daily Budget Goal</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" min="0" step="0.01" id="delivery-budget-amount" class="custom-input" value="0">
+                    </div>
+                </div>
+                <div class="form-group" id="delivery-bulk-reason-group" style="display:none;">
+                    <label for="delivery-budget-reason">Off-Day Reason</label>
+                    <input type="text" id="delivery-budget-reason" class="custom-input" value="Off-Day">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Apply to Days</label>
+                <div class="weekday-budget-grid">
+                    <label><input type="checkbox" name="delivery-budget-day" value="1" checked> Monday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="2" checked> Tuesday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="3" checked> Wednesday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="4" checked> Thursday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="5" checked> Friday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="6" checked> Saturday</label>
+                    <label><input type="checkbox" name="delivery-budget-day" value="0" checked> Sunday</label>
+                </div>
+            </div>
+            <p class="muted-text">Adjust budgets, mark off-days, or clear weekly details for the selected days in range.</p>
+            <div class="modal-buttons">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-delivery-budget">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Apply Action</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Manual Planned Transfer Modal -->
+    <dialog id="manual-transfer-dialog" class="glass-modal">
+        <form method="dialog" id="manual-transfer-form">
+            <h3>Add Manual Planned Transfer</h3>
+            <div class="form-row"><div class="form-group"><label for="manual-transfer-date">Planned Transfer Date</label><input type="date" id="manual-transfer-date" class="custom-input" required></div><div class="form-group"><label for="manual-transfer-person">Transferred By</label><select id="manual-transfer-person" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div></div>
+            <div class="form-group"><label for="manual-transfer-description">Description</label><input type="text" id="manual-transfer-description" class="custom-input" placeholder="e.g. Extra paycheck contribution" required></div>
+            <div class="form-group"><label for="manual-transfer-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0.01" step="0.01" id="manual-transfer-amount" class="custom-input" required></div></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-manual-transfer">Cancel</button><button type="submit" class="action-btn solid-btn">Add Planned Transfer</button></div>
+        </form>
+    </dialog>
+
+    <!-- Manual Planned Transfers List Dialog -->
+    <dialog id="manual-transfers-list-dialog" class="glass-modal" style="max-width: 800px; width: 90%;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h3 style="margin: 0; font-family: var(--font-heading); font-size: 1.25rem; color: #a5b4fc;">Manual Planned Transfers</h3>
+            <button type="button" class="close-btn" id="btn-close-manual-transfers-list" style="background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; line-height: 1;">&times;</button>
+        </div>
+        <p class="muted-text" style="margin-top: -1rem; margin-bottom: 1.5rem;">Extra contributions are assigned to the 1st or 15th cycle based on the planned date.</p>
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 1rem;">
+            <button class="action-btn small-btn solid-btn" id="btn-add-manual-transfer">+ Add Transfer</button>
+        </div>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Person</th>
+                        <th>Description</th>
+                        <th>Cycle</th>
+                        <th>Amount</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="manual-transfers-body">
+                    <!-- Dynamically populated -->
+                </tbody>
+            </table>
+        </div>
+    </dialog>
+
+    <!-- Joint Bill Modal -->
+    <dialog id="joint-bill-dialog" class="glass-modal">
+        <form method="dialog" id="joint-bill-form">
+            <h3 id="bill-modal-title">Add Bill Splitter Item</h3>
+            <div id="mortgage-bill-warning" class="hidden" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; color: #fca5a5;">
+                This mortgage bill is automatically synchronized from your payoff targets. To change its details (including the escrow, P&I, and extra payment amount), please open the <a href="#" id="link-to-mortgage-settings" style="color: #a5b4fc; text-decoration: underline; font-weight: 600;">Mortgage Settings</a>.
+            </div>
+            <div id="billtracker-bill-warning" class="hidden" style="background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; color: #c7d2fe;">
+                This bill is automatically synchronized from your Bill Tracker. To change its details (including the classification, payment date, and source), please open the <a href="#" id="link-to-bill-tracker-settings" style="color: #a5b4fc; text-decoration: underline; font-weight: 600;">Bill Settings</a>.
+            </div>
+            <div id="card-payment-bill-warning" class="hidden" style="background: rgba(6, 182, 212, 0.15); border: 1px solid rgba(6, 182, 212, 0.3); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; color: #a5f3fc;">
+                <span id="card-payment-bill-warning-text">This entry is synchronized from a credit card payment. To change or delete it, edit the payment itself in</span> <a href="#" id="link-to-card-payment" style="color: #a5b4fc; text-decoration: underline; font-weight: 600;">Credit Cards</a>.
+            </div>
+            <input type="hidden" id="bill-edit-id">
+            <input type="hidden" id="bill-edit-cycle">
+            <div class="form-group"><label for="bill-name">Name</label><input type="text" id="bill-name" required class="custom-input" placeholder="e.g. Mortgage, Groceries, Cat Food"></div>
+            <div class="form-row">
+                <div class="form-group"><label for="bill-category">Classification</label><select id="bill-category" class="custom-select"><option value="bill">Bill</option><option value="expense">Expense</option><option value="utility">Utility</option><option value="savings">Savings / Investments</option></select></div><div class="form-group"><label for="bill-entry-type">Posting Type</label><select id="bill-entry-type" class="custom-select"><option value="actual">Actual ledger charge</option><option value="calculation">Transfer calculation only</option></select></div>
+                <div class="form-group"><label for="bill-ownership">Expense Ownership</label><select id="bill-ownership" class="custom-select"><option value="joint">Joint Expense</option><option value="personal">Personal Expense</option></select></div>
+                <div class="form-group"><label for="bill-cycle">Transfer Cycle</label><select id="bill-cycle" class="custom-select"><option value="1st">1st of Month</option><option value="15th">15th of Month</option><option value="both">Split Between 1st &amp; 15th</option></select></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group" id="bill-due-day-group"><label for="bill-due-day">Charge Day of Month</label><input type="number" min="1" max="31" id="bill-due-day" required class="custom-input" value="1"></div>
+                <div class="form-group" id="bill-payment-source-group"><label for="bill-payment-source">Payment Source</label><select id="bill-payment-source" class="custom-select"><option value="jointChecking">Joint Checking Account</option><option value="personalChecking">Personal Checking Account</option><optgroup label="Credit Cards" id="bill-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-recurring"> Recurring monthly charge</label></div>
+            </div>
+            <div class="form-row hidden" id="bill-recurrence-dates-group">
+                <div class="form-group"><label for="bill-recurring-start">Recurring Start Month</label><input type="month" id="bill-recurring-start" class="custom-input"><small class="muted-text">The first month this item should appear.</small></div>
+                <div class="form-group"><label for="bill-recurring-end">Final Payment Month</label><input type="month" id="bill-recurring-end" class="custom-input"><small class="muted-text">Optional. Leave blank to continue indefinitely.</small></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label for="bill-budget-frequency">Budget Method</label><select id="bill-budget-frequency" class="custom-select"><option value="charge">Budget When Charged</option><option value="monthly">Spread Evenly Each Month</option></select></div><div class="form-group"><label for="bill-charge-frequency">Subscription Frequency</label><select id="bill-charge-frequency" class="custom-select"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="biweekly">Every 2 Weeks</option><option value="fourweekly">Every 4 Weeks</option><option value="quarterly">Every 3 Months</option><option value="annual">Annually</option></select></div>
+                <div class="form-group hidden" id="bill-frequency-start-group"><label for="bill-frequency-start">Subscription Start Date</label><input type="date" id="bill-frequency-start" class="custom-input"><small class="muted-text">Anchors weekly, bi-weekly, quarterly, and annual schedules.</small></div><div class="form-group hidden" id="bill-weekly-day-group"><label for="bill-weekly-day">Legacy Weekly Day</label><select id="bill-weekly-day" class="custom-select"><option value="6">Saturday</option><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option></select></div>
+                <div class="form-group"><label for="bill-amount-field" id="bill-budget-amount-label">Transfer Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0" id="bill-amount-field" required class="custom-input"></div><small id="bill-budget-preview" class="muted-text"></small></div>
+                <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-same-payment" checked> Actual payment is the same</label></div>
+                <div class="form-group hidden" id="bill-payment-amount-group"><label for="bill-payment-amount" id="bill-payment-amount-label">Actual Payment Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0" id="bill-payment-amount" class="custom-input"></div></div>
+            </div>
+            <p class="muted-text" id="bill-routing-help">Actual bills post to the selected account calendar. Transfer-only items affect the split calculation but do not post to a ledger.</p>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-bill">Cancel</button><button type="submit" class="action-btn solid-btn" id="btn-save-bill">Save Item</button></div>
+        </form>
+    </dialog>
+
+
+    <!-- Allocation Modal -->
+    <dialog id="allocation-dialog" class="glass-modal">
+        <form method="dialog" id="allocation-form">
+            <h3 id="allocation-modal-title">Add Personal Allocation</h3>
+            <input type="hidden" id="alloc-edit-id">
+            <input type="hidden" id="alloc-edit-cycle">
+            <div class="form-group">
+                <label for="alloc-name">Allocation Name</label>
+                <input type="text" id="alloc-name" required class="custom-input">
+            </div>
+            <div class="form-group">
+                <label for="alloc-cycle">Due Cycle</label>
+                <select id="alloc-cycle" class="custom-select">
+                    <option value="1st">1st of Month</option>
+                    <option value="15th">15th of Month</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="alloc-frequency">Frequency</label>
+                    <select id="alloc-frequency" class="custom-select">
+                        <option value="monthly">Monthly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="alloc-start-date">Start Date</label>
+                    <input type="date" id="alloc-start-date" class="custom-input">
+                </div>
+            </div>
+            <p class="muted-text" id="alloc-frequency-preview"></p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="alloc-jason">Jason Amount</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="alloc-jason" class="custom-input" placeholder="Leave blank for no change">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="alloc-asia">Asia Amount</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="alloc-asia" class="custom-input" placeholder="Leave blank for no change">
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" id="alloc-offset-enabled"> Add an offset debit in the following cycle</label>
+            </div>
+            <div class="form-row hidden" id="alloc-offset-fields">
+                <div class="form-group"><label for="alloc-offset-jason">Following Cycle — Jason</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="alloc-offset-jason" class="custom-input" placeholder="Leave blank for no change"></div></div>
+                <div class="form-group"><label for="alloc-offset-asia">Following Cycle — Asia</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="alloc-offset-asia" class="custom-input" placeholder="Leave blank for no change"></div></div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" id="alloc-apply-future" checked> Make this a recurring allocation (applies to future months)</label>
+            </div>            <div class="modal-buttons">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-alloc">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Save Allocation</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Seasonal Expense Modal -->
+    <dialog id="seasonal-dialog" class="glass-modal">
+        <form method="dialog" id="seasonal-form">
+            <h3 id="seasonal-modal-title">Add Seasonal Expense</h3><input type="hidden" id="seasonal-edit-id">
+            <div class="form-group"><label for="seasonal-name">Expense Name</label><input type="text" id="seasonal-name" required class="custom-input" placeholder="e.g. State Fair, Thanksgiving, Christmas"></div>
+            <div class="form-row">
+                <div class="form-group"><label for="seasonal-amount">Total Budget</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="seasonal-amount" required class="custom-input"></div></div>
+                <div class="form-group"><label for="seasonal-month">Event Month</label><select id="seasonal-month" class="custom-select"><option value="0">January</option><option value="1">February</option><option value="2">March</option><option value="3">April</option><option value="4">May</option><option value="5">June</option><option value="6">July</option><option value="7">August</option><option value="8">September</option><option value="9">October</option><option value="10">November</option><option value="11">December</option></select></div>
+                <div class="form-group"><label for="seasonal-day">Event Day</label><input type="number" min="1" max="31" id="seasonal-day" required class="custom-input" value="1"></div>
+            </div>
+            <div class="form-group"><label for="seasonal-cycles">Semi-monthly Funding Cycles</label><input type="number" min="1" max="24" id="seasonal-cycles" required class="custom-input" value="4"><small class="muted-text">The total is divided evenly across 1st/15th cycles leading up to the event.</small></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-seasonal">Cancel</button><button type="submit" class="action-btn solid-btn">Save Seasonal Expense</button></div>
+        </form>
+    </dialog>
+    <!-- Card/Loan Modal -->
+    <dialog id="loan-dialog" class="glass-modal">
+        <form method="dialog" id="loan-form">
+            <h3 id="loan-modal-title">Add Overtime Payoff Target</h3>
+            <input type="hidden" id="loan-action" value="add">
+            <input type="hidden" id="loan-edit-id">
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="loan-name-field">Target Name</label>
+                    <input type="text" id="loan-name-field" required class="custom-input" placeholder="e.g. Greensky Slab Leak, Discover Card">
+                </div>
+                <div class="form-group">
+                    <label for="loan-type-field">Account Type</label>
+                    <select id="loan-type-field" class="custom-select">
+                        <option value="loan">Installment Loan / Debt Target</option>
+                        <option value="credit">Credit Card</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="loan-start-bal">Starting Balance</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="loan-start-bal" required class="custom-input">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="loan-current-bal">Current Balance</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="loan-current-bal" required class="custom-input">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="loan-interest-rate">Interest Rate (APR %)</label>
+                    <input type="number" step="0.01" id="loan-interest-rate" required class="custom-input" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="loan-due-day">Payment Due Day</label>
+                    <input type="number" min="1" max="31" id="loan-due-day" required class="custom-input" value="15">
+                </div>
+                <div class="form-group" id="loan-statement-day-group">
+                    <label for="loan-statement-day">Statement Closing Day</label>
+                    <input type="number" min="1" max="31" id="loan-statement-day" class="custom-input" value="1" placeholder="Day of month">
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="loan-monthly-min">Monthly Minimum / Installment Amount</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="loan-monthly-min" required class="custom-input">
+                    </div>
+                </div>
+                <div class="form-group" id="loan-limit-group">
+                    <label for="loan-limit-field">Credit Limit</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="loan-limit-field" class="custom-input" value="5000">
+                    </div>
+                </div>
+                <div class="form-group hidden" id="loan-charge-card-group">
+                    <label>&nbsp;</label>
+                    <label class="checkbox-label"><input type="checkbox" id="loan-is-charge-card"> Charge card (no preset credit limit)</label>
+                </div>
+            </div>
+            
+            <div class="form-row" id="loan-payment-settings-row">
+                <div class="form-group" id="loan-payment-strategy-group"><label for="loan-payment-strategy">Automatic Monthly Payment</label><select id="loan-payment-strategy" class="custom-select"><option value="none">Do not schedule automatically</option><option value="balance">Full Card Balance</option><option value="interestSaving">Interest-Saving Balance</option><option value="minimum">Minimum Payment</option></select></div>
+                <div class="form-group"><label for="loan-payment-source">Pay From</label><select id="loan-payment-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option><optgroup label="Credit Cards" id="loan-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group"><label for="loan-payment-end-date">Payment End Date (optional)</label><input type="date" id="loan-payment-end-date" class="custom-input"></div>
+                <div class="form-group"><label for="loan-splitter-cycle">Bill Splitter Transfer Cycle</label><select id="loan-splitter-cycle" class="custom-select"><option value="1st">1st of Month</option><option value="15th">15th of Month</option><option value="both">Split Between 1st &amp; 15th</option></select></div>
+                <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1.5rem;">
+                    <input type="checkbox" id="loan-exempt-splitter" style="cursor: pointer;">
+                    <label for="loan-exempt-splitter" style="margin: 0; cursor: pointer; white-space: nowrap;">Exempt from Bill Splitter</label>
+                </div>
+            </div>
+            
+            <!-- Mortgage Options (Installment Loans only) -->
+            <div id="loan-mortgage-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <input type="checkbox" id="loan-is-mortgage" style="cursor:pointer;">
+                    <label for="loan-is-mortgage" style="font-family:var(--font-heading); font-weight:600; color:#a5b4fc; font-size:0.95rem; margin:0; cursor:pointer;">Is this a Mortgage Loan?</label>
+                </div>
+                <div class="form-row hidden" id="loan-mortgage-fields">
+                    <div class="form-group">
+                        <label for="loan-mortgage-escrow">Monthly Escrow Amount</label>
+                        <div class="input-prefix-wrapper">
+                            <span class="input-prefix">$</span>
+                            <input type="number" step="0.01" id="loan-mortgage-escrow" class="custom-input" value="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="loan-mortgage-pi">Monthly Principal & Interest (P&I)</label>
+                        <div class="input-prefix-wrapper">
+                            <span class="input-prefix">$</span>
+                            <input type="number" step="0.01" id="loan-mortgage-pi" class="custom-input" value="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="loan-mortgage-extra">Additional P&I Payment</label>
+                        <div class="input-prefix-wrapper">
+                            <span class="input-prefix">$</span>
+                            <input type="number" step="0.01" id="loan-mortgage-extra" class="custom-input" value="0">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Promo Purchase Rate (Credit Cards only) -->
+            <div id="loan-purchase-promo-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <input type="checkbox" id="loan-purchase-promo-active" style="cursor:pointer;">
+                    <label for="loan-purchase-promo-active" style="font-family:var(--font-heading); font-weight:600; color:#a5b4fc; font-size:0.95rem; margin:0; cursor:pointer;">Promo interest rate on purchases in effect?</label>
+                </div>
+                <div class="form-row hidden" id="loan-purchase-promo-fields">
+                    <div class="form-group">
+                        <label for="loan-purchase-promo-rate">Promo Purchase APR (%)</label>
+                        <input type="number" step="0.1" id="loan-purchase-promo-rate" value="0" class="custom-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="loan-purchase-promo-exp">Promo Expiration Date</label>
+                        <input type="date" id="loan-purchase-promo-exp" class="custom-input">
+                    </div>
+                </div>
+            </div>
+
+            <div id="loan-payment-plans-section" class="hidden" style="margin-top:1.25rem; border-top:1px solid var(--glass-border); padding-top:1rem;">
+                <h4 style="font-family:var(--font-heading); color:#a5b4fc; margin-bottom:.5rem;">Existing Card Payment Plans</h4>
+                <div id="loan-payment-plans-list" style="display:flex; flex-direction:column; gap:.4rem; margin-bottom:1rem;"></div>
+                <div style="background:rgba(255,255,255,.02); padding:.75rem; border:1px dashed var(--glass-border); border-radius:6px;">
+                    <div class="form-row">
+                        <div class="form-group"><label>Plan Name</label><input id="existing-plan-name" class="custom-input" placeholder="e.g. Laptop plan"></div>
+                        <div class="form-group"><label>Original Amount</label><input type="number" step="0.01" id="existing-plan-original" class="custom-input"></div>
+                        <div class="form-group"><label>Current Balance</label><input type="number" step="0.01" id="existing-plan-current" class="custom-input"></div>
+                    </div>
+                    <div class="form-row" style="margin-top:.75rem;">
+                        <div class="form-group"><label>Activation Date</label><input type="date" id="existing-plan-activated" class="custom-input"></div>
+                        <div class="form-group"><label>Plan Length (months)</label><input type="number" min="1" id="existing-plan-length" class="custom-input"></div>
+                        <div class="form-group"><label>Remaining Payments</label><input type="number" min="0" id="existing-plan-remaining-payments" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" step="0.01" id="existing-plan-payment" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Fee</label><input type="number" step="0.01" id="existing-plan-fee" class="custom-input" value="0"></div>
+                    </div>
+                    <div style="display:flex; gap:.5rem; margin-top:.75rem;">
+                        <button type="button" id="btn-add-existing-plan" class="action-btn small-btn solid-btn">Add Existing Plan</button>
+                        <button type="button" id="btn-cancel-plan-edit" class="action-btn small-btn hidden">Cancel Edit</button>
+                    </div>
+                </div>
+            </div>
+
+            
+
+            <!-- Balance Transfers Section (Visible only when Type is Credit Card) -->
+            <div id="loan-xfer-section" class="hidden" style="margin-top: 1.25rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <h4 style="font-family: var(--font-heading); color: #a5b4fc; font-size: 1rem; margin-bottom: 0.5rem;">Balance Transfers</h4>
+                <div id="loan-xfer-list" style="display:flex; flex-direction:column; gap:.4rem; margin-bottom:1rem;"></div>
+                <div style="background: rgba(255, 255, 255, 0.02); padding: 0.75rem; border-radius: 6px; border: 1px dashed var(--glass-border); display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div class="form-group"><label style="font-size:0.75rem;">Transfer Entry</label><select id="xfer-mode" class="custom-select"><option value="new">New Transfer</option><option value="existing">Existing Transfer</option></select></div>
+                    <div class="form-group"><label style="font-size:0.75rem;">Transferred By</label><select id="xfer-owner" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label id="xfer-amount-label" style="font-size:0.75rem;">Transfer Amount</label>
+                            <div class="input-prefix-wrapper">
+                                <span class="input-prefix" style="font-size:0.75rem;">$</span>
+                                <input type="number" step="0.01" id="xfer-amount" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                            </div>
+                        </div>
+                        <div class="form-group" id="xfer-source-group">
+                            <label style="font-size:0.75rem;">Transfer From Target</label>
+                            <select id="xfer-source" class="custom-select" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                                <!-- Dynamically loaded other loans -->
+                            </select>
+                        </div>
+                        <div class="form-group" id="xfer-fee-group">
+                            <label style="font-size:0.75rem;">Transfer Fee (%)</label>
+                            <input type="number" step="0.1" id="xfer-fee-pct" value="3.0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div class="form-group hidden" id="xfer-current-group"><label style="font-size:0.75rem;">Current Transfer Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="xfer-current-balance" class="custom-input"></div></div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;">Promo APR Rate (%)</label>
+                            <input type="number" step="0.1" id="xfer-promo-rate" value="0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                        </div>
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;">Promo Expiration Date</label>
+                            <input type="date" id="xfer-promo-exp" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <button type="button" class="action-btn small-btn solid-btn" id="btn-execute-xfer" style="align-self: flex-end; padding: 0.3rem 0.75rem; font-size: 0.8rem;">Add Transfer</button>
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 1.5rem;">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-loan">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Save Target</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Transaction Edit Modal Dialog -->
+    <dialog id="edit-tx-dialog" class="glass-modal">
+        <form id="edit-tx-form">
+            <h3 id="edit-tx-modal-title">Edit Transaction</h3>
+            <input type="hidden" id="edit-tx-id">
+            <input type="hidden" id="edit-tx-date-orig">
+            <input type="hidden" id="edit-tx-mode" value="edit">
+            <div id="edit-tx-cc-payment-notice" class="hidden" style="background: rgba(6, 182, 212, 0.15); border: 1px solid rgba(6, 182, 212, 0.3); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; color: #a5f3fc;">
+                <span id="edit-tx-cc-payment-notice-text"></span> <a href="#" id="edit-tx-cc-payment-link" style="color: #a5b4fc; text-decoration: underline; font-weight: 600;">View in Credit Cards</a>.
+            </div>
+            
+            <div class="form-group">
+                <label for="edit-tx-date">Date</label>
+                <input type="date" id="edit-tx-date" required class="custom-input">
+            </div>
+            
+            <div class="form-group hidden" id="edit-merchant-group">
+                <label for="edit-tx-merchant">Merchant</label>
+                <input type="text" id="edit-tx-merchant" class="custom-input" placeholder="e.g. Amazon, Costco, Shell">
+            </div>
+
+            <div class="form-row hidden" id="edit-card-meta-group">
+                <div class="form-group">
+                    <label for="edit-tx-kind">Transaction Type</label>
+                    <select id="edit-tx-kind" class="custom-select">
+                        <option value="charge">Charge</option>
+                        <option value="credit">Credit / Reversal</option>
+                        <option value="payment">Payment</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-tx-owner">Ownership</label>
+                    <select id="edit-tx-owner" class="custom-select">
+                        <option value="personal">Personal</option>
+                        <option value="joint">Joint</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-tx-trip">Trip</label>
+                    <input type="text" id="edit-tx-trip" class="custom-input" placeholder="Optional trip name">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="edit-tx-desc">Description</label>
+                <input type="text" id="edit-tx-desc" required class="custom-input" placeholder="e.g. Walmart, Payday" list="checking-description-suggestions" autocomplete="off">
+            </div>
+            
+            <!-- Standard Amount Group -->
+            <div class="form-group" id="edit-amount-group">
+                <label for="edit-tx-amount">Amount</label>
+                <div class="input-prefix-wrapper">
+                    <span class="input-prefix">$</span>
+                    <input type="number" step="0.01" id="edit-tx-amount" class="custom-input">
+                </div>
+                <span class="input-hint" style="font-size:0.75rem; color:var(--text-muted); margin-top:4px; display:block;">Use negative value for expenses, positive for income</span>
+            </div>
+
+            <!-- Recurring Charge Group (CC only) -->
+            <div class="form-row hidden" id="edit-recurring-group" style="align-items: center; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="checkbox" id="edit-tx-recurring" style="cursor:pointer;">
+                    <label for="edit-tx-recurring" style="font-size:0.85rem; margin:0; cursor:pointer; white-space:nowrap;">Recurring charge?</label>
+                </div>
+                <div class="form-group hidden" id="edit-recurring-day-group" style="margin:0; flex:1;">
+                    <label for="edit-tx-recurring-day" style="font-size:0.75rem;">Charge day each month</label>
+                    <input type="number" min="1" max="31" id="edit-tx-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
+                </div>
+            </div>
+            
+            <div id="edit-payment-plan-group" class="hidden" style="margin-top:1rem; border-top:1px solid var(--glass-border); padding-top:1rem;">
+                <div style="display:flex; align-items:center; gap:.5rem; margin-bottom:.75rem;">
+                    <input type="checkbox" id="edit-tx-payment-plan">
+                    <label for="edit-tx-payment-plan" style="margin:0;">This charge is on a payment plan</label>
+                </div>
+                <div id="edit-payment-plan-fields" class="hidden">
+                    <div class="form-row">
+                        <div class="form-group"><label>Activation Date</label><input type="date" id="edit-plan-activated" class="custom-input"></div>
+                        <div class="form-group"><label>Plan Length (months)</label><input type="number" min="1" id="edit-plan-length" class="custom-input"></div>
+                        <div class="form-group"><label>Current Plan Balance</label><input type="number" step="0.01" id="edit-plan-current" class="custom-input"></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" step="0.01" id="edit-plan-payment" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Fee</label><input type="number" step="0.01" id="edit-plan-fee" class="custom-input" value="0"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Joint Contribution Group (Dynamic) -->
+            <div class="form-row hidden" id="edit-joint-contrib-group">
+                <div class="form-group">
+                    <label for="edit-tx-jason">Jason's Share</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="edit-tx-jason" class="custom-input">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="edit-tx-asia">Asia's Share</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" id="edit-tx-asia" class="custom-input">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button type="button" class="action-btn outline-btn hidden" id="btn-go-to-delivery-log" style="background: rgba(99, 102, 241, 0.1); border-color: var(--color-primary);">Go to Delivery Log</button>
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-edit-tx">Cancel</button>
+                <button type="button" class="action-btn danger-btn" id="btn-delete-edit-tx" style="margin-right: auto;">Delete</button>
+                <button type="button" class="action-btn outline-btn" id="btn-duplicate-edit-tx">Duplicate</button>
+                <button type="submit" class="action-btn solid-btn" id="btn-save-edit-tx">Save Changes</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="day-highlights-dialog" class="glass-modal day-highlights-modal">
+        <div class="day-highlights-modal-header">
+            <h3>Day Details</h3>
+            <button type="button" id="btn-close-day-highlights" class="action-btn outline-btn">Close</button>
+        </div>
+        <div id="day-highlights-dialog-content" class="highlights-list"></div>
+    </dialog>
+
+    <dialog id="savings-balance-dialog" class="glass-modal">
+        <form id="savings-balance-form" class="detail-form">
+            <h3>Savings Balance Settings</h3>
+            <div class="form-group"><label for="savings-current-amount">Starting Savings Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-current-amount" required class="custom-input"></div><small>Current balance is calculated from this amount plus completed savings activity.</small></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-balance">Cancel</button><button type="submit" class="action-btn solid-btn">Save Starting Balance</button></div>
+        </form>
+    </dialog>
+    <dialog id="savings-edit-dialog" class="glass-modal">
+        <form id="savings-edit-form" class="detail-form">
+            <h3>Edit Savings Entry</h3>
+            <input type="hidden" id="savings-edit-id">
+            <div class="form-group"><label for="savings-edit-type">Entry Type</label><select id="savings-edit-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
+            <div class="form-group"><label for="savings-edit-date">Date</label><input type="date" id="savings-edit-date" required class="custom-input"></div>
+            <div class="form-group"><label for="savings-edit-description">Description</label><input type="text" id="savings-edit-description" required class="custom-input"></div>
+            <div class="form-group"><label for="savings-edit-amount">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small>Interest stays in Savings only. Transfer edits update the Personal mirror when it still exists.</small></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-edit">Cancel</button><button type="button" class="action-btn danger-btn" id="btn-delete-savings-edit" style="margin-right:auto;">Delete</button><button type="submit" class="action-btn solid-btn">Save Changes</button></div>
+        </form>
+    </dialog>
+
+    <dialog id="savings-day-dialog" class="glass-modal day-highlights-modal">
+        <div class="day-highlights-modal-header"><h3 id="savings-day-dialog-title">Savings Day Details</h3><button type="button" id="btn-close-savings-day" class="action-btn outline-btn">Close</button></div>
+        <div id="savings-day-dialog-content" class="highlights-list"></div>
+    </dialog>
+    <!-- Bill Settings Modal (Bill Tracker) -->
+    <dialog id="bill-settings-dialog" class="glass-modal">
+        <form id="bill-settings-form" class="detail-form">
+            <h3 id="bill-settings-modal-title">Add Bill Setting</h3>
+            <input type="hidden" id="bill-settings-action" value="add">
+            <input type="hidden" id="bill-settings-id">
+            
+            <div class="form-group">
+                <label for="bill-settings-name">Bill Name</label>
+                <input type="text" id="bill-settings-name" required class="custom-input" placeholder="e.g. Netflix, Water Bill, Electric">
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="bill-settings-category">Classification</label>
+                    <select id="bill-settings-category" class="custom-select" required>
+                        <option value="Streaming Service">Streaming Service</option>
+                        <option value="Water">Water</option>
+                        <option value="Electricity">Electricity</option>
+                        <option value="Gas">Gas</option>
+                        <option value="Phone/Internet">Phone/Internet</option>
+                        <option value="Lawn Care">Lawn Care</option>
+                        <option value="Insurance">Insurance</option>
+                        <option value="Groceries">Groceries</option>
+                        <option value="Pest Control">Pest Control</option>
+                        <option value="Pet Food">Pet Food</option>
+                        <option value="Pet Supplies">Pet Supplies</option>
+                        <option value="Sundries">Sundries</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bill-settings-ownership">Expense Ownership</label>
+                    <select id="bill-settings-ownership" class="custom-select" required>
+                        <option value="joint">Joint Expense</option>
+                        <option value="personal">Personal Expense</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bill-settings-estimate">Estimated Cost</label>
+                    <div class="input-prefix-wrapper">
+                        <span class="input-prefix">$</span>
+                        <input type="number" step="0.01" min="0" id="bill-settings-estimate" required class="custom-input" placeholder="0.00">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="bill-settings-date-type">Payment Date Type</label>
+                    <select id="bill-settings-date-type" class="custom-select">
+                        <option value="dayOfMonth">Specific Day of Month</option>
+                        <option value="dayOfWeek">Specific Day of Week</option>
+                    </select>
+                </div>
+                <div class="form-group" id="bill-settings-payment-date-group">
+                    <label for="bill-settings-payment-date">Payment Day of Month</label>
+                    <input type="number" min="1" max="31" id="bill-settings-payment-date" required class="custom-input" placeholder="e.g. 15">
+                </div>
+                <div class="form-group hidden" id="bill-settings-weekday-group">
+                    <label for="bill-settings-weekday">Payment Day of Week</label>
+                    <select id="bill-settings-weekday" class="custom-select">
+                        <option value="1">Monday</option>
+                        <option value="2">Tuesday</option>
+                        <option value="3">Wednesday</option>
+                        <option value="4">Thursday</option>
+                        <option value="5">Friday</option>
+                        <option value="6">Saturday</option>
+                        <option value="0">Sunday</option>
+                    </select>
+                </div>
+                <div class="form-group hidden" id="bill-settings-anchor-date-group">
+                    <label for="bill-settings-anchor-date">Subscription Start / Anchor Date</label>
+                    <input type="date" id="bill-settings-anchor-date" class="custom-input">
+                </div>
+            </div>
+            
+            <div class="form-row" style="align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+                <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                    <input type="checkbox" id="bill-settings-has-closing" style="cursor:pointer;" checked>
+                    <label for="bill-settings-has-closing" style="margin:0; cursor:pointer;">Has Statement Closing Date?</label>
+                </div>
+                <div class="form-group" id="bill-settings-closing-date-group" style="flex: 1; margin: 0;">
+                    <label for="bill-settings-closing-date">Statement Closing Day of Month</label>
+                    <input type="number" min="1" max="31" id="bill-settings-closing-date" required class="custom-input" placeholder="e.g. 10">
+                </div>
+            </div>
+            
+            <div class="form-row" style="align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+                <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                    <input type="checkbox" id="bill-settings-autopay" style="cursor:pointer;" checked>
+                    <label for="bill-settings-autopay" style="margin:0; cursor:pointer;">Schedule Automatic Payments</label>
+                </div>
+                <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+                    <input type="checkbox" id="bill-settings-recurring" style="cursor:pointer;" checked>
+                    <label for="bill-settings-recurring" style="margin:0; cursor:pointer;">Is recurring charge?</label>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="bill-settings-source">Payment Source</label>
+                    <select id="bill-settings-source" class="custom-select" required>
+                        <option value="jointChecking">Joint Checking Account</option>
+                        <option value="personalChecking">Personal Checking Account</option>
+                        <optgroup label="Credit Cards" id="bill-settings-source-cc-optgroup"></optgroup>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bill-settings-cycle">Bill Splitter Transfer Cycle</label>
+                    <select id="bill-settings-cycle" class="custom-select">
+                        <option value="1st">1st of Month</option>
+                        <option value="15th">15th of Month</option>
+                        <option value="both">Split Between 1st &amp; 15th</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row hidden" id="bill-settings-recurring-fields">
+                <div class="form-group">
+                    <label for="bill-settings-frequency">Subscription Frequency</label>
+                    <select id="bill-settings-frequency" class="custom-select">
+                        <option value="monthly">Monthly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="biweekly">Every 2 weeks</option>
+                        <option value="quarterly">Every 3 months</option>
+                        <option value="annually">Annually</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bill-settings-start-month">Subscription Start Month</label>
+                    <select id="bill-settings-start-month" class="custom-select">
+                        <option value="Jan">Jan</option>
+                        <option value="Feb">Feb</option>
+                        <option value="Mar">Mar</option>
+                        <option value="Apr">Apr</option>
+                        <option value="May">May</option>
+                        <option value="Jun">Jun</option>
+                        <option value="Jul">Jul</option>
+                        <option value="Aug">Aug</option>
+                        <option value="Sep">Sep</option>
+                        <option value="Oct">Oct</option>
+                        <option value="Nov">Nov</option>
+                        <option value="Dec">Dec</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 1.5rem;">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-bill-settings">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Save Setting</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Delete Bill Tracker Warning Modal Dialog -->
+    <dialog id="delete-billtracker-warning-dialog" class="glass-modal">
+        <div style="padding: 1rem; text-align: center;">
+            <h3 style="margin-bottom: 1rem; color: var(--color-danger);">Cannot Delete Synced Bill</h3>
+            <p style="margin-bottom: 1.5rem; line-height: 1.5;">This item is synchronized with your master Bill Settings. To edit or delete this bill splitter item, please make changes to the master setting in the Bill Settings tab.</p>
+            <div style="display: flex; gap: 1rem; justify-content: center;">
+                <button type="button" class="action-btn outline-btn" id="btn-close-delete-warning">Close</button>
+                <button type="button" class="action-btn solid-btn" id="link-to-delete-master-setting">Go to Bill Settings</button>
+            </div>
+        </div>
+    </dialog>
+
+    <!-- Proposed Payment Modal Dialog -->
+    <dialog id="proposed-payment-dialog" class="glass-modal">
+        <form id="proposed-payment-form">
+            <h3>Add Proposed Future Payment</h3>
+            <input type="hidden" id="prop-pay-action" value="add">
+            <input type="hidden" id="prop-pay-edit-id">
+            <input type="hidden" id="prop-pay-link-id">
+            <input type="hidden" id="prop-pay-type" value="credit">
+            <div class="form-group">
+                <label for="prop-pay-date">Payment Date</label>
+                <input type="date" id="prop-pay-date" required class="custom-input">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="prop-pay-source">Source Account</label>
+                    <select id="prop-pay-source" class="custom-select">
+                        <option value="personal">Personal Checking</option>
+                        <option value="joint">Joint Checking</option>
+                        <optgroup label="Credit Cards" id="prop-pay-source-cc-optgroup"></optgroup>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="prop-pay-target">Target Card/Loan</label>
+                    <select id="prop-pay-target" class="custom-select">
+                        <!-- Dynamically loaded cards -->
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="prop-pay-amount">Payment Amount</label>
+                <div class="input-prefix-wrapper">
+                    <span class="input-prefix">$</span>
+                    <input type="number" step="0.01" min="0.01" id="prop-pay-amount" required class="custom-input">
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 1.5rem;">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-prop-pay">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Add Proposed Payment</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Jason's Payroll Configuration Dialog -->
+    <dialog id="payroll-config-dialog" class="glass-modal" style="max-width: 580px; width: 90%;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); padding-bottom: 0.75rem; margin-bottom: 1.25rem;">
+            <h3 style="margin: 0; font-family: var(--font-heading); font-size: 1.25rem; color: #a5b4fc;">⚙️ Jason's Payroll Tracker</h3>
+            <button type="button" class="close-btn" id="btn-close-payroll" style="background:none; border:none; color:var(--text-secondary); font-size:1.25rem; cursor:pointer;">&times;</button>
+        </div>
+        <form id="payroll-config-form" class="detail-form" style="display: flex; flex-direction: column; gap: 1rem;">
+            
+            <!-- Standard Base Pay Parameters -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <div class="form-group">
+                    <label for="payroll-first-date">1st Pay Date of Year (Friday)</label>
+                    <input type="date" id="payroll-first-date" required class="custom-input">
+                </div>
+                <div class="form-group">
+                    <label for="payroll-base-pay">Base Net Pay ($)</label>
+                    <input type="number" step="0.01" id="payroll-base-pay" required class="custom-input">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="payroll-stipend">Cellular Stipend ($) <span style="font-size: 0.8rem; color: var(--text-secondary); font-weight: normal;">(Added to 1st paycheck of month)</span></label>
+                <input type="number" step="0.01" id="payroll-stipend" required class="custom-input">
+            </div>
+
+            <!-- Custom Rates Accordion/Toggle -->
+            <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="payroll-custom-rates-toggle" style="cursor: pointer;">
+                    <label for="payroll-custom-rates-toggle" style="margin: 0; cursor: pointer; font-weight: 500;">Use different pay rates for paychecks</label>
+                </div>
+                <div id="payroll-custom-rates-panel" class="hidden" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+                    <div class="form-group">
+                        <label for="payroll-rate-1st">1st Paycheck</label>
+                        <input type="number" step="0.01" id="payroll-rate-1st" class="custom-input" style="padding: 0.4rem;">
+                    </div>
+                    <div class="form-group">
+                        <label for="payroll-rate-2nd">2nd Paycheck</label>
+                        <input type="number" step="0.01" id="payroll-rate-2nd" class="custom-input" style="padding: 0.4rem;">
+                    </div>
+                    <div class="form-group">
+                        <label for="payroll-rate-3rd">3rd Paycheck</label>
+                        <input type="number" step="0.01" id="payroll-rate-3rd" class="custom-input" style="padding: 0.4rem;">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pay Increase Estimates Section -->
+            <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
+                <h4 style="margin: 0 0 0.5rem 0; font-family: var(--font-heading); font-size: 1rem; color: #a5b4fc;">Projected Pay Increases</h4>
+                
+                <!-- Input Row for adding new estimate -->
+                <div style="display: grid; grid-template-columns: 2fr 1.5fr 1.5fr 1fr; gap: 0.4rem; align-items: end; margin-bottom: 0.75rem; border-bottom: 1px dashed var(--glass-border); padding-bottom: 0.75rem;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Effective Date</label>
+                        <div style="display:flex; gap:0.25rem;">
+                            <select id="payroll-est-month" class="custom-select" style="padding:0.35rem; font-size:0.8rem;">
+                                <option value="Jan">Jan</option>
+                                <option value="Feb">Feb</option>
+                                <option value="Mar">Mar</option>
+                                <option value="Apr">Apr</option>
+                                <option value="May">May</option>
+                                <option value="Jun">Jun</option>
+                                <option value="Jul">Jul</option>
+                                <option value="Aug">Aug</option>
+                                <option value="Sep">Sep</option>
+                                <option value="Oct">Oct</option>
+                                <option value="Nov">Nov</option>
+                                <option value="Dec">Dec</option>
+                            </select>
+                            <input type="number" id="payroll-est-year" value="2026" min="2026" max="2040" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:65px;">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Increase Value</label>
+                        <div style="display:flex; align-items:center; gap:0.25rem;">
+                            <input type="number" step="0.01" id="payroll-est-val" placeholder="3 or 3100" class="custom-input" style="padding:0.35rem; font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Type</label>
+                        <select id="payroll-est-type" class="custom-select" style="padding:0.35rem; font-size:0.8rem;">
+                            <option value="percent">Percent (%)</option>
+                            <option value="value">Net Amount ($)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0; text-align:center;">
+                        <label style="font-size:0.75rem; display:block; margin-bottom:2px;">Recurring</label>
+                        <input type="checkbox" id="payroll-est-recur" style="cursor:pointer; transform:scale(1.1);">
+                    </div>
+                </div>
+                
+                <div style="text-align: right; margin-bottom: 0.75rem;">
+                    <button type="button" class="action-btn solid-btn" id="btn-add-payroll-est" style="padding: 0.35rem 0.8rem; font-size: 0.8rem; height: 28px;">+ Add Estimate</button>
+                </div>
+
+                <!-- List of existing estimates -->
+                <div style="max-height: 120px; overflow-y: auto;" id="payroll-est-list">
+                    <!-- Estimates rows injected here -->
+                </div>
+            </div>
+
+            <div class="modal-buttons" style="margin-top: 0.5rem;">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-payroll">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Save Changes</button>
+            </div>
+        </form>
+    </dialog>
+
+    <datalist id="cc-merchant-suggestions"></datalist>
+    <datalist id="cc-description-suggestions"></datalist>
+    <datalist id="checking-description-suggestions"></datalist>
+
+    <!-- Import data, parsing files etc -->
+    <script src="initial_data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
