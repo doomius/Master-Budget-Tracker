@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14999,11 +15000,25 @@ function setupEventListeners() {
                     if (!validationError) {
                         state = imported;
                         saveDatabase();
+
+                        // Re-sync the same UI bits the "Reset to Excel Data" flow does after a full
+                        // state replacement, instead of location.reload(). A reload works fine as a
+                        // top-level page, but when this app is embedded in an iframe (e.g. a Google
+                        // Sites/Drive embed), the sandboxed frame can block the reload's navigation
+                        // outright and leave the whole embed blank with no error — renderApp() alone
+                        // already picks up every state-driven value, so a hard reload was never
+                        // actually necessary for correctness, just a convenient reset-everything shortcut.
+                        document.getElementById('year-select').value = state.currentYear;
+                        document.getElementById('month-select').value = state.currentMonth;
+                        updateSegmentedControlsUI();
+                        const isJoint = state.dashboardType === 'joint';
+                        document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
+                        document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
+                        document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
+                        updateQuickAddFormFields();
+                        updateTabTitles();
                         renderApp();
-                        logSuccess("Database successfully imported! Reloading page to refresh layouts...");
-                        setTimeout(() => {
-                            location.reload();
-                        }, 500);
+                        logSuccess("Database successfully imported!");
                     } else {
                         alert(`Invalid backup file: ${validationError}\n\nYour current data was not changed.`);
                     }
