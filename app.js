@@ -84,7 +84,18 @@ function shiftCalendarPeriod(year, month, offset) {
 }
 
 // Helper to calculate bi-weekly paycheck dates in a given year
+// Cache for getPaycheckDatesForYear/getPersonalTransactionsForPeriod/getCalculatedTransferForJason/
+// getCalculatedTransferForAsia, keyed by year or "year-month"/"year-month-cycle". These are called
+// repeatedly (often for every past month in history) from getPersonalRunningBalanceAtDate and
+// getJointRunningBalanceAtDate, so an uncached implementation re-derives the same month's paychecks,
+// delivery weeks, and bill allocations over and over. Cleared in saveDatabase().
+let _paycheckDatesCache = {};
+let _personalTxPeriodCache = {};
+let _transferForJasonCache = {};
+let _transferForAsiaCache = {};
+
 function getPaycheckDatesForYear(year) {
+    if (_paycheckDatesCache[year]) return _paycheckDatesCache[year];
     const dates = [];
     const cfg = state.payrollConfig;
     if (!cfg || !cfg.firstPayDate) return dates;
@@ -119,7 +130,8 @@ function getPaycheckDatesForYear(year) {
         dates.push(`${yyyy}-${mm}-${dd}`);
         current.setUTCDate(current.getUTCDate() + 14);
     }
-    
+
+    _paycheckDatesCache[year] = dates;
     return dates;
 }
 
@@ -226,6 +238,7 @@ function getWeeksForMonth(year, monthShort) {
 // Helper to get personal checking register transactions for a period, injecting dynamic paychecks and filtering static ones
 function getPersonalTransactionsForPeriod(year, monthShort) {
     const key = `${year}-${monthShort}`;
+    if (_personalTxPeriodCache[key]) return _personalTxPeriodCache[key];
     const rawList = state.personalCalendar[key] || [];
     
     // 1. Filter out static "Payday" transactions (where description === 'Payday' and it does not have a valid id)
@@ -297,7 +310,8 @@ function getPersonalTransactionsForPeriod(year, monthShort) {
             });
         }
     });
-    
+
+    _personalTxPeriodCache[key] = filteredList;
     return filteredList;
 }
 
@@ -431,10 +445,54 @@ function loadDatabase() {
     }
 }
 
+// The actual localStorage write is debounced (cache invalidation below still happens synchronously
+// on every call, so nothing else observes stale data). Two reasons: (1) the background month prewarm
+// can call saveDatabase() up to ~30 times in a burst — one .setItem() per month materialized — and
+// each one serializes the *entire* app state, which is wasted work when only the trailing state
+// actually needs to land on disk; (2) mobile browsers (especially Safari in a third-party iframe, e.g.
+// Google Sites' embed) often have much smaller/stricter storage quotas and can throw or stall on
+// frequent large writes — collapsing ~30 writes into 1 meaningfully reduces how often that's hit.
+// flushPendingSave() is called on beforeunload so a page close can't drop the last edit.
+let _pendingSaveTimer = null;
+function flushPendingSave() {
+    if (_pendingSaveTimer === null) return;
+    clearTimeout(_pendingSaveTimer);
+    _pendingSaveTimer = null;
+    try {
+        localStorage.setItem(CONFIG.storageKey, JSON.stringify(state));
+    } catch (e) {
+        // Quota exceeded or storage blocked (common in mobile/embedded-iframe contexts) — the app
+        // should keep running on its in-memory state rather than crash whatever caller triggered
+        // this save, which previously could leave the busy overlay stuck forever with no error shown.
+        console.warn('Failed to persist to localStorage (continuing without saving):', e);
+    }
+}
+window.addEventListener('beforeunload', flushPendingSave);
+
 function saveDatabase() {
-    localStorage.setItem(CONFIG.storageKey, JSON.stringify(state));
+    clearTimeout(_pendingSaveTimer);
+    _pendingSaveTimer = setTimeout(flushPendingSave, 250);
     _adjustedTransferCache = {};
     _deliveryEarningsIndex = null;
+    _cardBalanceEstimatesCache = {};
+    _paycheckDatesCache = {};
+    _personalTxPeriodCache = {};
+    _transferForJasonCache = {};
+    _transferForAsiaCache = {};
+    _personalRunningBalanceCache = {};
+    _jointRunningBalanceCache = {};
+    _sortedPersonalCalendarKeysCache = null;
+    _personalMonthFullContributionCache = { true: {}, false: {} };
+    _personalMonthStartCheckpointCache = { true: {}, false: {} };
+    _jointRegisterSortedCache = null;
+    _jointMonthFullContributionCache = {};
+    _jointDynamicCheckpointCache = {};
+    // Deliberately NOT bumping _prewarmGeneration here. A prewarm step can itself trigger a real
+    // saveDatabase() (e.g. ensureAutomaticCardPaymentForMonth creating a loan's first payment when a
+    // never-before-seen month is initialized) — bumping the generation from inside saveDatabase() used
+    // to make the chain invalidate itself on its own very first internal save and never resume. Actual
+    // user edits still supersede any in-flight chain correctly: they're followed by renderApp(), which
+    // calls queuePrewarmForCurrentMonth() and increments the generation there.
 }
 
 // Keep the card summary balance in sync with its calendar ledger.
@@ -1743,11 +1801,25 @@ function setupEventListeners() {
                     if (!validationError) {
                         state = imported;
                         saveDatabase();
+
+                        // Re-sync the same UI bits the "Reset to Excel Data" flow does after a full
+                        // state replacement, instead of location.reload(). A reload works fine as a
+                        // top-level page, but when this app is embedded in an iframe (e.g. a Google
+                        // Sites/Drive embed), the sandboxed frame can block the reload's navigation
+                        // outright and leave the whole embed blank with no error — renderApp() alone
+                        // already picks up every state-driven value, so a hard reload was never
+                        // actually necessary for correctness, just a convenient reset-everything shortcut.
+                        document.getElementById('year-select').value = state.currentYear;
+                        document.getElementById('month-select').value = state.currentMonth;
+                        updateSegmentedControlsUI();
+                        const isJoint = state.dashboardType === 'joint';
+                        document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
+                        document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
+                        document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
+                        updateQuickAddFormFields();
+                        updateTabTitles();
                         renderApp();
-                        logSuccess("Database successfully imported! Reloading page to refresh layouts...");
-                        setTimeout(() => {
-                            location.reload();
-                        }, 500);
+                        logSuccess("Database successfully imported!");
                     } else {
                         alert(`Invalid backup file: ${validationError}\n\nYour current data was not changed.`);
                     }
@@ -3824,13 +3896,107 @@ function renderApp() {
     if (overlay) overlay.classList.remove('hidden');
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-            renderAppImmediate();
-            if (overlay) overlay.classList.add('hidden');
+            // If renderAppImmediate() throws partway through, the overlay must still come down —
+            // otherwise a single error leaves the whole app looking permanently stuck "loading" with no
+            // visible indication anything went wrong, instead of surfacing the broken UI underneath.
+            try {
+                renderAppImmediate();
+            } finally {
+                if (overlay) overlay.classList.add('hidden');
+            }
+            queuePrewarmForCurrentMonth();
         });
     });
 }
 
+// Warms the balance/transfer caches for the months around the current one (both forward and back) in
+// the background so navigating either direction feels instant instead of paying the first-visit cost
+// at click time. Uses a plain setTimeout chain
+// rather than requestIdleCallback — idle callbacks get starved/throttled in backgrounded or
+// non-foreground tabs (common when the app is embedded, e.g. in a Google Sites iframe) and can stall
+// indefinitely, whereas setTimeout keeps making steady, predictable progress.
+//
+// renderApp() and saveDatabase() both fire many times in quick succession during page init and during
+// any multi-step edit, and each one invalidates the currently-visible month's caches. Restarting the
+// prewarm chain immediately on every one of those calls means it never gets past the first step or two
+// before being reset again. queuePrewarmForCurrentMonth() debounces that: only the render that settles
+// (no further renderApp() for _PREWARM_DEBOUNCE_MS) actually kicks off a prewarm chain. The
+// _prewarmGeneration check inside the chain is a second line of defense for the rare case a real edit
+// lands mid-chain.
+let _prewarmGeneration = 0;
+let _prewarmDebounceTimer = null;
+const _PREWARM_DEBOUNCE_MS = 300;
+const _PREWARM_STEP_MS = 40;
+const _requestIdle = (cb) => setTimeout(cb, _PREWARM_STEP_MS);
+
+function queuePrewarmForCurrentMonth() {
+    clearTimeout(_prewarmDebounceTimer);
+    _prewarmDebounceTimer = setTimeout(() => {
+        scheduleMonthPrewarm(state.currentYear, state.currentMonth);
+    }, _PREWARM_DEBOUNCE_MS);
+}
+
+// Offsets to prewarm around the current month, nearest-first and alternating direction (so a single
+// step back or forward is warmed almost immediately either way), then continuing forward out to
+// _PREWARM_FORWARD_MONTHS once the near-backward range is exhausted, since forward is the far more
+// common browsing direction once you land somewhere new.
+const _PREWARM_FORWARD_MONTHS = 24;
+const _PREWARM_BACKWARD_MONTHS = 6;
+function _buildPrewarmOffsets() {
+    const offsets = [];
+    const both = Math.min(_PREWARM_FORWARD_MONTHS, _PREWARM_BACKWARD_MONTHS);
+    for (let i = 1; i <= both; i++) { offsets.push(i); offsets.push(-i); }
+    for (let i = both + 1; i <= _PREWARM_FORWARD_MONTHS; i++) offsets.push(i);
+    for (let i = both + 1; i <= _PREWARM_BACKWARD_MONTHS; i++) offsets.push(-i);
+    return offsets;
+}
+const _PREWARM_OFFSETS = _buildPrewarmOffsets();
+
+function scheduleMonthPrewarm(year, monthShort) {
+    const myGeneration = ++_prewarmGeneration;
+    let stepIndex = 0;
+
+    function step() {
+        if (myGeneration !== _prewarmGeneration) return; // superseded by a newer navigation/edit
+        if (stepIndex >= _PREWARM_OFFSETS.length) return;
+        const offset = _PREWARM_OFFSETS[stepIndex];
+        stepIndex++;
+
+        const startIdx = MONTH_ORDER.indexOf(monthShort);
+        const globalIdx = startIdx + offset;
+        const y = year + Math.floor(globalIdx / 12);
+        const mStr = MONTH_ORDER[((globalIdx % 12) + 12) % 12];
+        const mm = String(MONTH_ORDER.indexOf(mStr) + 1).padStart(2, '0');
+
+        try {
+            getSimulatedTransferAdjustmentsForMonth(y, mStr, buildCalendarGridDates(y, mStr));
+            getJointRunningBalanceAtDate(`${y}-${mm}-01`);
+            getJointRunningBalanceAtDate(`${y}-${mm}-15`);
+        } catch (e) { /* never let a background prewarm surface an error to the user */ }
+
+        _requestIdle(step);
+    }
+
+    _requestIdle(step);
+}
+
+// Calendar grids are unreadable at phone width, so on mobile we force every calendar/list toggle
+// (personal/joint dashboard, credit cards, savings) to list mode. Matches the CSS breakpoint that
+// hides the calendar containers and the "Calendar" toggle buttons (see index.css @media 900px), and
+// reuses the same isMobileViewport() the sidebar/resize logic already defines.
+function enforceMobileListView() {
+    if (!isMobileViewport()) return;
+    state.viewMode = 'list';
+    state.ccViewMode = 'list';
+    state.savingsViewMode = 'list';
+    // The metrics-collapsed state persists from whatever it was last set to (often on desktop), and
+    // .metrics-collapsed fully hides the summary cards — on a phone that reads as "metrics missing"
+    // rather than "collapsed," so always show them by default on mobile.
+    state.metricsCollapsed = false;
+}
+
 function renderAppImmediate() {
+    enforceMobileListView();
     populateCheckingAutocomplete();
     populateCCDropdowns();
     renderSummaryCards();
@@ -4402,17 +4568,20 @@ function renderDeliveryYearSummary() {
 }
 
 function getCalculatedTransferForJason(year, monthShort, cycle) {
+    const cacheKey = `${year}-${monthShort}-${cycle}`;
+    if (Object.prototype.hasOwnProperty.call(_transferForJasonCache, cacheKey)) return _transferForJasonCache[cacheKey];
+
     const key = `${year}-${monthShort}`;
     const mIdx = MONTH_ORDER.indexOf(monthShort);
     const mm = String(mIdx + 1).padStart(2, '0');
     const dd = cycle === '1st' ? '01' : '15';
     const cycleDate = `${year}-${mm}-${dd}`;
     const skippedTransfers = state.skippedTransfers || [];
-    if (skippedTransfers.includes(cycleDate)) return 0;
+    if (skippedTransfers.includes(cycleDate)) { _transferForJasonCache[cacheKey] = 0; return 0; }
 
     ensureYearMonthInitialized(year, monthShort);
     const mBills = state.monthlyBills[key];
-    if (!mBills) return 0;
+    if (!mBills) { _transferForJasonCache[cacheKey] = 0; return 0; }
 
     autopopulateBillsForMonth(year, monthShort);
     applyAllocationTemplatesForMonth(year, monthShort);
@@ -4435,21 +4604,26 @@ function getCalculatedTransferForJason(year, monthShort, cycle) {
     // split half/half across both cycles, mirroring how 'both'-cycle bills are already split.
     const jasonAllocations = getAllocationCycleTotal(mBills, cycleKey, 'jason');
     const jointShare = Math.round(jointBudget * 50 + 1e-8) / 100;
-    return Math.round((jasonAllocations + jointShare) * 100 + 1e-8) / 100;
+    const jasonResult = Math.round((jasonAllocations + jointShare) * 100 + 1e-8) / 100;
+    _transferForJasonCache[cacheKey] = jasonResult;
+    return jasonResult;
 }
 
 function getCalculatedTransferForAsia(year, monthShort, cycle) {
+    const cacheKey = `${year}-${monthShort}-${cycle}`;
+    if (Object.prototype.hasOwnProperty.call(_transferForAsiaCache, cacheKey)) return _transferForAsiaCache[cacheKey];
+
     const key = `${year}-${monthShort}`;
     const mIdx = MONTH_ORDER.indexOf(monthShort);
     const mm = String(mIdx + 1).padStart(2, '0');
     const dd = cycle === '1st' ? '01' : '15';
     const cycleDate = `${year}-${mm}-${dd}`;
     const skippedTransfers = state.skippedTransfers || [];
-    if (skippedTransfers.includes(cycleDate)) return 0;
+    if (skippedTransfers.includes(cycleDate)) { _transferForAsiaCache[cacheKey] = 0; return 0; }
 
     ensureYearMonthInitialized(year, monthShort);
     const mBills = state.monthlyBills[key];
-    if (!mBills) return 0;
+    if (!mBills) { _transferForAsiaCache[cacheKey] = 0; return 0; }
 
     autopopulateBillsForMonth(year, monthShort);
     applyAllocationTemplatesForMonth(year, monthShort);
@@ -4470,93 +4644,221 @@ function getCalculatedTransferForAsia(year, monthShort, cycle) {
     // Preserve sign: negative "offset" allocations are meant to net against other allocations, not add to them.
     const asiaAllocations = getAllocationCycleTotal(mBills, cycleKey, 'asia');
     const jointShare = Math.round(jointBudget * 50 + 1e-8) / 100;
-    return Math.round((asiaAllocations + jointShare) * 100 + 1e-8) / 100;
+    const asiaResult = Math.round((asiaAllocations + jointShare) * 100 + 1e-8) / 100;
+    _transferForAsiaCache[cacheKey] = asiaResult;
+    return asiaResult;
 }
 
-function getPersonalRunningBalanceAtDate(targetDateStr, includeDeliveryEarnings = true) {
-    let balance = 2500;
-    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+// Caches for getPersonalRunningBalanceAtDate/getJointRunningBalanceAtDate, keyed by the target date
+// (plus the includeDeliveryEarnings flag for the personal one). Cleared in saveDatabase().
+let _personalRunningBalanceCache = {};
+let _jointRunningBalanceCache = {};
 
-    const sortedKeys = Object.keys(state.personalCalendar).sort((a, b) => {
+// Both balance functions used to rescan every month of history from the beginning on every call, so
+// a never-before-requested date paid the full O(history) cost even after the per-month building
+// blocks were cached. These now build on month-boundary "checkpoints": the balance as of the start of
+// month X is the checkpoint for the month before X plus that month's full (unconditional) contribution
+// — computed once per month and reused via recursion, so a new date only pays for months that have
+// never been checkpointed before instead of the whole history every time. Cleared in saveDatabase().
+let _sortedPersonalCalendarKeysCache = null;
+let _personalMonthFullContributionCache = { true: {}, false: {} };
+let _personalMonthStartCheckpointCache = { true: {}, false: {} };
+let _jointRegisterSortedCache = null;
+let _jointMonthFullContributionCache = {};
+let _jointDynamicCheckpointCache = {};
+
+function getSortedPersonalCalendarKeys() {
+    if (_sortedPersonalCalendarKeysCache) return _sortedPersonalCalendarKeysCache;
+    _sortedPersonalCalendarKeysCache = Object.keys(state.personalCalendar).sort((a, b) => {
         const [yA, mA] = a.split('-');
         const [yB, mB] = b.split('-');
         if (parseInt(yA) !== parseInt(yB)) return parseInt(yA) - parseInt(yB);
         return MONTH_ORDER.indexOf(mA) - MONTH_ORDER.indexOf(mB);
     });
+    return _sortedPersonalCalendarKeysCache;
+}
 
-    sortedKeys.forEach(key => {
-        const [yStr, mStr] = key.split('-');
-        const y = parseInt(yStr);
-        const mIdx = MONTH_ORDER.indexOf(mStr);
+// Unconditional (full-month) contribution to the personal balance from a single "year-month" key:
+// both cycle transfers plus every transaction in the month, with no date cutoff. Valid to sum for any
+// month that lies entirely before the target date.
+function getPersonalMonthFullContribution(key, includeDeliveryEarnings) {
+    const cache = _personalMonthFullContributionCache[includeDeliveryEarnings];
+    if (Object.prototype.hasOwnProperty.call(cache, key)) return cache[key];
 
-        // 1st of month cycle transfer
-        const date1stStr = `${yStr}-${String(mIdx + 1).padStart(2, '0')}-01`;
+    const [yStr, mStr] = key.split('-');
+    const y = parseInt(yStr);
+    let contribution = -getCalculatedTransferForJason(y, mStr, '1st') - getCalculatedTransferForJason(y, mStr, '15th');
+
+    getPersonalTransactionsForPeriod(y, mStr).forEach(tx => {
+        if (tx.description === 'Xfer to Joint' && !tx.transferId) return;
+        if (!includeDeliveryEarnings && tx.id.startsWith('dynamic-delivery-')) return;
+        contribution += tx.amount;
+    });
+
+    cache[key] = contribution;
+    return contribution;
+}
+
+// Balance as of the very start of the given month (i.e. before any of that month's own transactions),
+// equal to the opening balance plus every full month-contribution strictly before it.
+function getPersonalBalanceCheckpointBeforeMonth(year, monthShort, includeDeliveryEarnings) {
+    const key = `${year}-${monthShort}`;
+    const cache = _personalMonthStartCheckpointCache[includeDeliveryEarnings];
+    if (Object.prototype.hasOwnProperty.call(cache, key)) return cache[key];
+
+    // Flat forward walk, not recursion, and the running total lives in a local variable rather than
+    // being re-derived through the cache at each step. Jumping straight to a month years in the future
+    // materializes every never-before-seen month along the way, and each one can trigger a real
+    // saveDatabase() (e.g. an installment loan's first automatic payment) — which clears this cache.
+    // A recursive version paid for that by re-deriving every earlier month's checkpoint from scratch on
+    // every single wipe (O(months²) work, synchronously — the actual cause of the freeze). Accumulating
+    // locally means a wipe only costs a cheap re-lookup of that one month's own contribution, not a
+    // redo of everything before it.
+    const targetOrder = year * 12 + MONTH_ORDER.indexOf(monthShort);
+    const priorKeys = getSortedPersonalCalendarKeys().filter(k => {
+        const [yS, mS] = k.split('-');
+        return parseInt(yS) * 12 + MONTH_ORDER.indexOf(mS) < targetOrder;
+    });
+
+    let balance = 2500;
+    priorKeys.forEach(k => {
+        balance += getPersonalMonthFullContribution(k, includeDeliveryEarnings);
+    });
+
+    _personalMonthStartCheckpointCache[includeDeliveryEarnings][key] = balance;
+    return balance;
+}
+
+function getPersonalRunningBalanceAtDate(targetDateStr, includeDeliveryEarnings = true) {
+    const cacheKey = `${targetDateStr}-${includeDeliveryEarnings}`;
+    if (Object.prototype.hasOwnProperty.call(_personalRunningBalanceCache, cacheKey)) return _personalRunningBalanceCache[cacheKey];
+
+    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+    const targetDateObj = new Date(targetDateStr + 'T00:00:00');
+    const y = targetDateObj.getFullYear();
+    const mStr = MONTH_ORDER[targetDateObj.getMonth()];
+    const mIdx = targetDateObj.getMonth();
+
+    let balance = getPersonalBalanceCheckpointBeforeMonth(y, mStr, includeDeliveryEarnings);
+
+    // Partial contribution from the target month itself — only the transfers/transactions that fall
+    // strictly before targetDateStr, mirroring the original day-level cutoff behavior.
+    const key = `${y}-${mStr}`;
+    if (state.personalCalendar[key]) {
+        const date1stStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-01`;
         if (new Date(date1stStr + 'T00:00:00').getTime() < targetTime) {
-            const amt = getCalculatedTransferForJason(y, mStr, '1st');
-            balance -= amt; // Negative on personal (outflow)
+            balance -= getCalculatedTransferForJason(y, mStr, '1st');
         }
-
-        // 15th of month cycle transfer
-        const date15thStr = `${yStr}-${String(mIdx + 1).padStart(2, '0')}-15`;
+        const date15thStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-15`;
         if (new Date(date15thStr + 'T00:00:00').getTime() < targetTime) {
-            const amt = getCalculatedTransferForJason(y, mStr, '15th');
-            balance -= amt; // Negative on personal (outflow)
+            balance -= getCalculatedTransferForJason(y, mStr, '15th');
         }
-
-        const txs = getPersonalTransactionsForPeriod(y, mStr);
-        txs.forEach(tx => {
-            // Filter out any static Xfer to Joint that does not have transferId
+        getPersonalTransactionsForPeriod(y, mStr).forEach(tx => {
             if (tx.description === 'Xfer to Joint' && !tx.transferId) return;
             if (!includeDeliveryEarnings && tx.id.startsWith('dynamic-delivery-')) return;
-
             if (new Date(tx.date + 'T00:00:00').getTime() < targetTime) {
                 balance += tx.amount;
             }
         });
-    });
+    }
 
+    _personalRunningBalanceCache[cacheKey] = balance;
     return balance;
 }
 
-function getJointRunningBalanceAtDate(targetDateStr) {
-    let balance = 0;
-    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
-    const jan1_2027 = new Date('2027-01-01T00:00:00').getTime();
-
-    if (targetTime >= jan1_2027) {
-        balance = 1939.42;
-    }
-
-    // Filter out static contributions that don't have transferId, and user-deleted bill occurrences
+// Sorted joint register with a running prefix sum, so "sum of all entries before date X" is a binary
+// search + array lookup instead of a full re-filter/re-sort/re-scan of the register on every call.
+function getSortedJointRegisterWithPrefix() {
+    if (_jointRegisterSortedCache) return _jointRegisterSortedCache;
     const register = [...state.jointRegister]
         .filter(tx => !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId))
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    register.forEach(tx => {
-        if (tx.type !== 'balance' && new Date(tx.date + 'T00:00:00').getTime() < targetTime) {
-            balance += tx.amount;
-        }
+    const times = new Array(register.length);
+    const prefix = new Array(register.length + 1);
+    prefix[0] = 0;
+    register.forEach((tx, i) => {
+        times[i] = new Date(tx.date + 'T00:00:00').getTime();
+        prefix[i + 1] = prefix[i] + (tx.type !== 'balance' ? tx.amount : 0);
     });
 
-    // Add dynamic contributions up to targetTime
-    const startYear = 2027; // Start of split tracking
-    const endYear = new Date(targetDateStr + 'T00:00:00').getFullYear();
+    _jointRegisterSortedCache = { times, prefix };
+    return _jointRegisterSortedCache;
+}
 
-    for (let y = startYear; y <= endYear; y++) {
-        MONTH_ORDER.forEach((mStr, mIdx) => {
-            const date1stStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-01`;
-            if (new Date(date1stStr + 'T00:00:00').getTime() < targetTime) {
-                balance += getCalculatedTransferForJason(y, mStr, '1st');
-                balance += getCalculatedTransferForAsia(y, mStr, '1st');
-            }
-            const date15thStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-15`;
-            if (new Date(date15thStr + 'T00:00:00').getTime() < targetTime) {
-                balance += getCalculatedTransferForJason(y, mStr, '15th');
-                balance += getCalculatedTransferForAsia(y, mStr, '15th');
-            }
-        });
+// Full (unconditional) 1st+15th Jason+Asia transfer contribution for a single joint month.
+function getJointMonthFullContribution(year, monthShort) {
+    const key = `${year}-${monthShort}`;
+    if (Object.prototype.hasOwnProperty.call(_jointMonthFullContributionCache, key)) return _jointMonthFullContributionCache[key];
+    const contribution = getCalculatedTransferForJason(year, monthShort, '1st') + getCalculatedTransferForAsia(year, monthShort, '1st')
+        + getCalculatedTransferForJason(year, monthShort, '15th') + getCalculatedTransferForAsia(year, monthShort, '15th');
+    _jointMonthFullContributionCache[key] = contribution;
+    return contribution;
+}
+
+// Sum of every joint month's full dynamic-transfer contribution strictly before the given month,
+// starting from the 2027 split-tracking start year. Flat forward walk with a local accumulator (see
+// getPersonalBalanceCheckpointBeforeMonth above for why: a recursive version re-derives every earlier
+// month from scratch each time a materialized-month side effect wipes this cache mid-walk).
+function getJointDynamicCheckpointBeforeMonth(year, monthShort) {
+    const key = `${year}-${monthShort}`;
+    if (Object.prototype.hasOwnProperty.call(_jointDynamicCheckpointCache, key)) return _jointDynamicCheckpointCache[key];
+
+    const startYear = 2027;
+    const targetOrder = year * 12 + MONTH_ORDER.indexOf(monthShort);
+    const startOrder = startYear * 12;
+
+    let balance = 0;
+    for (let order = startOrder; order < targetOrder; order++) {
+        const y = Math.floor(order / 12);
+        const mStr = MONTH_ORDER[((order % 12) + 12) % 12];
+        balance += getJointMonthFullContribution(y, mStr);
     }
 
+    _jointDynamicCheckpointCache[key] = balance;
+    return balance;
+}
+
+function getJointRunningBalanceAtDate(targetDateStr) {
+    if (Object.prototype.hasOwnProperty.call(_jointRunningBalanceCache, targetDateStr)) return _jointRunningBalanceCache[targetDateStr];
+
+    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+    const jan1_2027 = new Date('2027-01-01T00:00:00').getTime();
+    let balance = targetTime >= jan1_2027 ? 1939.42 : 0;
+
+    // Binary search for how many sorted register entries fall strictly before targetTime, then look up
+    // their precomputed prefix sum instead of re-scanning the whole register.
+    const { times, prefix } = getSortedJointRegisterWithPrefix();
+    let lo = 0, hi = times.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] < targetTime) lo = mid + 1; else hi = mid;
+    }
+    balance += prefix[lo];
+
+    // Add dynamic contributions up to targetTime (2027+ only)
+    const startYear = 2027;
+    const targetDateObj = new Date(targetDateStr + 'T00:00:00');
+    const ty = targetDateObj.getFullYear();
+    const tmStr = MONTH_ORDER[targetDateObj.getMonth()];
+    const tmIdx = targetDateObj.getMonth();
+
+    if (ty >= startYear) {
+        balance += getJointDynamicCheckpointBeforeMonth(ty, tmStr);
+
+        const date1stStr = `${ty}-${String(tmIdx + 1).padStart(2, '0')}-01`;
+        if (new Date(date1stStr + 'T00:00:00').getTime() < targetTime) {
+            balance += getCalculatedTransferForJason(ty, tmStr, '1st');
+            balance += getCalculatedTransferForAsia(ty, tmStr, '1st');
+        }
+        const date15thStr = `${ty}-${String(tmIdx + 1).padStart(2, '0')}-15`;
+        if (new Date(date15thStr + 'T00:00:00').getTime() < targetTime) {
+            balance += getCalculatedTransferForJason(ty, tmStr, '15th');
+            balance += getCalculatedTransferForAsia(ty, tmStr, '15th');
+        }
+    }
+
+    _jointRunningBalanceCache[targetDateStr] = balance;
     return balance;
 }
 
@@ -9417,8 +9719,8 @@ function autopopulateBillsForMonth(year, month) {
         mBills[cycleKey].bills = (mBills[cycleKey].bills || []).map(bill => recalculateBillBudgetForPeriod(bill, year, month, cycleKey));
         mBills[cycleKey].bills.forEach(bill => syncBillLedgerEntry(bill, year, month));
     });
-    syncMortgageLoansToAllMonths();
-    syncBillTrackerBillsToAllMonths();
+    syncMortgageLoansToAllMonthsIfChanged();
+    syncBillTrackerBillsToAllMonthsIfChanged();
     // Installment loans always auto-pay (no dashboard to visit to trigger it the way credit cards
     // do via renderCardDashboard), so generate their payment for this month directly here.
     state.loans.filter(l => l.type === 'loan' && !l.isMortgage).forEach(loan => {
@@ -9450,7 +9752,14 @@ function calculateCardLedgerBalance(cardId, throughDate = formatLocalDate(new Da
     return balance;
 }
 
+let _cardBalanceEstimatesCache = {};
+
+// Re-simulates a card's entire transaction history day-by-day (interest, promos,
+// payment plans), so it's cached per card and only recomputed when saveDatabase()
+// clears the cache — otherwise every keystroke in the list filters re-ran it.
 function computeAllEstimatedBalancesForCard(cardId) {
+    if (_cardBalanceEstimatesCache[cardId]) return _cardBalanceEstimatesCache[cardId];
+
     const card = state.loans.find(c => c.id === cardId);
     if (!card) return { estimates: {}, activePlans: [] };
 
@@ -9558,12 +9867,44 @@ function computeAllEstimatedBalancesForCard(cardId) {
         currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    return { estimates, activePlans };
+    const result = { estimates, activePlans };
+    _cardBalanceEstimatesCache[cardId] = result;
+    return result;
+}
+
+// syncMortgageLoansToAllMonths()/syncBillTrackerBillsToAllMonths() below are O(every month that
+// exists) each — necessary when a mortgage loan or bill-tracker setting is actually added/edited, but
+// autopopulateBillsForMonth() calls both on every single invocation, and it in turn gets called from
+// getCalculatedTransferForJason()/getCalculatedTransferForAsia() on every cache miss. Materializing
+// months far in the future (e.g. jumping straight to a month years out) triggers hundreds of those
+// calls, each re-scanning every already-existing month — an O(months²) blowup that's the real cause of
+// the multi-second freeze on a large jump. These "IfChanged" wrappers skip the expensive full re-sync
+// unless the mortgage loans / bill-tracker settings actually changed since the last sync (compared via
+// a cheap JSON signature), so the hot path only pays for it once until something real changes.
+// Signature includes the month COUNT too, not just the settings — both sync functions iterate every
+// key in state.monthlyBills, so a brand-new month (materialized mid-walk by ensureYearMonthInitialized)
+// needs a fresh sync even when the settings themselves haven't changed, or that new month would never
+// get its mortgage/bill-tracker-driven bills populated at all.
+let _lastMortgageSyncSignature = null;
+function syncMortgageLoansToAllMonthsIfChanged() {
+    const mortgageLoans = state.loans.filter(l => l.type === 'loan' && l.isMortgage);
+    const signature = JSON.stringify(mortgageLoans) + '|' + Object.keys(state.monthlyBills || {}).length;
+    if (signature === _lastMortgageSyncSignature) return;
+    _lastMortgageSyncSignature = signature;
+    syncMortgageLoansToAllMonths();
+}
+
+let _lastBillTrackerSyncSignature = null;
+function syncBillTrackerBillsToAllMonthsIfChanged() {
+    const signature = JSON.stringify(state.billTrackerSettings || []) + '|' + Object.keys(state.monthlyBills || {}).length;
+    if (signature === _lastBillTrackerSyncSignature) return;
+    _lastBillTrackerSyncSignature = signature;
+    syncBillTrackerBillsToAllMonths();
 }
 
 function syncMortgageLoansToAllMonths() {
     const mortgageLoans = state.loans.filter(l => l.type === 'loan' && l.isMortgage);
-    
+
     Object.keys(state.monthlyBills || {}).forEach(key => {
         const mBills = state.monthlyBills[key];
         if (!mBills) return;
