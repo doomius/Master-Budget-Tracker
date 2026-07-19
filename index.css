@@ -1537,9 +1537,15 @@ label {
     .app-sidebar {
         transform: translateX(-100%);
         transition: transform 0.25s ease;
-        z-index: 40;
+        /* Several in-page sticky headers (.main-sticky-dashboard, .cc-sticky-dashboard, etc.) use
+           z-index values up to 50, which sat above the old z-index: 40 sidebar and let page content
+           show through on top of the open mobile menu. Sidebar/backdrop need to beat every such
+           sticky element, so this is deliberately far above the sticky-header z-index range. */
+        z-index: 500;
         width: min(80vw, 300px);
         box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
 
     .app-sidebar.mobile-open {
@@ -1552,7 +1558,7 @@ label {
         inset: 0;
         background: rgba(0, 0, 0, 0.6);
         backdrop-filter: blur(2px);
-        z-index: 35;
+        z-index: 490;
         opacity: 0;
         pointer-events: none;
         transition: opacity 0.25s ease;
@@ -1567,6 +1573,8 @@ label {
         margin-left: 0;
         padding: 1.5rem;
         padding-top: 4.5rem;
+        max-width: 100vw;
+        overflow-x: hidden;
     }
     .split-columns {
         flex-direction: column;
@@ -1577,6 +1585,96 @@ label {
     }
     .split-separator {
         transform: rotate(90deg);
+    }
+
+    /* The header's 3-column grid (controls | title | action buttons) doesn't fit phone width and was
+       forcing app-main wider than the viewport, pushing "Hide Metrics"/"Expand View" off-screen
+       entirely. Stack it into one centered column instead, with each row free to wrap. */
+    .app-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        text-align: center;
+    }
+    .header-controls {
+        flex-wrap: wrap !important;
+        justify-content: center;
+        order: 2;
+    }
+    .header-title {
+        order: 1;
+        width: 100%;
+    }
+    .month-select-wrapper {
+        flex-wrap: wrap !important;
+    }
+    .header-right {
+        order: 3;
+        width: 100%;
+        justify-content: center;
+        margin-left: 0 !important;
+        flex-wrap: wrap;
+    }
+    /* "Expand View" toggles a full-screen desktop layout that doesn't apply on a phone-sized
+       viewport — hiding it removes a redundant, hard-to-reach button rather than leaving it dead. */
+    #btn-toggle-layout-maximize {
+        display: none !important; /* beats the element's inline style="display: inline-flex" */
+    }
+
+    /* Trim the checking ledger and credit card ledger tables down to their most-used columns on
+       mobile — Day/Type/Merchant/Owner/Trip/etc. are still available on desktop, but crowd out the
+       columns people actually need at a glance on a phone (date, description, amount, balance).
+       The table itself still scrolls horizontally (.table-responsive) if more detail is needed. */
+    #list-view-table-container .data-table th:nth-child(2),
+    #list-view-table-container .data-table td:nth-child(2),
+    #list-view-table-container .data-table th:nth-child(4),
+    #list-view-table-container .data-table td:nth-child(4) {
+        display: none;
+    }
+    #cc-list-view-table-container .data-table th:nth-child(2),
+    #cc-list-view-table-container .data-table td:nth-child(2),
+    #cc-list-view-table-container .data-table th:nth-child(4),
+    #cc-list-view-table-container .data-table td:nth-child(4),
+    #cc-list-view-table-container .data-table th:nth-child(5),
+    #cc-list-view-table-container .data-table td:nth-child(5),
+    #cc-list-view-table-container .data-table th:nth-child(7),
+    #cc-list-view-table-container .data-table td:nth-child(7) {
+        display: none;
+    }
+    /* The recurring/manual/source badges wrap onto their own line and eat most of the remaining
+       width, pushing Amount off-screen even after trimming columns — description text alone still
+       conveys what the row is. Tighter padding/font recovers a bit more room too. */
+    #list-view-table-container .cc-recurring-badge,
+    #list-view-table-container .cc-transfer-badge,
+    #list-view-table-container .cc-source-badge,
+    #cc-list-view-table-container .cc-recurring-badge,
+    #cc-list-view-table-container .cc-transfer-badge,
+    #cc-list-view-table-container .cc-source-badge {
+        display: none;
+    }
+    #list-view-table-container .data-table th,
+    #list-view-table-container .data-table td,
+    #cc-list-view-table-container .data-table th,
+    #cc-list-view-table-container .data-table td {
+        padding: 0.5rem 0.6rem;
+        font-size: 0.82rem;
+    }
+
+    /* Calendar grids are unreadable at phone width — app.js's enforceMobileListView() forces
+       state.viewMode/ccViewMode/savingsViewMode to 'list' on every render below this breakpoint, so
+       the calendar containers are already hidden via their normal 'hidden' class toggling. These rules
+       are a CSS-level backstop (covers the instant before the first render, and hides the now-useless
+       "Calendar" toggle buttons themselves) rather than the primary mechanism. */
+    #btn-view-calendar,
+    #btn-cc-view-calendar,
+    [data-savings-mode="calendar"] {
+        display: none;
+    }
+    #dashboard-calendar-view,
+    #cc-calendar-view-container,
+    #savings-calendar-layout {
+        display: none !important;
     }
 }
 
