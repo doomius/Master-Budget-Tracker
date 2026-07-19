@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15008,22 +15007,34 @@ function setupEventListeners() {
                         // outright and leave the whole embed blank with no error — renderApp() alone
                         // already picks up every state-driven value, so a hard reload was never
                         // actually necessary for correctness, just a convenient reset-everything shortcut.
-                        document.getElementById('year-select').value = state.currentYear;
-                        document.getElementById('month-select').value = state.currentMonth;
-                        updateSegmentedControlsUI();
-                        const isJoint = state.dashboardType === 'joint';
-                        document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
-                        document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
-                        document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
-                        updateQuickAddFormFields();
-                        updateTabTitles();
+                        //
+                        // These are all best-effort cosmetic syncs (dropdown selections, active-button
+                        // highlighting) — wrapped separately so that if any one of them throws on some
+                        // unusual imported state shape, it can't prevent renderApp() from running. Before
+                        // this, an exception here would leave `state` already replaced in memory but the
+                        // DOM still showing the old data, which looks exactly like "the import did
+                        // nothing" with only an easy-to-miss error alert as a clue.
+                        try {
+                            document.getElementById('year-select').value = state.currentYear;
+                            document.getElementById('month-select').value = state.currentMonth;
+                            updateSegmentedControlsUI();
+                            const isJoint = state.dashboardType === 'joint';
+                            document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
+                            document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
+                            document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
+                            updateQuickAddFormFields();
+                            updateTabTitles();
+                        } catch (syncErr) {
+                            console.warn('Non-critical UI sync after import failed (data was still imported):', syncErr);
+                        }
                         renderApp();
                         logSuccess("Database successfully imported!");
                     } else {
                         alert(`Invalid backup file: ${validationError}\n\nYour current data was not changed.`);
                     }
                 } catch (err) {
-                    alert("Error parsing JSON backup file: " + err.message);
+                    console.error('Import failed:', err);
+                    alert("Error importing backup file: " + err.message + "\n\nYour current data was not changed.");
                 }
             };
             reader.readAsText(file);
@@ -25347,22 +25358,3 @@ window.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
