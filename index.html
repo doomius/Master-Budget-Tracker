@@ -2498,10 +2498,6 @@ body.maximized-calendar .day-transaction-item {
             </nav>
 
             <div class="sidebar-footer">
-                <button class="action-btn outline-btn" id="btn-reset-data">Reset to Excel Data</button>
-                <button class="action-btn solid-btn" id="btn-export-data">Backup JSON</button>
-                <button class="action-btn outline-btn" id="btn-trigger-import">Import JSON</button>
-                <input type="file" id="import-file-input" accept=".json" style="display: none;">
                 <div id="build-version-marker" style="text-align:center; font-size:0.7rem; color:var(--text-secondary); opacity:0.5; margin-top:0.5rem;"></div>
             </div>
         </aside>
@@ -3343,7 +3339,35 @@ body.maximized-calendar .day-transaction-item {
                         </form>
 
                         <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
+                            <h4 style="margin-bottom:0.5rem;">Auto Sync</h4>
+                            <p class="muted-text" style="margin-bottom:1rem;">When on, edits push to the Sheet automatically a few seconds after you make them, and the Sheet's latest data pulls in automatically when the app loads. Turn this off to make a batch of local changes (e.g. a JSON import, or manual cleanup) without anything syncing until you're ready — then use Manual Sync below.</p>
+                            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                <input type="checkbox" id="auto-sync-toggle">
+                                <span>Auto-push and auto-pull enabled</span>
+                            </label>
+                        </div>
+
+                        <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
+                            <h4 style="margin-bottom:1rem;">Manual Sync</h4>
+                            <div class="button-row">
+                                <button type="button" class="action-btn outline-btn" id="btn-pull-all">Pull from Google Sheet</button>
+                            </div>
+                        </div>
+
+                        <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
+                            <h4 style="margin-bottom:1rem;">Backup &amp; Restore</h4>
+                            <div class="button-row">
+                                <button type="button" class="action-btn solid-btn" id="btn-export-data">Backup JSON</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-trigger-import">Import JSON</button>
+                                <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                            </div>
+                        </div>
+
+                        <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
                             <h4 style="margin-bottom:1rem;">Section Sync</h4>
+                            <div class="button-row" style="margin-bottom:1rem;">
+                                <button type="button" class="action-btn solid-btn" id="btn-sync-all">Push All</button>
+                            </div>
                             <div class="button-row" id="sync-section-buttons">
                                 <button type="button" class="action-btn outline-btn" id="btn-sync-delivery-earnings">Push Delivery Earnings</button>
                                 <button type="button" class="action-btn outline-btn" id="btn-sync-savings-tracker">Push Savings Tracker</button>
@@ -13801,11 +13825,24 @@ function init() {
     renderApp();
     logSystem(`Application initialized. Switched to ${MONTH_NAMES[state.currentMonth]} ${state.currentYear}.`);
 
+    // Restore the tab the user was on across a "Clear All Local Data" reload (sessionStorage, not
+    // state, since state is exactly what that action just wiped). One-shot: cleared immediately so
+    // an ordinary refresh still lands on the Dashboard as usual.
+    const postReloadTab = sessionStorage.getItem('budgetify_post_reload_tab');
+    if (postReloadTab) {
+        sessionStorage.removeItem('budgetify_post_reload_tab');
+        switchToTab(postReloadTab);
+    }
+
     // Fire-and-forget: don't block the initial (already-rendered) view on a network call. Any
     // section wired up to the Sheet gets refreshed in the background and the view updates again
     // once that lands, so opening the app on a device that's never synced (or is just stale)
-    // ends up showing the latest data without any manual action.
-    pullAllWiredSectionsFromSheet();
+    // ends up showing the latest data without any manual action. Skipped when Auto Sync is turned
+    // off (Sync Settings) — with it off the user wants full manual control over when the Sheet's
+    // data overwrites what's on this device, so use the "Pull from Google Sheet" button instead.
+    if (getAutoSyncEnabled()) {
+        pullAllWiredSectionsFromSheet();
+    }
 }
 
 // Checks the shape of a parsed backup file before it's allowed to replace the live database.
@@ -13897,9 +13934,31 @@ function flushPendingSave() {
 }
 window.addEventListener('beforeunload', flushPendingSave);
 
-function saveDatabase() {
+// Just the debounced localStorage write, no cache invalidation and no auto-push scheduling. Used
+// by the push*ToSheet() functions to persist freshly-assigned syncIds before their network call —
+// that's bookkeeping for a push already in flight, not a user edit, so it must not go through
+// saveDatabase()'s auto-push scheduling below. It used to: every section's push always persists a
+// syncId this way, so with a full saveDatabase() call there, _syncPushDirty got set true on every
+// single push cycle (see saveDatabase()'s scheduling block), which made pushAllWiredSectionsToSheet
+// call itself again immediately after finishing, forever — the first auto-push after an edit would
+// go through, but the endless self-rescheduling loop it kicked off starved out any *real* second
+// edit's own attempt to arm the timer (saveDatabase() saw _syncPushInProgress permanently true).
+function _persistSyncIdsOnly() {
     clearTimeout(_pendingSaveTimer);
     _pendingSaveTimer = setTimeout(flushPendingSave, 250);
+}
+
+// How long to wait after the LAST edit, with no further edits, before auto-pushing. Restarted on
+// every edit, so a burst of rapid changes only results in one push once things go quiet.
+const SYNC_DEBOUNCE_MS = 10000;
+
+// skipAutoSync: true for a full-state replacement (JSON backup import) where the local file is
+// being treated as the source of truth for this device — auto-pushing it would silently overwrite
+// the Sheet (and everyone else syncing from it) with whatever the imported backup happened to
+// contain, before the user has had a chance to review it. The user must explicitly push after
+// checking the import looks right, or use "Push All" once satisfied.
+function saveDatabase(skipAutoSync) {
+    _persistSyncIdsOnly();
     _adjustedTransferCache = {};
     _deliveryEarningsIndex = null;
     _cardBalanceEstimatesCache = {};
@@ -13927,20 +13986,58 @@ function saveDatabase() {
     // individually, piggyback one debounced background push-everything here so any change
     // eventually syncs on its own, no manual "Push ___" click required. Debounced 3s so a burst of
     // rapid edits (e.g. typing) results in one push after things settle, not one per keystroke.
-    // Silent and best-effort: no log spam, and a missing/unreachable Web App URL is expected (not
-    // every session has sync configured) so failures here are swallowed rather than surfaced.
+    // Failures/successes are logged (see pushAllWiredSectionsToSheet) so silence in the log means
+    // sync genuinely hasn't run yet, not that it ran and said nothing.
     // The _syncPushInProgress guard matters: the push functions themselves call saveDatabase()
     // (to persist freshly-assigned syncIds), so without it every auto-push would reschedule
-    // another auto-push from inside itself — an infinite 3-second sync loop.
-    if (getSyncWebAppUrl() && !_syncPushInProgress) {
-        clearTimeout(_pendingSyncPushTimer);
-        _pendingSyncPushTimer = setTimeout(() => {
-            pushAllWiredSectionsToSheet().catch(() => { /* best-effort background sync, not user-facing */ });
-        }, 3000);
+    // another auto-push from inside itself — an infinite 3-second sync loop. But an edit made
+    // *while* a push is already in flight (e.g. the very first auto-push right after the initial
+    // page-load pull, which can take a while on an Apps Script cold start) must not be silently
+    // dropped just because the timer wasn't (re)armed — _syncPushDirty records that a save came in
+    // during the in-flight push so pushAllWiredSectionsToSheet() reschedules itself once it's done.
+    if (getSyncWebAppUrl() && !skipAutoSync && !getAutoSyncEnabled()) {
+        // Auto Sync is off — don't schedule anything, but remember that *something* changed while
+        // it was off. Without this, flipping Auto Sync back on has no way to know whether there's
+        // actually anything worth syncing versus just re-enabling with nothing pending — the toggle
+        // handler uses this flag to decide whether turning it on should queue a sync at all, instead
+        // of always firing one immediately on enable regardless of whether you'd made any edits.
+        _hasUnsyncedChangesWhileAutoSyncOff = true;
+    }
+    if (getSyncWebAppUrl() && getAutoSyncEnabled() && !skipAutoSync) {
+        if (_syncPushInProgress) {
+            // An edit landed while a push (e.g. one triggered by the post-pull saveDatabase() call)
+            // was already running. Without this log line, that edit produces zero visible feedback
+            // until the current push eventually finishes and reschedules itself — from the user's
+            // side it looks exactly like the edit was silently ignored. Only log on the false->true
+            // transition, not on every single edit made during the same busy window, so a burst of
+            // rapid edits doesn't spam the log with one line each.
+            if (!_syncPushDirty) {
+                logSystem('Change queued — will sync once the current sync finishes.');
+            }
+            _syncPushDirty = true;
+        } else {
+            clearTimeout(_pendingSyncPushTimer);
+            _pendingSyncPushTimer = setTimeout(() => {
+                // This fires 10s after the LAST edit (the timer is cleared and restarted on every
+                // edit, so a burst of rapid changes keeps pushing it back and only the quiet period
+                // after the final one counts) — that's the debounce, not a promise about how long
+                // the push itself takes. The push that follows is a real sequence of Sheets API calls
+                // (one per changed section) and can run well past 10s, especially if a section has a
+                // lot of rows to reconcile or the Apps Script backend is slow/rate-limited. Logging
+                // here specifically (not inside pushAllWiredSectionsToSheet() itself, which manual
+                // Push-All/section buttons also call and already log their own "Pushing..." line)
+                // marks the moment auto-sync actually started, so a long gap before the next
+                // success/error line reads as "still working," not "never ran."
+                logSystem('Auto-syncing to Google Sheet...');
+                pushAllWiredSectionsToSheet().catch(() => { /* errors are logged inside; this catch just stops an unhandled rejection */ });
+            }, SYNC_DEBOUNCE_MS);
+        }
     }
 }
 let _pendingSyncPushTimer = null;
 let _syncPushInProgress = false;
+let _syncPushDirty = false;
+let _hasUnsyncedChangesWhileAutoSyncOff = false;
 
 // Keep the card summary balance in sync with its calendar ledger.
 // Calendar charges are stored as negative amounts; payments are positive.
@@ -14469,6 +14566,19 @@ function resetToDefaults() {
         state.billsAndAllocationsCleared20260714 = true;
         state.personalStaticTransactionsCleared20260715 = true;
 
+        // Every other (non-destructive) default in migrateDatabase() — state.listSort,
+        // state.deliveryBudgets, state.seasonalExpenses, etc. — still needs to run here too.
+        // Without this, a freshly-reset or first-run state (this function's only two call sites:
+        // no cached data at all, or a corrupted cache) skips straight past every one of those
+        // defaults, since migrateDatabase() was otherwise only ever called on the *cache-loaded*
+        // path in loadDatabase(). Any render that assumes one of those fields exists — e.g.
+        // renderPersonalList() reading state.listSort.key — then throws "Cannot read properties of
+        // undefined" the moment the user opens it, despite the calendar view rendering fine (it
+        // never touches state.listSort). The one-time migration flags set just above make this call
+        // safe: migrateDatabase() sees them already satisfied and skips the migrations that would
+        // otherwise wipe the data this function just seeded.
+        migrateDatabase();
+
         saveDatabase();
         logSystem("Database reset to original spreadsheet data (perpetual structure initialized).");
     } else {
@@ -14649,6 +14759,17 @@ function setSyncWebAppUrl(url) {
     else localStorage.removeItem('budgetify_sync_webapp_url');
 }
 
+// Deliberately a device-level localStorage setting, not part of `state` — the whole point of this
+// toggle is to survive things that reset `state` (Clear All Local Data, a JSON import) so the user
+// can rely on it staying off while they make a batch of changes they don't want auto-synced yet.
+function getAutoSyncEnabled() {
+    return localStorage.getItem('budgetify_auto_sync_enabled') !== 'false';
+}
+
+function setAutoSyncEnabled(enabled) {
+    localStorage.setItem('budgetify_auto_sync_enabled', enabled ? 'true' : 'false');
+}
+
 function getLastSyncedIds(tab) {
     try {
         return JSON.parse(localStorage.getItem(`budgetify_sync_ids_${tab}`) || '[]');
@@ -14658,7 +14779,13 @@ function getLastSyncedIds(tab) {
 }
 
 function setLastSyncedIds(tab, ids) {
-    localStorage.setItem(`budgetify_sync_ids_${tab}`, JSON.stringify(ids));
+    // Same reasoning as setLastPushedHashes() below: this runs after the Sheet write already
+    // succeeded, so a local storage failure here must not read as "the push failed."
+    try {
+        localStorage.setItem(`budgetify_sync_ids_${tab}`, JSON.stringify(ids));
+    } catch (err) {
+        console.warn(`Could not save the local synced-ids list for ${tab} (${err.message}) — the push itself still succeeded.`);
+    }
 }
 
 // Sheet row ids used to be derived straight from each record's own data (a date, or the app's
@@ -14704,10 +14831,32 @@ function _reserveSyncId(syncId) {
     }
 }
 
+// Apps Script cold starts and heavy row counts can genuinely take a while, but with no timeout at
+// all a slow or stuck server-side execution just hangs the request forever — the caller never gets
+// a success OR an error, which looks indistinguishable from "the app silently stopped working."
+// 90s is generous enough to not false-positive on a legitimately slow big push, but still guarantees
+// the user eventually sees *something* instead of waiting indefinitely with zero feedback.
+const SYNC_FETCH_TIMEOUT_MS = 90000;
+
+async function _fetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SYNC_FETCH_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error(`Timed out after ${SYNC_FETCH_TIMEOUT_MS / 1000}s waiting for the Apps Script Web App to respond — it may be slow, stuck, or hitting a quota limit. Check the Apps Script Executions log.`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function syncFetchTab(tab) {
     const url = getSyncWebAppUrl();
     if (!url) throw new Error('No Web App URL configured. Save one in Sync Settings first.');
-    const resp = await fetch(`${url}?tab=${encodeURIComponent(tab)}`);
+    const resp = await _fetchWithTimeout(`${url}?tab=${encodeURIComponent(tab)}`);
     const json = await resp.json();
     if (json.error) throw new Error(json.error);
     return json.rows;
@@ -14719,7 +14868,7 @@ async function syncFetchTab(tab) {
 async function syncPostRecords(tab, records) {
     const url = getSyncWebAppUrl();
     if (!url) throw new Error('No Web App URL configured. Save one in Sync Settings first.');
-    const resp = await fetch(url, {
+    const resp = await _fetchWithTimeout(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ tab, records })
@@ -14730,8 +14879,7 @@ async function syncPostRecords(tab, records) {
 }
 
 // Per-tab fingerprints of what each record looked like the last time it was pushed, so a push can
-// skip everything unchanged. Stored in localStorage (id -> JSON string of the record's data) —
-// even the largest tab (~750 delivery-earnings rows) is well within localStorage limits.
+// skip everything unchanged. Stored in localStorage, keyed by id.
 function getLastPushedHashes(tab) {
     try {
         return JSON.parse(localStorage.getItem(`budgetify_sync_hash_${tab}`) || '{}');
@@ -14740,8 +14888,37 @@ function getLastPushedHashes(tab) {
     }
 }
 
+// Quota errors here must not be treated the same as a failed push — by the time this is called,
+// syncPostRecords() has already succeeded and the data is safely in the Sheet. If setItem() throws
+// here, the write to the Sheet still happened; only the *local* bookkeeping failed. Swallowing it
+// (with a warning) means the caller still reports success, at the cost of that tab's diffing not
+// being able to skip unchanged records next time — worse than crashing an otherwise-successful push
+// and having every future auto-push for this tab misreport as failed forever (which is what
+// actually happened: an uncaught quota exception here was bubbling up through syncPushTab and being
+// logged as "Auto-push (Dashboard) failed," even though the push itself worked).
 function setLastPushedHashes(tab, hashes) {
-    localStorage.setItem(`budgetify_sync_hash_${tab}`, JSON.stringify(hashes));
+    try {
+        localStorage.setItem(`budgetify_sync_hash_${tab}`, JSON.stringify(hashes));
+    } catch (err) {
+        console.warn(`Could not save the local diff cache for ${tab} (${err.message}) — the push itself still succeeded; the next auto-sync for this tab will just re-check every record instead of only the changed ones.`);
+    }
+}
+
+// A cheap 32-bit string hash (not cryptographic — collisions are astronomically unlikely for this
+// use case, and even a false negative just means one unchanged-looking record gets re-sent, not
+// silently dropped) instead of storing each record's *entire* JSON blob a second time as its own
+// "hash". Tabs with thousands of rows (Dashboard in particular — one entry per personal/joint
+// transaction, which only ever grows) were storing a full duplicate copy of the whole dataset just
+// for diffing, which is exactly what was blowing past localStorage's ~5-10MB origin quota and
+// throwing "Setting the value of 'budgetify_sync_hash_Dashboard' exceeded the quota." A hash is a
+// few characters instead of the whole record, so the diff cache stays a small fraction of the size
+// of the actual data it's tracking.
+function _cheapHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+        h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    }
+    return h.toString(36);
 }
 
 // currentRecords: [{id, data}]. Incremental: only records whose content actually changed since
@@ -14755,7 +14932,7 @@ async function syncPushTab(tab, currentRecords) {
     const removedIds = previousIds.filter(id => !currentIds.includes(id));
 
     const hashes = getLastPushedHashes(tab);
-    const changed = currentRecords.filter(r => hashes[r.id] !== JSON.stringify(r.data));
+    const changed = currentRecords.filter(r => hashes[r.id] !== _cheapHash(JSON.stringify(r.data)));
 
     const records = [
         ...changed.map(r => ({ id: r.id, data: r.data, deleted: false })),
@@ -14767,7 +14944,7 @@ async function syncPushTab(tab, currentRecords) {
     }
 
     const results = await syncPostRecords(tab, records);
-    changed.forEach(r => { hashes[r.id] = JSON.stringify(r.data); });
+    changed.forEach(r => { hashes[r.id] = _cheapHash(JSON.stringify(r.data)); });
     removedIds.forEach(id => { delete hashes[id]; });
     setLastPushedHashes(tab, hashes);
     setLastSyncedIds(tab, currentIds);
@@ -14818,7 +14995,7 @@ async function pushDeliveryEarningsToSheet() {
         const data = budget !== undefined ? { ...rec, budget } : rec;
         return { id: getOrAssignSyncId(rec, 'DeliveryEarnings'), data };
     });
-    saveDatabase(); // persist any newly-assigned syncIds before the network call
+    _persistSyncIdsOnly(); // persist any newly-assigned syncIds before the network call
     return syncPushTab('DeliveryEarnings', records);
 }
 
@@ -14871,7 +15048,7 @@ async function pushSavingsTrackerToSheet() {
             savingsStartingBalance: state.savingsStartingBalance
         }
     });
-    saveDatabase();
+    _persistSyncIdsOnly();
     return syncPushTab('SavingsTracker', records);
 }
 
@@ -14923,7 +15100,7 @@ async function pullSavingsTrackerFromSheet() {
 function _pushLoansByType(type) {
     const tab = type === 'credit' ? 'CreditCards' : 'Loans';
     const records = (state.loans || []).filter(l => l.type === type).map(l => ({ id: getOrAssignSyncId(l, tab), data: l }));
-    saveDatabase();
+    _persistSyncIdsOnly();
     return syncPushTab(tab, records);
 }
 
@@ -14965,7 +15142,7 @@ async function pullCreditCardsFromSheet() {
 // here; the generated monthlyBills instances are derived data, not something to sync directly.
 async function pushBillTrackerToSheet() {
     const records = (state.billTrackerSettings || []).map(b => ({ id: getOrAssignSyncId(b, 'BillTracker'), data: b }));
-    saveDatabase();
+    _persistSyncIdsOnly();
     return syncPushTab('BillTracker', records);
 }
 
@@ -15005,7 +15182,7 @@ async function pushDashboardToSheet() {
     Object.values(state.personalCalendar || {}).forEach(list => {
         list.forEach(tx => personalRecords.push({ id: getOrAssignSyncId(tx, 'Dashboard'), data: { kind: 'personal', tx } }));
     });
-    saveDatabase();
+    _persistSyncIdsOnly();
     return syncPushTab('Dashboard', [...jointRecords, ...personalRecords]);
 }
 
@@ -15088,7 +15265,7 @@ async function pushBillSplitterToSheet() {
         .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'billTemplate', seriesId, tpl } }));
     const allocRecords = Object.entries(state.allocationTemplates || {})
         .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'allocationTemplate', seriesId, tpl } }));
-    saveDatabase();
+    _persistSyncIdsOnly();
     return syncPushTab('BillSplitter', [...billRecords, ...allocRecords]);
 }
 
@@ -15164,6 +15341,17 @@ async function pullSettingsFromSheet() {
 
 async function pullAllWiredSectionsFromSheet() {
     if (!getSyncWebAppUrl()) return;
+    if (_syncPullInProgress) return false; // already running (e.g. the once-per-load auto-pull); don't overlap
+    _syncPullInProgress = true;
+    try {
+        return await _pullAllWiredSectionsFromSheetInner();
+    } finally {
+        _syncPullInProgress = false;
+    }
+}
+let _syncPullInProgress = false;
+
+async function _pullAllWiredSectionsFromSheetInner() {
     let anyPulled = false;
 
     try {
@@ -15215,17 +15403,28 @@ async function pullAllWiredSectionsFromSheet() {
     }
 
     if (anyPulled) {
-        saveDatabase();
+        // skipAutoSync — pulling FROM the Sheet just brings local state in line with what's already
+        // there; there is nothing new to push back. Without this, every successful pull (including
+        // the automatic one that runs on every single page load) scheduled its own auto-push 10s
+        // later purely as a side effect of the pull's own bookkeeping save — so reloading the page
+        // would, on its own, always queue a push a few seconds afterward even with zero user edits.
+        // A genuine local edit still schedules its own push independently at the point it's made;
+        // this only suppresses the *pull's* save from redundantly doing the same thing.
+        saveDatabase(true);
         renderApp();
         logSuccess('Loaded latest data from Google Sheet.');
     }
+    return anyPulled;
 }
 
 // Mirrors pullAllWiredSectionsFromSheet(), but pushing. Called from the debounced timer in
 // saveDatabase() so every section — not just Settings — ends up synced automatically a few
 // seconds after any change, with no manual "Push ___" click required. Each section's own push
 // function already does its own diffing/tombstoning via syncPushTab, so this is just "run all of
-// them"; failures are logged individually and don't stop the others from running.
+// them"; failures are logged individually and don't stop the others from running. Successes are
+// logged too (once, summarized across sections) so the log is a reliable record of what actually
+// synced — previously this ran completely silent on success, which was indistinguishable from
+// "never ran at all" or "URL not configured".
 async function pushAllWiredSectionsToSheet() {
     if (!getSyncWebAppUrl()) return;
 
@@ -15241,16 +15440,45 @@ async function pushAllWiredSectionsToSheet() {
     ];
 
     _syncPushInProgress = true;
+    const synced = [];
+    let anyErrors = false;
     try {
         for (const [label, pushFn] of sections) {
             try {
-                await pushFn();
+                const results = await pushFn();
+                if (results && results.length > 0) synced.push(`${label} (${results.length})`);
             } catch (err) {
+                anyErrors = true;
                 logError(`Auto-push (${label}) failed: ${err.message}`);
             }
         }
     } finally {
         _syncPushInProgress = false;
+        // Whatever was pending (from either an auto-push or a manual Push All/section click while
+        // Auto Sync was off) has now been attempted — clear the flag so re-enabling Auto Sync later
+        // doesn't think there's still an unsynced edit sitting around and fire a redundant push.
+        _hasUnsyncedChangesWhileAutoSyncOff = false;
+    }
+
+    if (synced.length > 0) {
+        logSuccess(`Auto-synced to Google Sheet: ${synced.join(', ')}.`);
+    } else if (!anyErrors) {
+        // Every section's diff came back empty — normal (e.g. an earlier push already caught this
+        // batch, or a dirty-reschedule fired after nothing was left to send), but still worth a log
+        // line: checking every section is 8 real network round trips, which can take a while under
+        // Apps Script cold starts/lock contention even when the end result is "nothing to send." A
+        // debounce cycle that runs for two minutes and produces zero log output looks exactly like
+        // it silently failed — this makes the "ran, found nothing new" case visible too.
+        logSuccess('Auto-sync complete — no changes to push.');
+    }
+
+    // A save came in while this push was in flight and got marked dirty instead of scheduling its
+    // own timer (see saveDatabase()) — run another push now so that edit doesn't sit unsynced
+    // indefinitely waiting for some later, unrelated edit to re-arm the timer.
+    if (_syncPushDirty) {
+        _syncPushDirty = false;
+        logSystem('Auto-syncing to Google Sheet (edits made during the last sync)...');
+        pushAllWiredSectionsToSheet().catch(() => { /* errors are logged inside */ });
     }
 }
 
@@ -15388,6 +15616,12 @@ function updateSegmentedControlsUI() {
 function switchToTab(tabName) {
     const btn = document.querySelector(`.nav-btn[data-tab="${tabName}"]`);
     if (btn) {
+        // Scroll back to the top of the page on every tab switch — without this, the browser keeps
+        // whatever scroll position the previous tab was left at (e.g. mid-scroll in a long Delivery
+        // Earnings week grid), so navigating away and back lands you in the middle of the new tab's
+        // content instead of at its top.
+        window.scrollTo(0, 0);
+
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
         
@@ -15873,28 +16107,6 @@ function setupEventListeners() {
         renderApp();
     });
 
-    // Reset & Backup Buttons
-    document.getElementById('btn-reset-data').addEventListener('click', () => {
-        if (confirm("Are you sure you want to reset all calculations to the original spreadsheet data? This will overwrite your current changes.")) {
-            resetToDefaults();
-            
-            // Sync UI inputs
-            document.getElementById('year-select').value = state.currentYear;
-            document.getElementById('month-select').value = state.currentMonth;
-            updateSegmentedControlsUI();
-            
-            // Toggle form views
-            const isJoint = state.dashboardType === 'joint';
-            document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
-            document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
-            document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
-            updateQuickAddFormFields();
-            
-            updateTabTitles();
-            renderApp();
-        }
-    });
-
     document.getElementById('btn-export-data').addEventListener('click', () => {
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
         const downloadAnchor = document.createElement('a');
@@ -15935,7 +16147,12 @@ function setupEventListeners() {
                     const validationError = validateImportedDatabase(imported);
                     if (!validationError) {
                         state = imported;
-                        saveDatabase();
+                        // An older backup can predate fields added since (state.listSort, etc.) —
+                        // without this, renders that assume those fields exist (e.g. renderPersonalList()
+                        // reading state.listSort.key) throw "Cannot read properties of undefined" the
+                        // moment the user opens that view, exactly the same gap resetToDefaults() had.
+                        migrateDatabase();
+                        saveDatabase(true); // skipAutoSync — don't overwrite the Sheet until the user reviews the import and pushes deliberately
 
                         // Re-sync the same UI bits the "Reset to Excel Data" flow does after a full
                         // state replacement, instead of location.reload(). A reload works fine as a
@@ -15966,6 +16183,9 @@ function setupEventListeners() {
                         }
                         renderApp();
                         logSuccess("Database successfully imported!");
+                        if (getSyncWebAppUrl()) {
+                            logSystem("Auto-sync is paused for this import — review the data, then use \"Push All\" in Sync Settings when ready to overwrite the Google Sheet.");
+                        }
                     } else {
                         alert(`Invalid backup file: ${validationError}\n\nYour current data was not changed.`);
                     }
@@ -17135,109 +17355,113 @@ function setupEventListeners() {
         }
     });
 
-    const btnSyncDeliveryEarnings = document.getElementById('btn-sync-delivery-earnings');
-    if (btnSyncDeliveryEarnings) {
-        btnSyncDeliveryEarnings.addEventListener('click', async () => {
-            logSystem('Pushing Delivery Earnings to Google Sheet...');
-            try {
-                const results = await pushDeliveryEarningsToSheet();
-                logSuccess(`Delivery Earnings synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Delivery Earnings sync failed: ${err.message}`);
+    // Auto Sync toggle — gates both the 3s auto-push-after-edit debounce (saveDatabase()) and the
+    // once-per-page-load auto-pull (init()). Turned off, the user has full manual control: nothing
+    // syncs until they click Push All / a section push button / "Pull from Google Sheet" below.
+    // Stored in localStorage (getAutoSyncEnabled/setAutoSyncEnabled), not `state` — it must survive
+    // "Clear All Local Data" and JSON imports, both of which reset `state`, otherwise turning it off
+    // to safely make a batch of local changes gets silently undone by the very reset it was meant
+    // to protect against.
+    const autoSyncToggle = document.getElementById('auto-sync-toggle');
+    if (autoSyncToggle) {
+        autoSyncToggle.checked = getAutoSyncEnabled();
+        autoSyncToggle.addEventListener('change', (e) => {
+            setAutoSyncEnabled(e.target.checked);
+            if (e.target.checked) {
+                logSystem('Auto Sync enabled.');
+                // Only actually queue a sync if something was edited while it was off — flipping the
+                // toggle on by itself is not an edit and shouldn't fire a push on its own. Reusing
+                // saveDatabase() here (rather than duplicating its scheduling logic) means this goes
+                // through the exact same debounce/dirty-flag path a real edit would.
+                if (_hasUnsyncedChangesWhileAutoSyncOff) {
+                    _hasUnsyncedChangesWhileAutoSyncOff = false;
+                    saveDatabase();
+                }
+            } else {
+                logSystem('Auto Sync disabled — changes will only sync when you push/pull manually.');
             }
         });
     }
 
-    const btnSyncSavingsTracker = document.getElementById('btn-sync-savings-tracker');
-    if (btnSyncSavingsTracker) {
-        btnSyncSavingsTracker.addEventListener('click', async () => {
-            logSystem('Pushing Savings Tracker to Google Sheet...');
+    // Manual full pull — reuses pullAllWiredSectionsFromSheet() (the same function that normally
+    // runs once automatically on page load) but invoked directly and on demand, so it's available
+    // even with Auto Sync off. That function already logs a success line (and any per-section
+    // errors) when something actually changed, so this only needs to fill the silent case where
+    // nothing was new to pull — otherwise the click would produce no visible feedback at all.
+    // Shared guard for every manual sync button below. Without this, clicking a manual button while
+    // an auto-push (or another manual action) is already mid-flight fires a second, genuinely
+    // concurrent request from this same browser tab — which then fights the first one for the Apps
+    // Script global LockService lock and, if the first request is slow (cold start, a large batch),
+    // can time out after the full 30s wait with "another process was holding the lock for too long."
+    // That's self-inflicted contention this client can prevent outright, rather than trying to
+    // recover from it after the fact.
+    function _isSyncBusy() {
+        return _syncPushInProgress || _syncPullInProgress;
+    }
+    function _warnSyncBusy() {
+        logSystem('A sync is already in progress — please wait for it to finish before starting another.');
+    }
+
+    const btnPullAll = document.getElementById('btn-pull-all');
+    if (btnPullAll) {
+        btnPullAll.addEventListener('click', async () => {
+            if (_isSyncBusy()) { _warnSyncBusy(); return; }
+            logSystem('Pulling all sections from Google Sheet...');
+            const anyPulled = await pullAllWiredSectionsFromSheet();
+            if (!anyPulled) logSuccess('Pull complete — nothing new to pull.');
+        });
+    }
+
+    // Manual "push everything now" — reuses pushAllWiredSectionsToSheet() (the same function the
+    // 3s auto-push debounce calls) but invoked directly, bypassing the debounce entirely, since this
+    // is an explicit one-off user action, not a background auto-sync. Its own internal
+    // logSuccess/logError calls already report per-section results, so this handler only needs to
+    // bracket the run with a start/done line.
+    const btnSyncAll = document.getElementById('btn-sync-all');
+    if (btnSyncAll) {
+        btnSyncAll.addEventListener('click', async () => {
+            if (_isSyncBusy()) { _warnSyncBusy(); return; }
+            logSystem('Pushing all sections to Google Sheet...');
             try {
-                const results = await pushSavingsTrackerToSheet();
-                logSuccess(`Savings Tracker synced: ${results.length} row(s) sent.`);
+                await pushAllWiredSectionsToSheet();
+                logSuccess('Push All complete.');
             } catch (err) {
-                logError(`Savings Tracker sync failed: ${err.message}`);
+                logError(`Push All failed: ${err.message}`);
             }
         });
     }
 
-    const btnSyncLoans = document.getElementById('btn-sync-loans');
-    if (btnSyncLoans) {
-        btnSyncLoans.addEventListener('click', async () => {
-            logSystem('Pushing Loans to Google Sheet...');
+    // Single-section manual push buttons, data-driven instead of eight near-identical handlers.
+    // Each wraps its own push in _syncPushInProgress so it (a) blocks the other manual buttons and
+    // the auto-push debounce from overlapping it, and (b) can't itself be double-fired by a second
+    // click while the first is still in flight.
+    const SYNC_SECTION_BUTTONS = [
+        ['btn-sync-delivery-earnings', 'Delivery Earnings', pushDeliveryEarningsToSheet],
+        ['btn-sync-savings-tracker', 'Savings Tracker', pushSavingsTrackerToSheet],
+        ['btn-sync-loans', 'Loans', pushLoansToSheet],
+        ['btn-sync-credit-cards', 'Credit Cards', pushCreditCardsToSheet],
+        ['btn-sync-bill-tracker', 'Bill Tracker', pushBillTrackerToSheet],
+        ['btn-sync-dashboard', 'Dashboard', pushDashboardToSheet],
+        ['btn-sync-bill-splitter', 'Bill Splitter', pushBillSplitterToSheet],
+        ['btn-sync-settings', 'Settings', pushSettingsToSheet]
+    ];
+    SYNC_SECTION_BUTTONS.forEach(([id, label, pushFn]) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            if (_isSyncBusy()) { _warnSyncBusy(); return; }
+            logSystem(`Pushing ${label} to Google Sheet...`);
+            _syncPushInProgress = true;
             try {
-                const results = await pushLoansToSheet();
-                logSuccess(`Loans synced: ${results.length} row(s) sent.`);
+                const results = await pushFn();
+                logSuccess(`${label} synced: ${results.length} row(s) sent.`);
             } catch (err) {
-                logError(`Loans sync failed: ${err.message}`);
+                logError(`${label} sync failed: ${err.message}`);
+            } finally {
+                _syncPushInProgress = false;
             }
         });
-    }
-
-    const btnSyncCreditCards = document.getElementById('btn-sync-credit-cards');
-    if (btnSyncCreditCards) {
-        btnSyncCreditCards.addEventListener('click', async () => {
-            logSystem('Pushing Credit Cards to Google Sheet...');
-            try {
-                const results = await pushCreditCardsToSheet();
-                logSuccess(`Credit Cards synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Credit Cards sync failed: ${err.message}`);
-            }
-        });
-    }
-
-    const btnSyncBillTracker = document.getElementById('btn-sync-bill-tracker');
-    if (btnSyncBillTracker) {
-        btnSyncBillTracker.addEventListener('click', async () => {
-            logSystem('Pushing Bill Tracker to Google Sheet...');
-            try {
-                const results = await pushBillTrackerToSheet();
-                logSuccess(`Bill Tracker synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Bill Tracker sync failed: ${err.message}`);
-            }
-        });
-    }
-
-    const btnSyncDashboard = document.getElementById('btn-sync-dashboard');
-    if (btnSyncDashboard) {
-        btnSyncDashboard.addEventListener('click', async () => {
-            logSystem('Pushing Dashboard to Google Sheet...');
-            try {
-                const results = await pushDashboardToSheet();
-                logSuccess(`Dashboard synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Dashboard sync failed: ${err.message}`);
-            }
-        });
-    }
-
-    const btnSyncBillSplitter = document.getElementById('btn-sync-bill-splitter');
-    if (btnSyncBillSplitter) {
-        btnSyncBillSplitter.addEventListener('click', async () => {
-            logSystem('Pushing Bill Splitter to Google Sheet...');
-            try {
-                const results = await pushBillSplitterToSheet();
-                logSuccess(`Bill Splitter synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Bill Splitter sync failed: ${err.message}`);
-            }
-        });
-    }
-
-    const btnSyncSettings = document.getElementById('btn-sync-settings');
-    if (btnSyncSettings) {
-        btnSyncSettings.addEventListener('click', async () => {
-            logSystem('Pushing Settings to Google Sheet...');
-            try {
-                const results = await pushSettingsToSheet();
-                logSuccess(`Settings synced: ${results.length} row(s) sent.`);
-            } catch (err) {
-                logError(`Settings sync failed: ${err.message}`);
-            }
-        });
-    }
+    });
 
     const btnClearLocalData = document.getElementById('btn-clear-local-data');
     if (btnClearLocalData) {
@@ -17254,6 +17478,9 @@ function setupEventListeners() {
                 .filter(key => key.startsWith('budgetify_sync_ids_') || key.startsWith('budgetify_sync_hash_'))
                 .forEach(key => localStorage.removeItem(key));
 
+            // sessionStorage (not the state that just got wiped) so init() can restore the Sync
+            // Settings tab after the reload instead of landing back on the Dashboard by default.
+            sessionStorage.setItem('budgetify_post_reload_tab', 'sync');
             location.reload();
         });
     }
@@ -20422,13 +20649,31 @@ function getTransactionIndicatorPrefix(tx) {
     const transfer = isBalanceTransferTransaction(tx) ? `&#8644;${person === 'Jason' ? ' J' : person === 'Asia' ? ' A' : ''} ` : '';
     return sourceIcon + recurring + transfer;
 }
+// A render exception in any one of these (e.g. a malformed record from a Google Sheet pull hitting
+// an edge case the calendar view's simpler per-day rendering doesn't) used to propagate straight up
+// through renderApp() uncaught, leaving whatever container was mid-render exactly as blank as it
+// was before the call — no visible error, no fallback message, indistinguishable from "the data is
+// just gone" even though state itself was untouched. Catching here means a single bad record can't
+// take down the whole list anymore, and the real error is now visible instead of silent.
 function renderListDashboard() {
-    if (state.dashboardType === 'personal') {
-        renderPersonalList();
-    } else if (state.dashboardType === 'joint') {
-        renderJointList();
-    } else {
-        renderCardList();
+    try {
+        if (state.dashboardType === 'personal') {
+            renderPersonalList();
+        } else if (state.dashboardType === 'joint') {
+            renderJointList();
+        } else {
+            renderCardList();
+        }
+    } catch (err) {
+        console.error('renderListDashboard failed:', err);
+        logError(`List view failed to render: ${err.message}. Your data is safe — this is a display error, not data loss. Check the browser console for details.`);
+        const containerId = state.dashboardType === 'personal' || state.dashboardType === 'joint'
+            ? 'list-view-table-container'
+            : 'list-view-container';
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem; color:var(--danger, #e05252);">Couldn't render this list (${escapeHTML(err.message)}). Your data hasn't been lost — try switching to Calendar view, or check the Sync log for details.</p>`;
+        }
     }
 }
 
@@ -22514,6 +22759,7 @@ function renderDeliveryTab() {
                     rec[key + 'Formula'] = rawVal;
                     rec[key] = parsedVal;
                     rec.total = (rec.cash || 0) + (rec.sideGigs || 0) + (rec.grubHub || 0) + (rec.uberEats || 0);
+                    logSystem(`Delivery Earnings updated for ${date} — ${input.dataset.label}: $${parsedVal.toFixed(2)}.`);
                     saveDatabase();
                     renderApp();
                 }
@@ -22526,7 +22772,7 @@ function renderDeliveryTab() {
                 const date = e.target.dataset.date;
                 const key = e.target.dataset.key;
                 const checked = e.target.checked;
-                
+
                 const rec = state.deliveryEarnings.find(item => item.date === date);
                 if (rec) {
                     const capKey = key.charAt(0).toUpperCase() + key.slice(1);
@@ -22535,6 +22781,7 @@ function renderDeliveryTab() {
                         rec[key] = 0;
                     }
                     rec.total = (rec.cash || 0) + (rec.sideGigs || 0) + (rec.grubHub || 0) + (rec.uberEats || 0);
+                    logSystem(`Delivery Earnings updated for ${date} — ${key} ${checked ? 'marked No Earnings' : 'No Earnings cleared'}.`);
                     saveDatabase();
                     renderApp();
                 }
@@ -22547,12 +22794,14 @@ function renderDeliveryTab() {
             budgetInput.addEventListener('change', (e) => {
                 const date = e.target.dataset.date;
                 const parsedVal = parseFormula(e.target.value);
-                
+
                 state.deliveryBudgets = state.deliveryBudgets || {};
                 if (parsedVal > 0) {
                     state.deliveryBudgets[date] = parsedVal;
+                    logSystem(`Delivery Earnings updated for ${date} — Budget: $${parsedVal.toFixed(2)}.`);
                 } else {
                     delete state.deliveryBudgets[date];
+                    logSystem(`Delivery Earnings updated for ${date} — Budget cleared.`);
                 }
                 saveDatabase();
                 renderApp();
@@ -22618,12 +22867,13 @@ function renderDeliveryTab() {
                     } else {
                         rec.offDayReason = '';
                     }
+                    logSystem(`Delivery Earnings updated for ${date} — ${checked ? 'marked Off-Day' : 'Off-Day cleared'}.`);
                     saveDatabase();
                     renderApp();
                 }
             });
         }
-        
+
         gridBody.appendChild(row);
     });
     
@@ -23379,12 +23629,20 @@ function renderProposedPaymentsList(type, bodyId) {
 }
 
 // --- UTILS & LOGS ---
+// mm-dd-yyyy HH:mm:ss, local time — every log line needs both date and time so entries are still
+// unambiguous after the log scrolls past a midnight boundary or spans multiple sessions.
+function _logTimestamp() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function logSystem(msg) {
     const container = document.getElementById('logs-container');
     if (!container) return;
     const entry = document.createElement('div');
     entry.className = 'log-entry system';
-    entry.textContent = `[SYSTEM]: ${msg}`;
+    entry.textContent = `[${_logTimestamp()}] [SYSTEM]: ${msg}`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 }
@@ -23394,7 +23652,7 @@ function logSuccess(msg) {
     if (!container) return;
     const entry = document.createElement('div');
     entry.className = 'log-entry success';
-    entry.textContent = `[SUCCESS]: ${msg}`;
+    entry.textContent = `[${_logTimestamp()}] [SUCCESS]: ${msg}`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 }
@@ -23404,7 +23662,7 @@ function logError(msg) {
     if (!container) return;
     const entry = document.createElement('div');
     entry.className = 'log-entry error';
-    entry.textContent = `[ERROR]: ${msg}`;
+    entry.textContent = `[${_logTimestamp()}] [ERROR]: ${msg}`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 }
@@ -23414,7 +23672,7 @@ function logInfo(msg) {
     if (!container) return;
     const entry = document.createElement('div');
     entry.className = 'log-entry info';
-    entry.textContent = `[INFO]: ${msg}`;
+    entry.textContent = `[${_logTimestamp()}] [INFO]: ${msg}`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 }
