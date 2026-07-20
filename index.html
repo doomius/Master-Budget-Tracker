@@ -6341,7 +6341,21 @@ const SETTINGS_RECORD_ID = 'ST-1';
 const SETTINGS_KEYS = [
     'deliveryColumnPrefs', 'deliveryYearSummaryCollapsed', 'metricsCollapsed', 'platformBreakdownCollapsed',
     'savingsMetricsCollapsed', 'savingsYearSummaryCollapsed', 'savingsViewMode', 'savingsListScope',
-    'viewMode', 'listScope', 'ccViewMode', 'ccListScope', 'billTrackerOwnership'
+    'viewMode', 'listScope', 'ccViewMode', 'ccListScope', 'billTrackerOwnership',
+    // payrollConfig drives every dynamically-generated "Jason Pay (Dynamic)" transaction
+    // (getPersonalTransactionsForPeriod() computes these on the fly, never storing them in
+    // personalCalendar — see pushDashboardToSheet()'s comment). dynamicOverrides holds per-entry
+    // edits/deletions of those generated rows. Neither was synced anywhere before, so clearing
+    // local data reset payrollConfig to empty and pulling from the Sheet never restored it —
+    // every dynamic paycheck silently stopped generating, looking exactly like "the push dropped
+    // rows" when really the config that generates them was never round-tripped at all.
+    'payrollConfig', 'dynamicOverrides',
+    // billRecurrenceSkips/Stops/legacyStops control whether autopopulateBillsForMonth() regenerates
+    // a given recurring-bill occurrence at all — billRecurrenceTemplates (the series definitions)
+    // is already synced via the BillSplitter tab, but these skip/stop markers weren't synced
+    // anywhere. Without them, clearing local data and pulling forgets that a bill was skipped or
+    // stopped, and the next render silently regenerates it as if it were still active.
+    'billRecurrenceSkips', 'billRecurrenceStops', 'billLegacyRecurrenceStops'
 ];
 
 async function pushSettingsToSheet() {
@@ -7191,6 +7205,17 @@ function setupEventListeners() {
                     const validationError = validateImportedDatabase(imported);
                     if (!validationError) {
                         state = imported;
+                        // migrateDatabase() below also contains one-time *destructive* cleanup
+                        // migrations (gated on flags like personalStaticTransactionsCleared20260715)
+                        // meant to run once against the live device's evolving state, not against an
+                        // arbitrary re-imported backup. A backup saved before one of those flags was
+                        // introduced would otherwise silently re-trigger the cleanup on import and wipe
+                        // real data (e.g. every non-recurring personal-ledger entry) before the user
+                        // ever sees it — same reasoning as the backfill in resetToDefaults().
+                        state.allocationOffsetNamesCleaned = true;
+                        state.allocationsPolarityFlipped20260715 = true;
+                        state.billsAndAllocationsCleared20260714 = true;
+                        state.personalStaticTransactionsCleared20260715 = true;
                         // An older backup can predate fields added since (state.listSort, etc.) —
                         // without this, renders that assume those fields exist (e.g. renderPersonalList()
                         // reading state.listSort.key) throw "Cannot read properties of undefined" the
