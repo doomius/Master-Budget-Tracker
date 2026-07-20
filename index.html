@@ -922,6 +922,15 @@ label {
     gap: 2rem;
 }
 
+/* Wraps both stat-boxes (Platform breakdown + Weekly Summary) so the whole pair can be hidden
+   together as one unit via #btn-toggle-platform-breakdown, while its own header/button stays
+   visible outside this wrapper as the persistent control that brings it back. */
+.delivery-stats-body {
+    display: flex;
+    gap: 2rem;
+    padding-top: 1rem;
+}
+
 .stat-box {
     flex: 1;
     display: flex;
@@ -1012,6 +1021,13 @@ label {
     font-size: 0.95rem;
 }
 
+/* Pinned just below .main-sticky-dashboard so it's still visible while scrolling through a long
+   week of rows — otherwise there's no reminder of which checkbox toggles which column once you've
+   scrolled past it. `top` is set dynamically by _updateDeliveryStickyOffsets() (called after every
+   delivery render and on resize), not hardcoded here — .main-sticky-dashboard's actual height
+   differs a lot by context (and on mobile it drops to position:static entirely, see the 900px
+   media query above), so a fixed pixel guess landed right on desktop but put this row floating
+   mid-page on mobile. The JS measures the real height of whatever's actually sticky above it. */
 .delivery-col-toggles {
     display: flex;
     flex-wrap: wrap;
@@ -1019,6 +1035,12 @@ label {
     gap: 0.75rem;
     padding: 0.5rem 0;
     font-size: 0.8rem;
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    background: rgba(6, 9, 19, 0.98);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
 }
 .delivery-col-toggles label {
     display: inline-flex;
@@ -1029,14 +1051,29 @@ label {
 
 .abbr-label { display: none; }
 
+/* Table header pinned directly below the sticky "Show columns" row above, so scrolling through a
+   long week of delivery rows never loses sight of which column is which. Each <th> gets its own
+   sticky rule (rather than the <thead>) since sticky positioning on <thead> itself isn't reliable
+   across browsers for tables. `top` is set dynamically by _updateDeliveryStickyOffsets() — see the
+   comment on .delivery-col-toggles above for why a hardcoded value doesn't work across both
+   desktop and mobile layouts. */
+#delivery-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 9;
+    background: rgba(6, 9, 19, 0.98);
+}
+
 /* Column-visibility toggles: hiding a platform hides both its header and every data cell in that
-   column, addressed purely by position since the th/td generation happen in different places
-   (static HTML header vs. JS-rendered rows) and keeping them in sync via nth-child is simpler and
-   more robust than threading a matching class through every generated <td>. */
-#delivery-table.hide-col-cash th:nth-child(3), #delivery-table.hide-col-cash td:nth-child(3),
-#delivery-table.hide-col-doordash th:nth-child(4), #delivery-table.hide-col-doordash td:nth-child(4),
-#delivery-table.hide-col-grubhub th:nth-child(5), #delivery-table.hide-col-grubhub td:nth-child(5),
-#delivery-table.hide-col-ubereats th:nth-child(6), #delivery-table.hide-col-ubereats td:nth-child(6) {
+   column. Addressed by an explicit .col-* class on each th/td rather than nth-child position —
+   position-based hiding broke on an off-day row, where the 4 platform cells collapse into a single
+   colspan="4" status cell (off-day-overlay-cell, deliberately left without a col-* class so it's
+   never affected by these toggles), which shifts every later cell's DOM position and made a hidden
+   column rule hide the wrong cell (the off-day status itself, or Budget/Difference) instead. */
+#delivery-table.hide-col-cash .col-cash,
+#delivery-table.hide-col-doordash .col-doordash,
+#delivery-table.hide-col-grubhub .col-grubhub,
+#delivery-table.hide-col-ubereats .col-ubereats {
     display: none;
 }
 
@@ -2134,6 +2171,24 @@ body.maximized-calendar .day-transaction-item {
     opacity: 0.5;
 }
 
+/* Makes it obvious at a glance whether today's earnings still need updating — applies in both the
+   desktop table and mobile's identical markup (same #delivery-log-body rows), so no separate
+   mobile-only rule is needed. Must stay visible on hover/focus (someone editing today's own row is
+   exactly when this matters most) — .data-table tbody tr:hover (2 classes/pseudo + 2 elements) is
+   MORE specific than .today-row alone (1 class), so without the dedicated hover/focus-within rule
+   below, moving the mouse over — or clicking into — today's row silently overrode the highlight
+   with the generic near-transparent hover tint. */
+.today-row,
+.data-table tbody tr.today-row:hover,
+.data-table tbody tr.today-row:focus-within {
+    background: var(--color-primary-glow);
+    box-shadow: inset 3px 0 0 var(--color-primary);
+}
+.today-row td:first-child {
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
 .off-day-overlay-cell {
     text-align: center;
     color: var(--color-danger);
@@ -2362,9 +2417,9 @@ body.maximized-calendar .day-transaction-item {
         flex-wrap: wrap;
     }
 
-    /* Platform breakdown + Weekly Summary side-by-side (.delivery-stats) doesn't stack on its own,
-       squeezing Weekly Summary into a sliver that clips its own content off-screen. */
-    .delivery-stats {
+    /* Platform breakdown + Weekly Summary side-by-side (.delivery-stats-body) doesn't stack on its
+       own, squeezing Weekly Summary into a sliver that clips its own content off-screen. */
+    .delivery-stats-body {
         flex-direction: column;
         gap: 1.25rem;
     }
@@ -2876,18 +2931,24 @@ body.maximized-calendar .day-transaction-item {
                 <!-- 3. DELIVERY EARNINGS VIEW -->
                 <div id="view-delivery" class="tab-view">
                     <div class="delivery-layout">
-                        <div class="delivery-stats glass-card">
-                            <div class="stat-box">
-                                <h4>Platform breakdown</h4>
-                                <div class="platform-bars" id="platform-bars">
-                                    <!-- Dynamic bars -->
-                                </div>
+                        <div class="delivery-stats glass-card" style="display:block; padding:1.5rem;">
+                            <div class="table-card-header" style="margin-bottom:0;">
+                                <h4 style="margin-bottom:0;">Platform Breakdown &amp; Weekly Summary</h4>
+                                <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-platform-breakdown">Hide</button>
                             </div>
-                            <div class="stat-box-divider"></div>
-                            <div class="stat-box">
-                                <h4>Weekly Summary</h4>
-                                <div class="weekly-totals-list" id="weekly-totals-list">
-                                    <!-- Dynamic list -->
+                            <div class="delivery-stats-body" id="delivery-stats-body">
+                                <div class="stat-box">
+                                    <h4>Platform breakdown</h4>
+                                    <div class="platform-bars" id="platform-bars">
+                                        <!-- Dynamic bars -->
+                                    </div>
+                                </div>
+                                <div class="stat-box-divider"></div>
+                                <div class="stat-box">
+                                    <h4>Weekly Summary</h4>
+                                    <div class="weekly-totals-list" id="weekly-totals-list">
+                                        <!-- Dynamic list -->
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2914,10 +2975,10 @@ body.maximized-calendar .day-transaction-item {
                                         <tr>
                                             <th>Date</th>
                                             <th>Day</th>
-                                            <th><span class="full-label">Cash ($)</span><span class="abbr-label">C</span></th>
-                                            <th><span class="full-label">Door Dash ($)</span><span class="abbr-label">DD</span></th>
-                                            <th><span class="full-label">Grub Hub ($)</span><span class="abbr-label">GH</span></th>
-                                            <th><span class="full-label">Uber Eats ($)</span><span class="abbr-label">UE</span></th>
+                                            <th class="col-cash"><span class="full-label">Cash ($)</span><span class="abbr-label">C</span></th>
+                                            <th class="col-doordash"><span class="full-label">Door Dash ($)</span><span class="abbr-label">DD</span></th>
+                                            <th class="col-grubhub"><span class="full-label">Grub Hub ($)</span><span class="abbr-label">GH</span></th>
+                                            <th class="col-ubereats"><span class="full-label">Uber Eats ($)</span><span class="abbr-label">UE</span></th>
                                             <th>Daily Total</th>
                                             <th>Budget ($)</th>
                                             <th>Difference ($)</th>
@@ -4408,7 +4469,8 @@ function _createBlankState() {
         savingsListScope: 'month',
         savingsMetricsCollapsed: false,
         savingsYearSummaryCollapsed: false,
-        deliveryYearSummaryCollapsed: false
+        deliveryYearSummaryCollapsed: false,
+        platformBreakdownCollapsed: false
     };
 }
 
@@ -4765,6 +4827,12 @@ function init() {
     if (postReloadTab) {
         sessionStorage.removeItem('budgetify_post_reload_tab');
         switchToTab(postReloadTab);
+    } else if (isMobileViewport()) {
+        // On a phone, Delivery Earnings is what actually needs a daily glance/update — the Dashboard
+        // landing page is more of a desktop planning view. Only applies to the default landing tab;
+        // the post-reload restore above still wins so "Clear All Local Data" keeps returning to
+        // Sync Settings on mobile too.
+        switchToTab('delivery');
     }
 
     // Fire-and-forget: don't block the initial (already-rendered) view on a network call. Any
@@ -5312,6 +5380,10 @@ function migrateDatabase() {
     // Delivery Earnings Enhancements migration
     if (state.deliveryYearSummaryCollapsed === undefined) {
         state.deliveryYearSummaryCollapsed = false;
+        migrated = true;
+    }
+    if (state.platformBreakdownCollapsed === undefined) {
+        state.platformBreakdownCollapsed = false;
         migrated = true;
     }
     if (state.deliveryEarnings) {
@@ -6263,7 +6335,7 @@ async function pullBillSplitterFromSheet() {
 // doesn't already exist (safe to re-run, it only creates tabs that are missing).
 const SETTINGS_RECORD_ID = 'ST-1';
 const SETTINGS_KEYS = [
-    'deliveryColumnPrefs', 'deliveryYearSummaryCollapsed', 'metricsCollapsed',
+    'deliveryColumnPrefs', 'deliveryYearSummaryCollapsed', 'metricsCollapsed', 'platformBreakdownCollapsed',
     'savingsMetricsCollapsed', 'savingsYearSummaryCollapsed', 'savingsViewMode', 'savingsListScope',
     'viewMode', 'listScope', 'ccViewMode', 'ccListScope', 'billTrackerOwnership'
 ];
@@ -6690,6 +6762,12 @@ function setupEventListeners() {
             renderApp();
         }
         if (!nowMobile) closeMobileSidebar();
+        // Cheap (no full re-render) — the delivery grid's sticky offsets depend on measured
+        // element heights, which can change on any resize/orientation change, not just when
+        // crossing the mobile breakpoint above (e.g. the "Show columns" row wrapping to a
+        // different number of lines at some in-between width). No-ops harmlessly via its own
+        // element-existence check when the delivery tab isn't the one currently showing.
+        _updateDeliveryStickyOffsets();
     });
 
     // Mobile gig earnings entry dialog
@@ -6862,6 +6940,11 @@ function setupEventListeners() {
     });
     document.getElementById('btn-toggle-delivery-year').addEventListener('click', () => {
         state.deliveryYearSummaryCollapsed = !state.deliveryYearSummaryCollapsed;
+        saveDatabase();
+        renderDeliveryTab();
+    });
+    document.getElementById('btn-toggle-platform-breakdown').addEventListener('click', () => {
+        state.platformBreakdownCollapsed = !state.platformBreakdownCollapsed;
         saveDatabase();
         renderDeliveryTab();
     });
@@ -9495,17 +9578,21 @@ function enforceMobileListView() {
     state.viewMode = 'list';
     state.ccViewMode = 'list';
     state.savingsViewMode = 'list';
-    // The metrics-collapsed state persists from whatever it was last set to (often on desktop), and
-    // .metrics-collapsed fully hides the summary cards — on a phone that reads as "metrics missing"
-    // rather than "collapsed," so default them to visible the first time we render on mobile. After
+    // The metrics-collapsed state persists from whatever it was last set to (often on desktop) — on
+    // a phone, default the metric cards to collapsed the first time we render on mobile, since
+    // they eat a lot of scroll-past-before-you-get-to-anything-useful space on a small screen. After
     // that, leave it alone so the user's own toggle sticks.
     if (!_mobileMetricsDefaultApplied) {
         _mobileMetricsDefaultApplied = true;
-        state.metricsCollapsed = false;
+        state.metricsCollapsed = true;
         // Unlike metrics, the yearly delivery summary is a big scrollable year-of-weeks table that's
         // mostly noise until you actually want it — default it collapsed on mobile (once; the user's
         // own Hide/Show Details toggle takes over after that).
         state.deliveryYearSummaryCollapsed = true;
+        // Same reasoning for the Platform Breakdown bars on the Delivery Earnings page — useful, but
+        // not what you opened the app for on a phone; default it collapsed once, then leave the
+        // user's own Hide/Show toggle in charge.
+        state.platformBreakdownCollapsed = true;
     }
 }
 
@@ -13451,9 +13538,44 @@ function syncDeliveryColumnToggles() {
     });
 }
 
+// Computes real pixel offsets for the delivery grid's two stacked sticky bars (the "Show columns"
+// row, then the table header right below it) instead of relying on hardcoded CSS pixel guesses.
+// Those guesses were calibrated against the desktop .main-sticky-dashboard's height, but that
+// element drops to position:static on mobile (see the 900px media query) — with nothing sticky
+// above it there anymore, a fixed offset left the "Show columns" row (and the header stacked below
+// it) floating at a fixed distance from the top that didn't correspond to anything, landing them
+// visually mid-list instead of pinned above row 1. Measuring the actual rendered height of
+// whatever's sticky above adapts correctly to any header height, wrapped multi-line "Show columns"
+// row, or breakpoint — desktop and mobile alike.
+function _updateDeliveryStickyOffsets() {
+    const colToggles = document.getElementById('delivery-col-toggles');
+    const table = document.getElementById('delivery-table');
+    if (!colToggles || !table) return;
+
+    const stickyDashboard = document.querySelector('.main-sticky-dashboard');
+    const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
+    const dashboardHeight = dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
+    colToggles.style.top = `${dashboardHeight}px`;
+
+    const togglesHeight = colToggles.getBoundingClientRect().height;
+    const theadTop = dashboardHeight + togglesHeight;
+    table.querySelectorAll('thead th').forEach(th => {
+        th.style.top = `${theadTop}px`;
+    });
+}
+
 function renderDeliveryTab() {
     const month = state.currentMonth;
-    
+
+    // Collapses the whole Platform Breakdown + Weekly Summary card as one unit — the toggle button
+    // lives in the card's own header, outside #delivery-stats-body, so it stays visible and able to
+    // bring the content back even while the body itself is hidden.
+    const platformBoxCollapsed = !!state.platformBreakdownCollapsed;
+    const deliveryStatsBody = document.getElementById('delivery-stats-body');
+    const btnTogglePlatform = document.getElementById('btn-toggle-platform-breakdown');
+    if (deliveryStatsBody) deliveryStatsBody.classList.toggle('hidden', platformBoxCollapsed);
+    if (btnTogglePlatform) btnTogglePlatform.textContent = platformBoxCollapsed ? 'Show' : 'Hide';
+
     // Filter gig earnings for current month & year
     const gigs = state.deliveryEarnings.filter(g => {
         const dateObj = new Date(g.date + 'T00:00:00');
@@ -13549,10 +13671,14 @@ function renderDeliveryTab() {
     // Render Grid body
     const gridBody = document.getElementById('delivery-log-body');
     gridBody.innerHTML = '';
-    
+    const todayDateStr = formatLocalDate(new Date());
+
     activeWeek.forEach(gRecord => {
         const row = document.createElement('tr');
-        row.className = gRecord.offDayReason ? 'off-day-row' : '';
+        const rowClasses = [];
+        if (gRecord.offDayReason) rowClasses.push('off-day-row');
+        if (gRecord.date === todayDateStr) rowClasses.push('today-row');
+        row.className = rowClasses.join(' ');
         const dailyBudget = Number(state.deliveryBudgets?.[gRecord.date]) || 0;
         const difference = gRecord.total - dailyBudget;
         let diffClass = '';
@@ -13588,25 +13714,25 @@ function renderDeliveryTab() {
             // Desktop edits the field directly, so disabling it there to block typing is correct.
             const noEarnAttrs = isTouchDevice() ? 'style="opacity:0.5;"' : 'disabled style="opacity:0.5;"';
             colsHtml = `
-                <td>
+                <td class="col-cash">
                     <div class="gig-cell-content">
                         <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="cash" data-label="Cash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnCash ? noEarnAttrs : ''}>${formatVal('cash')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="cash" ${gRecord.noEarnCash ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
-                <td>
+                <td class="col-doordash">
                     <div class="gig-cell-content">
                         <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="sideGigs" data-label="Door Dash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnSideGigs ? noEarnAttrs : ''}>${formatVal('sideGigs')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="sideGigs" ${gRecord.noEarnSideGigs ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
-                <td>
+                <td class="col-grubhub">
                     <div class="gig-cell-content">
                         <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="grubHub" data-label="Grub Hub" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnGrubHub ? noEarnAttrs : ''}>${formatVal('grubHub')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="grubHub" ${gRecord.noEarnGrubHub ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
-                <td>
+                <td class="col-ubereats">
                     <div class="gig-cell-content">
                         <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="uberEats" data-label="Uber Eats" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnUberEats ? noEarnAttrs : ''}>${formatVal('uberEats')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="uberEats" ${gRecord.noEarnUberEats ? 'checked' : ''} title="No earnings">
@@ -13865,6 +13991,7 @@ function renderDeliveryTab() {
     
     syncDeliveryColumnToggles();
     renderDeliveryYearSummary();
+    _updateDeliveryStickyOffsets();
 
     // Restore focus if a tab navigation was queued
     if (state.nextFocusDate && state.nextFocusKey) {
