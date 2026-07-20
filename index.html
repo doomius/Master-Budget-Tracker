@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Personal Budget & Bills Calendar (2027)</title>
     <style>
 /* CSS CUSTOM PROPERTIES (DESIGN SYSTEM) */
@@ -105,7 +105,11 @@ h1, h2, h3, h4, h5, h6 {
     flex-direction: column;
     padding: 2rem 1.5rem;
     position: fixed;
+    /* 100vh in mobile Safari is sized to the layout viewport (as if the address/tab bar were
+       hidden), so a fixed-height sidebar's bottom ends up rendered underneath the toolbar
+       whenever it's actually showing. dvh tracks the real visible viewport instead. */
     height: 100vh;
+    height: 100dvh;
     z-index: 10;
 }
 
@@ -521,6 +525,7 @@ h1, h2, h3, h4, h5, h6 {
 .day-highlights-modal {
     width: min(620px, calc(100vw - 2rem));
     max-height: min(760px, calc(100vh - 2rem));
+    max-height: min(760px, calc(100dvh - 2rem));
     overflow-y: auto;
 }
 
@@ -1007,6 +1012,34 @@ label {
     font-size: 0.95rem;
 }
 
+.delivery-col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    font-size: 0.8rem;
+}
+.delivery-col-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+}
+
+.abbr-label { display: none; }
+
+/* Column-visibility toggles: hiding a platform hides both its header and every data cell in that
+   column, addressed purely by position since the th/td generation happen in different places
+   (static HTML header vs. JS-rendered rows) and keeping them in sync via nth-child is simpler and
+   more robust than threading a matching class through every generated <td>. */
+#delivery-table.hide-col-cash th:nth-child(3), #delivery-table.hide-col-cash td:nth-child(3),
+#delivery-table.hide-col-doordash th:nth-child(4), #delivery-table.hide-col-doordash td:nth-child(4),
+#delivery-table.hide-col-grubhub th:nth-child(5), #delivery-table.hide-col-grubhub td:nth-child(5),
+#delivery-table.hide-col-ubereats th:nth-child(6), #delivery-table.hide-col-ubereats td:nth-child(6) {
+    display: none;
+}
+
 .delivery-table input {
     background: transparent;
     border: 1px solid transparent;
@@ -1259,6 +1292,14 @@ label {
     padding: 2.25rem;
     width: 90%;
     max-width: 500px;
+    /* Without an explicit max-height + overflow, the dialog's own box just grows to fit its
+       content (native <dialog> has no default scroll clamp). On iOS, once the on-screen keyboard
+       shrinks the visual viewport, an oversized dialog has nowhere to scroll internally, so touch
+       drags fall through to the page behind it instead. dvh tracks the keyboard-shrunk viewport. */
+    max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
     color: var(--text-primary);
     outline: none;
     transition: opacity 0.3s ease, transform 0.3s ease;
@@ -1302,6 +1343,28 @@ label {
     font-weight: 600;
     text-align: center;
     padding: 1rem;
+}
+
+.gig-entry-ops {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+}
+
+.gig-op-btn {
+    padding: 0.75rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+    font-family: var(--font-heading);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.gig-op-btn:active {
+    background: rgba(99, 102, 241, 0.25);
 }
 
 @media (max-width: 900px) {
@@ -1510,9 +1573,12 @@ label {
         align-items: center;
         justify-content: center;
         position: fixed;
-        top: 1rem;
-        left: 1rem;
-        z-index: 30;
+        top: calc(1rem + env(safe-area-inset-top, 0px));
+        left: calc(1rem + env(safe-area-inset-left, 0px));
+        /* Several in-page sticky headers (.main-sticky-dashboard, .cc-sticky-dashboard, etc.) use
+           z-index up to 50 and were painting over this fixed button once scrolled into view, making
+           it disappear behind page content instead of floating above everything as intended. */
+        z-index: 501;
         width: 44px;
         height: 44px;
         border-radius: var(--radius-md);
@@ -1529,8 +1595,8 @@ label {
         align-items: center;
         justify-content: center;
         position: absolute;
-        top: 1rem;
-        right: 1rem;
+        top: calc(1rem + env(safe-area-inset-top, 0px));
+        right: calc(1rem + env(safe-area-inset-right, 0px));
         width: 36px;
         height: 36px;
         border-radius: var(--radius-md);
@@ -1553,6 +1619,8 @@ label {
         box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
+        padding-top: calc(2rem + env(safe-area-inset-top, 0px));
+        padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
     }
 
     .app-sidebar.mobile-open {
@@ -1579,7 +1647,8 @@ label {
     .app-main {
         margin-left: 0;
         padding: 1.5rem;
-        padding-top: 4.5rem;
+        padding-top: calc(4.5rem + env(safe-area-inset-top, 0px));
+        padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
         max-width: 100vw;
         overflow-x: hidden;
     }
@@ -2007,6 +2076,17 @@ body.maximized-calendar .day-transaction-item {
     gap: 0.35rem;
 }
 
+/* Readonly (mobile) gig fields are tap-to-open only; let the tap land on the wrapper div
+   instead of the textarea, since iOS eats the first tap on a readonly field for text
+   selection instead of firing click. */
+.gig-cell-content:has(.gig-input[readonly]) {
+    cursor: pointer;
+}
+
+.gig-cell-content .gig-input[readonly] {
+    pointer-events: none;
+}
+
 .gig-input, .gig-budget-input, .gig-off-day-input {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--glass-border);
@@ -2137,6 +2217,8 @@ body.maximized-calendar .day-transaction-item {
     padding: 0.5rem 1.25rem 1.25rem;
     border-top: 1px solid var(--glass-border);
     background: rgba(0, 0, 0, 0.15);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* Highlights today's date cell across all calendars */
@@ -2254,6 +2336,118 @@ body.maximized-calendar .day-transaction-item {
 @keyframes app-busy-spin {
     to { transform: rotate(360deg); }
 }
+/* ===== MOBILE POLISH PASS (July 2026) ===== */
+@media (max-width: 900px) {
+    /* Broad safety net: let any card scroll horizontally instead of clipping/pushing content off
+       screen with no way to reach it. Cards that don't overflow are unaffected. */
+    .glass-card {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .table-responsive {
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* table-card-header (title+subtitle block next to action buttons) squeezes both onto one flex
+       row on narrow screens, which can visually collapse into what looks like a single wrapped cell.
+       Stack title above actions instead. */
+    .table-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+    .table-card-header > div:last-child,
+    .delivery-summary-header-actions {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    /* Platform breakdown + Weekly Summary side-by-side (.delivery-stats) doesn't stack on its own,
+       squeezing Weekly Summary into a sliver that clips its own content off-screen. */
+    .delivery-stats {
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    /* Weekly delivery summary: 2-column grid squeezed each "Week N ($x / $y goal)" entry into half
+       the screen width with no way to scroll to the clipped part. One column instead. */
+    .weekly-totals-list {
+        grid-template-columns: 1fr;
+    }
+    .weekly-total-item {
+        flex-wrap: wrap;
+    }
+
+    /* Delivery earnings log: abbreviate platform headers (Cash/DoorDash/GrubHub/UberEats -> C/DD/GH/UE)
+       and hide Budget/Difference/Off-Day Reason by default — still reachable via horizontal scroll
+       within .table-responsive, just not fighting for space up front on a phone. */
+    .full-label { display: none; }
+    .abbr-label { display: inline; }
+    /* The per-cell "no earnings" checkbox was widening every platform column just to fit next to the
+       amount field. It's readonly-and-tap-to-edit on mobile anyway (opens the entry modal), which now
+       has its own "No earnings today" checkbox — so the inline one is redundant screen-width here. */
+    #delivery-table .gig-no-earn {
+        display: none;
+    }
+    #delivery-table th:nth-child(8), #delivery-table td:nth-child(8),
+    #delivery-table th:nth-child(9), #delivery-table td:nth-child(9),
+    #delivery-table th:nth-child(10), #delivery-table td:nth-child(10) {
+        display: none;
+    }
+
+    /* Savings ledger: keep Date/Description/Amount/Running Balance/Actions, hide Type (redundant with
+       the amount's sign/color anyway). */
+    #savings-list-view .data-table th:nth-child(3),
+    #savings-list-view .data-table td:nth-child(3) {
+        display: none;
+    }
+
+    /* Joint/Personal bills (Bill Splitter): keep Item, Source, Cycle, Budget, Actions — hide
+       Classification, Day, Actual Payment, Paid From, Recurring. This is the amount actually coming
+       out for that cycle, not the full per-payer breakdown, which needs the desktop view to read well. */
+    #joint-expenses-card .data-table th:nth-child(2), #joint-expenses-card .data-table td:nth-child(2),
+    #joint-expenses-card .data-table th:nth-child(5), #joint-expenses-card .data-table td:nth-child(5),
+    #joint-expenses-card .data-table th:nth-child(7), #joint-expenses-card .data-table td:nth-child(7),
+    #joint-expenses-card .data-table th:nth-child(8), #joint-expenses-card .data-table td:nth-child(8),
+    #joint-expenses-card .data-table th:nth-child(9), #joint-expenses-card .data-table td:nth-child(9) {
+        display: none;
+    }
+
+    /* Personal Allocations table is already a reasonable column count — just tighten padding so more
+       fits on screen without needing to hide anything. */
+    #personal-allocations-card .data-table th,
+    #personal-allocations-card .data-table td {
+        padding: 0.5rem 0.6rem;
+        font-size: 0.85rem;
+    }
+
+    /* Month summary header (📁 January + Budget/Actual/Diff) squeezed both onto one flex row, causing
+       the month name and the totals to visually overlap on a phone. Stack instead. */
+    .month-summary-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.4rem;
+    }
+    .month-totals {
+        margin-left: 0;
+        margin-right: 0;
+        flex-wrap: wrap;
+        gap: 0.9rem;
+    }
+
+    /* .delivery-year-summary-card's table-card-header is position: sticky, designed around its
+       compact single-row desktop layout. On mobile it now spans a wrapped title, subtitle,
+       abbreviated totals, and a wrapped button row — tall enough that while sticky it permanently
+       covers whatever content is directly beneath it, most visibly January's block (the first one,
+       with nothing above it to scroll past first). It was never actually missing data, just hidden
+       under this. Drop the sticky behavior on mobile rather than fight its height. */
+    .delivery-year-summary-card .table-card-header {
+        position: static;
+        margin: 0 0 1rem 0;
+        padding: 0;
+    }
+}
+
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2308,6 +2502,7 @@ body.maximized-calendar .day-transaction-item {
                 <button class="action-btn solid-btn" id="btn-export-data">Backup JSON</button>
                 <button class="action-btn outline-btn" id="btn-trigger-import">Import JSON</button>
                 <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                <div id="build-version-marker" style="text-align:center; font-size:0.7rem; color:var(--text-secondary); opacity:0.5; margin-top:0.5rem;"></div>
             </div>
         </aside>
 
@@ -2484,7 +2679,7 @@ body.maximized-calendar .day-transaction-item {
                                         <label for="trans-amount" id="trans-amount-label">Amount</label>
                                         <div class="input-prefix-wrapper">
                                             <span class="input-prefix">$</span>
-                                            <input type="number" step="0.01" id="trans-amount" placeholder="Negative for expenses" required class="custom-input">
+                                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="trans-amount" placeholder="Negative for expenses" required class="custom-input">
                                         </div>
                                         <small id="trans-amount-hint" class="hidden">Negative moves money from Personal into Savings; positive moves money from Savings into Personal.</small>
                                     </div>
@@ -2494,10 +2689,10 @@ body.maximized-calendar .day-transaction-item {
                                             <div class="form-group hidden" id="contribution-recipient-group"><label for="contribution-recipient">Withdrawal To</label><select id="contribution-recipient" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div>
                                         </div>
                                         <div class="form-row" id="contribution-deposit-fields">
-                                            <div class="form-group"><label for="trans-jason-amount">Jason Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="trans-jason-amount" placeholder="Jason's deposit" class="custom-input"></div></div>
-                                            <div class="form-group"><label for="trans-asia-amount">Asia Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="trans-asia-amount" placeholder="Asia's deposit" class="custom-input"></div></div>
+                                            <div class="form-group"><label for="trans-jason-amount">Jason Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="trans-jason-amount" placeholder="Jason's deposit" class="custom-input"></div></div>
+                                            <div class="form-group"><label for="trans-asia-amount">Asia Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="trans-asia-amount" placeholder="Asia's deposit" class="custom-input"></div></div>
                                         </div>
-                                        <div class="form-group hidden" id="contribution-withdrawal-field"><label for="contribution-withdrawal-amount">Withdrawal Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="contribution-withdrawal-amount" class="custom-input"></div></div>
+                                        <div class="form-group hidden" id="contribution-withdrawal-field"><label for="contribution-withdrawal-amount">Withdrawal Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="contribution-withdrawal-amount" class="custom-input"></div></div>
                                     </div>
                                 </div>
                                 <button type="submit" class="action-btn solid-btn full-width" id="btn-add-transaction">Add Transaction</button>
@@ -2711,16 +2906,23 @@ body.maximized-calendar .day-transaction-item {
                                     <button class="action-btn small-btn outline-btn" id="btn-next-delivery-week">Next Week &gt;</button>
                                 </div>
                             </div>
+                            <div class="delivery-col-toggles" id="delivery-col-toggles">
+                                <span class="muted-text" style="font-size:0.78rem;">Show columns:</span>
+                                <label><input type="checkbox" class="delivery-col-toggle" data-col="cash" checked> Cash</label>
+                                <label><input type="checkbox" class="delivery-col-toggle" data-col="doordash" checked> DoorDash</label>
+                                <label><input type="checkbox" class="delivery-col-toggle" data-col="grubhub" checked> Grub Hub</label>
+                                <label><input type="checkbox" class="delivery-col-toggle" data-col="ubereats" checked> Uber Eats</label>
+                            </div>
                             <div class="table-responsive">
-                                <table class="data-table delivery-table">
+                                <table class="data-table delivery-table" id="delivery-table">
                                     <thead>
                                         <tr>
                                             <th>Date</th>
                                             <th>Day</th>
-                                            <th>Cash ($)</th>
-                                            <th>Door Dash ($)</th>
-                                            <th>Grub Hub ($)</th>
-                                            <th>Uber Eats ($)</th>
+                                            <th><span class="full-label">Cash ($)</span><span class="abbr-label">C</span></th>
+                                            <th><span class="full-label">Door Dash ($)</span><span class="abbr-label">DD</span></th>
+                                            <th><span class="full-label">Grub Hub ($)</span><span class="abbr-label">GH</span></th>
+                                            <th><span class="full-label">Uber Eats ($)</span><span class="abbr-label">UE</span></th>
                                             <th>Daily Total</th>
                                             <th>Budget ($)</th>
                                             <th>Difference ($)</th>
@@ -2739,8 +2941,8 @@ body.maximized-calendar .day-transaction-item {
                     <div class="glass-card delivery-year-summary-card">
                         <div class="table-card-header">
                             <div>
-                                <h3 id="delivery-year-summary-title">Yearly Weekly Delivery Summary</h3>
-                                <p class="muted-text">Weekly actual earnings vs. budgeted earnings for the full year.</p>
+                                <h3 id="delivery-year-summary-title">Weekly Delivery Summary</h3>
+                                <p class="muted-text" id="delivery-year-summary-subtitle">Actual vs. budgeted earnings for the year.</p>
                                 <div id="delivery-year-summary-totals-header"></div>
                             </div>
                             <div class="delivery-summary-header-actions" style="display: flex; gap: 0.5rem; align-items: center;">
@@ -2802,7 +3004,7 @@ body.maximized-calendar .day-transaction-item {
                                 <div class="form-group"><label for="savings-entry-type">Entry Type</label><select id="savings-entry-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
                                 <div class="form-group"><label for="savings-transfer-date">Date</label><input type="date" id="savings-transfer-date" required class="custom-input"></div>
                                 <div class="form-group"><label for="savings-transfer-description">Description</label><input type="text" id="savings-transfer-description" required class="custom-input" placeholder="e.g. Emergency fund transfer"></div>
-                                <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="Positive in, negative out"></div><small id="savings-entry-hint">Positive adds to Savings and subtracts from Personal. Negative does the reverse.</small></div>
+                                <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="Positive in, negative out"></div><small id="savings-entry-hint">Positive adds to Savings and subtracts from Personal. Negative does the reverse.</small></div>
                                 <button type="submit" class="action-btn solid-btn full-width" id="btn-add-savings-entry">Add Savings Transfer</button>
                             </form>
                         </div>
@@ -3036,7 +3238,7 @@ body.maximized-calendar .day-transaction-item {
                                         <label for="cc-trans-amount">Amount</label>
                                         <div class="input-prefix-wrapper">
                                             <span class="input-prefix">$</span>
-                                            <input type="number" step="0.01" min="0.01" id="cc-trans-amount" placeholder="Amount (positive)" required class="custom-input">
+                                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0.01" id="cc-trans-amount" placeholder="Amount (positive)" required class="custom-input">
                                         </div>
                                     </div>
                                     <div class="form-row">
@@ -3059,7 +3261,7 @@ body.maximized-calendar .day-transaction-item {
                                         </div>
                                         <div class="form-group hidden" id="cc-recurring-day-group" style="margin:0; flex:1;">
                                             <label for="cc-trans-recurring-day" style="font-size:0.75rem;">Charge day each month</label>
-                                            <input type="number" min="1" max="31" id="cc-trans-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
+                                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="cc-trans-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
                                         </div>
                                     </div>
                                     <button type="submit" class="action-btn solid-btn full-width">Add Charge</button>
@@ -3085,7 +3287,7 @@ body.maximized-calendar .day-transaction-item {
                                 <input type="date" id="cc-list-add-date" required class="custom-input" aria-label="Transaction date">
                                 <input type="text" id="cc-list-add-merchant" autocomplete="off" class="custom-input" placeholder="Merchant" aria-label="Merchant">
                                 <input type="text" id="cc-list-add-desc" autocomplete="off" required class="custom-input" placeholder="Description" aria-label="Description">
-                                <input type="number" step="0.01" min="0.01" id="cc-list-add-amount" required class="custom-input" placeholder="Amount" aria-label="Transaction amount">
+                                <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0.01" id="cc-list-add-amount" required class="custom-input" placeholder="Amount" aria-label="Transaction amount">
                                 <select id="cc-list-add-kind" class="custom-select" aria-label="Transaction type">
                                     <option value="charge">Charge</option>
                                     <option value="payment">Payment</option>
@@ -3126,43 +3328,44 @@ body.maximized-calendar .day-transaction-item {
                 <div id="view-sync" class="tab-view">
                     <div class="sync-layout glass-card">
                         <h3>Google Sheets Synchronization</h3>
-                        <p class="muted-text">This web application is configured to run fully offline. When you are ready to sync your data with Google Sheets, you can configure the API parameters below.</p>
-                        
+                        <p class="muted-text">Paste in the Web App URL from your deployed Apps Script (the <code>/exec</code> link). Sections are wired up to real per-row sync one at a time — only the sections listed under "Section Sync" below actually talk to the Sheet; the rest are still local-only.</p>
+
                         <form id="sync-settings-form" class="sync-form">
                             <div class="form-group">
-                                <label for="sheet-id">Google Spreadsheet ID</label>
-                                <input type="text" id="sheet-id" placeholder="17PpBOFNMRUHLd1GVXWRijSJqEbRtR57ZofRFi_UZV9s" class="custom-input">
+                                <label for="sync-webapp-url">Apps Script Web App URL</label>
+                                <input type="text" id="sync-webapp-url" placeholder="https://script.google.com/macros/s/AKfycb.../exec" class="custom-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
                             </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="client-id">OAuth Client ID</label>
-                                    <input type="text" id="client-id" placeholder="your-client-id.apps.googleusercontent.com" class="custom-input">
-                                </div>
-                                <div class="form-group">
-                                    <label for="api-key">API Key</label>
-                                    <input type="password" id="api-key" placeholder="AIzaSy..." class="custom-input">
-                                </div>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label class="checkbox-container">
-                                    <input type="checkbox" id="sync-on-edit">
-                                    <span class="checkmark"></span>
-                                    Enable real-time dynamic sync (updates Google Sheet cells on change)
-                                </label>
-                            </div>
-                            
+
                             <div class="button-row">
                                 <button type="button" class="action-btn outline-btn" id="btn-test-connection">Test Connection</button>
-                                <button type="submit" class="action-btn solid-btn">Save Sync Settings</button>
+                                <button type="submit" class="action-btn solid-btn">Save Web App URL</button>
                             </div>
                         </form>
+
+                        <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
+                            <h4 style="margin-bottom:1rem;">Section Sync</h4>
+                            <div class="button-row" id="sync-section-buttons">
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-delivery-earnings">Push Delivery Earnings</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-savings-tracker">Push Savings Tracker</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-loans">Push Loans</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-credit-cards">Push Credit Cards</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-bill-tracker">Push Bill Tracker</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-dashboard">Push Dashboard</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-bill-splitter">Push Bill Splitter</button>
+                                <button type="button" class="action-btn outline-btn" id="btn-sync-settings">Push Settings</button>
+                            </div>
+                        </div>
+
+                        <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
+                            <h4 style="margin-bottom:0.5rem;">Danger Zone</h4>
+                            <p class="muted-text" style="margin-bottom:1rem;">Wipes all local app data (everything in this browser/device) and reloads to a blank slate. Does NOT touch the Google Sheet. Use this before importing a JSON backup if you want to start clean — make sure you have that backup file first, this cannot be undone.</p>
+                            <button type="button" class="action-btn danger-btn" id="btn-clear-local-data">Clear All Local Data</button>
+                        </div>
 
                         <div class="sync-logs-box">
                             <h4>Local Sync Engine Output Log</h4>
                             <div class="logs-container" id="logs-container">
-                                <div class="log-entry system">[SYSTEM]: Sync engine active. Local modifications are indexed. Ready to connect to Google Sheets.</div>
-                                <div class="log-entry info">[INFO]: Local data version 2027.0.1 successfully initialized.</div>
+                                <div class="log-entry system">[SYSTEM]: Sync engine ready. Enter a Web App URL above and test the connection.</div>
                             </div>
                         </div>
                     </div>
@@ -3201,7 +3404,7 @@ body.maximized-calendar .day-transaction-item {
                     <label for="delivery-budget-amount">Daily Budget Goal</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" min="0" step="0.01" id="delivery-budget-amount" class="custom-input" value="0">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="delivery-budget-amount" class="custom-input" value="0">
                     </div>
                 </div>
                 <div class="form-group" id="delivery-bulk-reason-group" style="display:none;">
@@ -3236,7 +3439,19 @@ body.maximized-calendar .day-transaction-item {
             <p class="muted-text" id="gig-entry-subtitle"></p>
             <div class="form-group">
                 <label for="gig-entry-input">Amount (numbers and + - * / only)</label>
-                <input type="text" id="gig-entry-input" class="custom-input gig-entry-input" inputmode="decimal" autocomplete="off" placeholder="$0.00">
+                <input type="text" id="gig-entry-input" class="custom-input gig-entry-input" inputmode="decimal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="$0.00">
+                <!-- The decimal keypad iOS/Android show for inputmode="decimal" has no +, -, *, / keys,
+                     so formula entry (e.g. "50+25") was impossible to type on a phone. These insert the
+                     operator at the cursor position instead of requiring a keyboard switch. -->
+                <div class="gig-entry-ops" id="gig-entry-ops">
+                    <button type="button" class="gig-op-btn" data-op="+">+</button>
+                    <button type="button" class="gig-op-btn" data-op="-">−</button>
+                    <button type="button" class="gig-op-btn" data-op="*">×</button>
+                    <button type="button" class="gig-op-btn" data-op="/">÷</button>
+                </div>
+            </div>
+            <div class="form-group gig-entry-no-earn-group">
+                <label><input type="checkbox" id="gig-entry-no-earn"> No earnings today (mark as $0.00)</label>
             </div>
             <div class="modal-buttons">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-gig-entry">Cancel</button>
@@ -3251,7 +3466,7 @@ body.maximized-calendar .day-transaction-item {
             <h3>Add Manual Planned Transfer</h3>
             <div class="form-row"><div class="form-group"><label for="manual-transfer-date">Planned Transfer Date</label><input type="date" id="manual-transfer-date" class="custom-input" required></div><div class="form-group"><label for="manual-transfer-person">Transferred By</label><select id="manual-transfer-person" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div></div>
             <div class="form-group"><label for="manual-transfer-description">Description</label><input type="text" id="manual-transfer-description" class="custom-input" placeholder="e.g. Extra paycheck contribution" required></div>
-            <div class="form-group"><label for="manual-transfer-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0.01" step="0.01" id="manual-transfer-amount" class="custom-input" required></div></div>
+            <div class="form-group"><label for="manual-transfer-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0.01" step="0.01" id="manual-transfer-amount" class="custom-input" required></div></div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-manual-transfer">Cancel</button><button type="submit" class="action-btn solid-btn">Add Planned Transfer</button></div>
         </form>
     </dialog>
@@ -3307,7 +3522,7 @@ body.maximized-calendar .day-transaction-item {
                 <div class="form-group"><label for="bill-cycle">Transfer Cycle</label><select id="bill-cycle" class="custom-select"><option value="1st">1st of Month</option><option value="15th">15th of Month</option><option value="both">Split Between 1st &amp; 15th</option></select></div>
             </div>
             <div class="form-row">
-                <div class="form-group" id="bill-due-day-group"><label for="bill-due-day">Charge Day of Month</label><input type="number" min="1" max="31" id="bill-due-day" required class="custom-input" value="1"></div>
+                <div class="form-group" id="bill-due-day-group"><label for="bill-due-day">Charge Day of Month</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="bill-due-day" required class="custom-input" value="1"></div>
                 <div class="form-group" id="bill-payment-source-group"><label for="bill-payment-source">Payment Source</label><select id="bill-payment-source" class="custom-select"><option value="jointChecking">Joint Checking Account</option><option value="personalChecking">Personal Checking Account</option><optgroup label="Credit Cards" id="bill-source-cc-optgroup"></optgroup></select></div>
                 <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-recurring"> Recurring monthly charge</label></div>
             </div>
@@ -3318,9 +3533,9 @@ body.maximized-calendar .day-transaction-item {
             <div class="form-row">
                 <div class="form-group"><label for="bill-budget-frequency">Budget Method</label><select id="bill-budget-frequency" class="custom-select"><option value="charge">Budget When Charged</option><option value="monthly">Spread Evenly Each Month</option></select></div><div class="form-group"><label for="bill-charge-frequency">Subscription Frequency</label><select id="bill-charge-frequency" class="custom-select"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="biweekly">Every 2 Weeks</option><option value="fourweekly">Every 4 Weeks</option><option value="quarterly">Every 3 Months</option><option value="annual">Annually</option></select></div>
                 <div class="form-group hidden" id="bill-frequency-start-group"><label for="bill-frequency-start">Subscription Start Date</label><input type="date" id="bill-frequency-start" class="custom-input"><small class="muted-text">Anchors weekly, bi-weekly, quarterly, and annual schedules.</small></div><div class="form-group hidden" id="bill-weekly-day-group"><label for="bill-weekly-day">Legacy Weekly Day</label><select id="bill-weekly-day" class="custom-select"><option value="6">Saturday</option><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option></select></div>
-                <div class="form-group"><label for="bill-amount-field" id="bill-budget-amount-label">Transfer Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0" id="bill-amount-field" required class="custom-input"></div><small id="bill-budget-preview" class="muted-text"></small></div>
+                <div class="form-group"><label for="bill-amount-field" id="bill-budget-amount-label">Transfer Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="bill-amount-field" required class="custom-input"></div><small id="bill-budget-preview" class="muted-text"></small></div>
                 <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-same-payment" checked> Actual payment is the same</label></div>
-                <div class="form-group hidden" id="bill-payment-amount-group"><label for="bill-payment-amount" id="bill-payment-amount-label">Actual Payment Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0" id="bill-payment-amount" class="custom-input"></div></div>
+                <div class="form-group hidden" id="bill-payment-amount-group"><label for="bill-payment-amount" id="bill-payment-amount-label">Actual Payment Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="bill-payment-amount" class="custom-input"></div></div>
             </div>
             <p class="muted-text" id="bill-routing-help">Actual bills post to the selected account calendar. Transfer-only items affect the split calculation but do not post to a ledger.</p>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-bill">Cancel</button><button type="submit" class="action-btn solid-btn" id="btn-save-bill">Save Item</button></div>
@@ -3352,14 +3567,14 @@ body.maximized-calendar .day-transaction-item {
                     <label class="checkbox-label"><input type="checkbox" id="alloc-jason-enabled"> Jason</label>
                     <div class="input-prefix-wrapper hidden" id="alloc-jason-group">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="alloc-jason" class="custom-input" placeholder="Allocation amount">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-jason" class="custom-input" placeholder="Allocation amount">
                     </div>
                 </div>
                 <div class="form-group">
                     <label class="checkbox-label"><input type="checkbox" id="alloc-asia-enabled"> Asia</label>
                     <div class="input-prefix-wrapper hidden" id="alloc-asia-group">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="alloc-asia" class="custom-input" placeholder="Allocation amount">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-asia" class="custom-input" placeholder="Allocation amount">
                     </div>
                 </div>
             </div>
@@ -3367,8 +3582,8 @@ body.maximized-calendar .day-transaction-item {
                 <label class="checkbox-label"><input type="checkbox" id="alloc-offset-enabled"> Add an offset debit in the following cycle</label>
             </div>
             <div class="form-row hidden" id="alloc-offset-fields">
-                <div class="form-group"><label for="alloc-offset-jason">Following Cycle — Jason</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="alloc-offset-jason" class="custom-input" placeholder="Leave blank for no change"></div></div>
-                <div class="form-group"><label for="alloc-offset-asia">Following Cycle — Asia</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="alloc-offset-asia" class="custom-input" placeholder="Leave blank for no change"></div></div>
+                <div class="form-group"><label for="alloc-offset-jason">Following Cycle — Jason</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-offset-jason" class="custom-input" placeholder="Leave blank for no change"></div></div>
+                <div class="form-group"><label for="alloc-offset-asia">Following Cycle — Asia</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-offset-asia" class="custom-input" placeholder="Leave blank for no change"></div></div>
             </div>
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" id="alloc-recurring"> Recurring charge</label>
@@ -3401,8 +3616,8 @@ body.maximized-calendar .day-transaction-item {
             <h3 id="seasonal-modal-title">Add Seasonal Expense</h3><input type="hidden" id="seasonal-edit-id">
             <div class="form-group"><label for="seasonal-name">Expense Name</label><input type="text" id="seasonal-name" required class="custom-input" placeholder="e.g. State Fair, Thanksgiving, Christmas"></div>
             <div class="form-row">
-                <div class="form-group"><label for="seasonal-amount">Total Budget</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="seasonal-amount" required class="custom-input"></div></div>
-                <div class="form-group"><label for="seasonal-cycles">Total Number of Billing Cycles</label><input type="number" min="1" max="48" id="seasonal-cycles" required class="custom-input" value="4"><small class="muted-text">The total is divided evenly across this many 1st/15th cycles.</small></div>
+                <div class="form-group"><label for="seasonal-amount">Total Budget</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="seasonal-amount" required class="custom-input"></div></div>
+                <div class="form-group"><label for="seasonal-cycles">Total Number of Billing Cycles</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="48" id="seasonal-cycles" required class="custom-input" value="4"><small class="muted-text">The total is divided evenly across this many 1st/15th cycles.</small></div>
             </div>
             <div class="form-row">
                 <div class="form-group"><label for="seasonal-start-date">Start Date</label><input type="date" id="seasonal-start-date" required class="custom-input"><small class="muted-text">First charge date.</small></div>
@@ -3421,7 +3636,7 @@ body.maximized-calendar .day-transaction-item {
             </div>
             <div id="seasonal-charge-group">
                 <div class="form-row">
-                    <div class="form-group"><label for="seasonal-charge-amount">Charge Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" step="0.01" id="seasonal-charge-amount" class="custom-input"></div></div>
+                    <div class="form-group"><label for="seasonal-charge-amount">Charge Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="seasonal-charge-amount" class="custom-input"></div></div>
                     <div class="form-group"><label for="seasonal-charge-date">Charge Date</label><input type="date" id="seasonal-charge-date" class="custom-input"><small class="muted-text">Posts this date each occurrence (year/quarter/month kept, per Frequency).</small></div>
                 </div>
                 <div class="form-group"><label for="seasonal-charge-source">Charge Paid From</label><select id="seasonal-charge-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option></select></div>
@@ -3455,14 +3670,14 @@ body.maximized-calendar .day-transaction-item {
                     <label for="loan-start-bal">Starting Balance</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="loan-start-bal" required class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-start-bal" required class="custom-input">
                     </div>
                 </div>
                 <div class="form-group">
                     <label for="loan-current-bal">Current Balance</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="loan-current-bal" required class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-current-bal" required class="custom-input">
                     </div>
                 </div>
             </div>
@@ -3470,15 +3685,15 @@ body.maximized-calendar .day-transaction-item {
             <div class="form-row">
                 <div class="form-group">
                     <label for="loan-interest-rate">Interest Rate (APR %)</label>
-                    <input type="number" step="0.01" id="loan-interest-rate" required class="custom-input" value="0">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-interest-rate" required class="custom-input" value="0">
                 </div>
                 <div class="form-group">
                     <label for="loan-due-day">Payment Due Day</label>
-                    <input type="number" min="1" max="31" id="loan-due-day" required class="custom-input" value="15">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="loan-due-day" required class="custom-input" value="15">
                 </div>
                 <div class="form-group" id="loan-statement-day-group">
                     <label for="loan-statement-day">Statement Closing Day</label>
-                    <input type="number" min="1" max="31" id="loan-statement-day" class="custom-input" value="1" placeholder="Day of month">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="loan-statement-day" class="custom-input" value="1" placeholder="Day of month">
                 </div>
             </div>
             
@@ -3487,14 +3702,14 @@ body.maximized-calendar .day-transaction-item {
                     <label for="loan-monthly-min">Monthly Minimum / Installment Amount</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="loan-monthly-min" required class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-monthly-min" required class="custom-input">
                     </div>
                 </div>
                 <div class="form-group" id="loan-limit-group">
                     <label for="loan-limit-field">Credit Limit</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="loan-limit-field" class="custom-input" value="5000">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-limit-field" class="custom-input" value="5000">
                     </div>
                 </div>
                 <div class="form-group hidden" id="loan-charge-card-group">
@@ -3526,21 +3741,21 @@ body.maximized-calendar .day-transaction-item {
                         <label for="loan-mortgage-escrow">Monthly Escrow Amount</label>
                         <div class="input-prefix-wrapper">
                             <span class="input-prefix">$</span>
-                            <input type="number" step="0.01" id="loan-mortgage-escrow" class="custom-input" value="0">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-mortgage-escrow" class="custom-input" value="0">
                         </div>
                     </div>
                     <div class="form-group">
                         <label for="loan-mortgage-pi">Monthly Principal & Interest (P&I)</label>
                         <div class="input-prefix-wrapper">
                             <span class="input-prefix">$</span>
-                            <input type="number" step="0.01" id="loan-mortgage-pi" class="custom-input" value="0">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-mortgage-pi" class="custom-input" value="0">
                         </div>
                     </div>
                     <div class="form-group">
                         <label for="loan-mortgage-extra">Additional P&I Payment</label>
                         <div class="input-prefix-wrapper">
                             <span class="input-prefix">$</span>
-                            <input type="number" step="0.01" id="loan-mortgage-extra" class="custom-input" value="0">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-mortgage-extra" class="custom-input" value="0">
                         </div>
                     </div>
                 </div>
@@ -3555,7 +3770,7 @@ body.maximized-calendar .day-transaction-item {
                 <div class="form-row hidden" id="loan-purchase-promo-fields">
                     <div class="form-group">
                         <label for="loan-purchase-promo-rate">Promo Purchase APR (%)</label>
-                        <input type="number" step="0.1" id="loan-purchase-promo-rate" value="0" class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.1" id="loan-purchase-promo-rate" value="0" class="custom-input">
                     </div>
                     <div class="form-group">
                         <label for="loan-purchase-promo-exp">Promo Expiration Date</label>
@@ -3570,15 +3785,15 @@ body.maximized-calendar .day-transaction-item {
                 <div style="background:rgba(255,255,255,.02); padding:.75rem; border:1px dashed var(--glass-border); border-radius:6px;">
                     <div class="form-row">
                         <div class="form-group"><label>Plan Name</label><input id="existing-plan-name" class="custom-input" placeholder="e.g. Laptop plan"></div>
-                        <div class="form-group"><label>Original Amount</label><input type="number" step="0.01" id="existing-plan-original" class="custom-input"></div>
-                        <div class="form-group"><label>Current Balance</label><input type="number" step="0.01" id="existing-plan-current" class="custom-input"></div>
+                        <div class="form-group"><label>Original Amount</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-original" class="custom-input"></div>
+                        <div class="form-group"><label>Current Balance</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-current" class="custom-input"></div>
                     </div>
                     <div class="form-row" style="margin-top:.75rem;">
                         <div class="form-group"><label>Activation Date</label><input type="date" id="existing-plan-activated" class="custom-input"></div>
-                        <div class="form-group"><label>Plan Length (months)</label><input type="number" min="1" id="existing-plan-length" class="custom-input"></div>
-                        <div class="form-group"><label>Remaining Payments</label><input type="number" min="0" id="existing-plan-remaining-payments" class="custom-input"></div>
-                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" step="0.01" id="existing-plan-payment" class="custom-input"></div>
-                        <div class="form-group"><label>Monthly Fee</label><input type="number" step="0.01" id="existing-plan-fee" class="custom-input" value="0"></div>
+                        <div class="form-group"><label>Plan Length (months)</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" id="existing-plan-length" class="custom-input"></div>
+                        <div class="form-group"><label>Remaining Payments</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" id="existing-plan-remaining-payments" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-payment" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Fee</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-fee" class="custom-input" value="0"></div>
                     </div>
                     <div style="display:flex; gap:.5rem; margin-top:.75rem;">
                         <button type="button" id="btn-add-existing-plan" class="action-btn small-btn solid-btn">Add Existing Plan</button>
@@ -3601,7 +3816,7 @@ body.maximized-calendar .day-transaction-item {
                             <label id="xfer-amount-label" style="font-size:0.75rem;">Transfer Amount</label>
                             <div class="input-prefix-wrapper">
                                 <span class="input-prefix" style="font-size:0.75rem;">$</span>
-                                <input type="number" step="0.01" id="xfer-amount" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                                <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="xfer-amount" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
                             </div>
                         </div>
                         <div class="form-group" id="xfer-source-group">
@@ -3612,14 +3827,14 @@ body.maximized-calendar .day-transaction-item {
                         </div>
                         <div class="form-group" id="xfer-fee-group">
                             <label style="font-size:0.75rem;">Transfer Fee (%)</label>
-                            <input type="number" step="0.1" id="xfer-fee-pct" value="3.0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.1" id="xfer-fee-pct" value="3.0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
                         </div>
                     </div>
-                    <div class="form-group hidden" id="xfer-current-group"><label style="font-size:0.75rem;">Current Transfer Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="xfer-current-balance" class="custom-input"></div></div>
+                    <div class="form-group hidden" id="xfer-current-group"><label style="font-size:0.75rem;">Current Transfer Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="xfer-current-balance" class="custom-input"></div></div>
                     <div class="form-row">
                         <div class="form-group">
                             <label style="font-size:0.75rem;">Promo APR Rate (%)</label>
-                            <input type="number" step="0.1" id="xfer-promo-rate" value="0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.1" id="xfer-promo-rate" value="0" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
                         </div>
                         <div class="form-group">
                             <label style="font-size:0.75rem;">Promo Expiration Date</label>
@@ -3690,7 +3905,7 @@ body.maximized-calendar .day-transaction-item {
                 <label for="edit-tx-amount">Amount</label>
                 <div class="input-prefix-wrapper">
                     <span class="input-prefix">$</span>
-                    <input type="number" step="0.01" id="edit-tx-amount" class="custom-input">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-tx-amount" class="custom-input">
                 </div>
                 <span class="input-hint" style="font-size:0.75rem; color:var(--text-muted); margin-top:4px; display:block;">Use negative value for expenses, positive for income</span>
             </div>
@@ -3703,7 +3918,7 @@ body.maximized-calendar .day-transaction-item {
                 </div>
                 <div class="form-group hidden" id="edit-recurring-day-group" style="margin:0; flex:1;">
                     <label for="edit-tx-recurring-day" style="font-size:0.75rem;">Charge day each month</label>
-                    <input type="number" min="1" max="31" id="edit-tx-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="edit-tx-recurring-day" class="custom-input" style="padding:0.3rem 0.5rem; font-size:0.8rem;" placeholder="e.g. 15">
                 </div>
             </div>
             
@@ -3715,12 +3930,12 @@ body.maximized-calendar .day-transaction-item {
                 <div id="edit-payment-plan-fields" class="hidden">
                     <div class="form-row">
                         <div class="form-group"><label>Activation Date</label><input type="date" id="edit-plan-activated" class="custom-input"></div>
-                        <div class="form-group"><label>Plan Length (months)</label><input type="number" min="1" id="edit-plan-length" class="custom-input"></div>
-                        <div class="form-group"><label>Current Plan Balance</label><input type="number" step="0.01" id="edit-plan-current" class="custom-input"></div>
+                        <div class="form-group"><label>Plan Length (months)</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" id="edit-plan-length" class="custom-input"></div>
+                        <div class="form-group"><label>Current Plan Balance</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-plan-current" class="custom-input"></div>
                     </div>
                     <div class="form-row">
-                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" step="0.01" id="edit-plan-payment" class="custom-input"></div>
-                        <div class="form-group"><label>Monthly Fee</label><input type="number" step="0.01" id="edit-plan-fee" class="custom-input" value="0"></div>
+                        <div class="form-group"><label>Monthly Principal Payment</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-plan-payment" class="custom-input"></div>
+                        <div class="form-group"><label>Monthly Fee</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-plan-fee" class="custom-input" value="0"></div>
                     </div>
                 </div>
             </div>
@@ -3731,14 +3946,14 @@ body.maximized-calendar .day-transaction-item {
                     <label for="edit-tx-jason">Jason's Share</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="edit-tx-jason" class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-tx-jason" class="custom-input">
                     </div>
                 </div>
                 <div class="form-group">
                     <label for="edit-tx-asia">Asia's Share</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" id="edit-tx-asia" class="custom-input">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="edit-tx-asia" class="custom-input">
                     </div>
                 </div>
             </div>
@@ -3764,7 +3979,7 @@ body.maximized-calendar .day-transaction-item {
     <dialog id="savings-balance-dialog" class="glass-modal">
         <form id="savings-balance-form" class="detail-form">
             <h3>Savings Balance Settings</h3>
-            <div class="form-group"><label for="savings-current-amount">Starting Savings Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-current-amount" required class="custom-input"></div><small>Current balance is calculated from this amount plus completed savings activity.</small></div>
+            <div class="form-group"><label for="savings-current-amount">Starting Savings Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-current-amount" required class="custom-input"></div><small>Current balance is calculated from this amount plus completed savings activity.</small></div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-balance">Cancel</button><button type="submit" class="action-btn solid-btn">Save Starting Balance</button></div>
         </form>
     </dialog>
@@ -3775,7 +3990,7 @@ body.maximized-calendar .day-transaction-item {
             <div class="form-group"><label for="savings-edit-type">Entry Type</label><select id="savings-edit-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
             <div class="form-group"><label for="savings-edit-date">Date</label><input type="date" id="savings-edit-date" required class="custom-input"></div>
             <div class="form-group"><label for="savings-edit-description">Description</label><input type="text" id="savings-edit-description" required class="custom-input"></div>
-            <div class="form-group"><label for="savings-edit-amount">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small>Interest stays in Savings only. Transfer edits update the Personal mirror when it still exists.</small></div>
+            <div class="form-group"><label for="savings-edit-amount">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small>Interest stays in Savings only. Transfer edits update the Personal mirror when it still exists.</small></div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-edit">Cancel</button><button type="button" class="action-btn danger-btn" id="btn-delete-savings-edit" style="margin-right:auto;">Delete</button><button type="submit" class="action-btn solid-btn">Save Changes</button></div>
         </form>
     </dialog>
@@ -3826,7 +4041,7 @@ body.maximized-calendar .day-transaction-item {
                     <label for="bill-settings-estimate">Estimated Cost</label>
                     <div class="input-prefix-wrapper">
                         <span class="input-prefix">$</span>
-                        <input type="number" step="0.01" min="0" id="bill-settings-estimate" required class="custom-input" placeholder="0.00">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="bill-settings-estimate" required class="custom-input" placeholder="0.00">
                     </div>
                 </div>
             </div>
@@ -3841,7 +4056,7 @@ body.maximized-calendar .day-transaction-item {
                 </div>
                 <div class="form-group" id="bill-settings-payment-date-group">
                     <label for="bill-settings-payment-date">Payment Day of Month</label>
-                    <input type="number" min="1" max="31" id="bill-settings-payment-date" required class="custom-input" placeholder="e.g. 15">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="bill-settings-payment-date" required class="custom-input" placeholder="e.g. 15">
                 </div>
                 <div class="form-group hidden" id="bill-settings-weekday-group">
                     <label for="bill-settings-weekday">Payment Day of Week</label>
@@ -3868,7 +4083,7 @@ body.maximized-calendar .day-transaction-item {
                 </div>
                 <div class="form-group" id="bill-settings-closing-date-group" style="flex: 1; margin: 0;">
                     <label for="bill-settings-closing-date">Statement Closing Day of Month</label>
-                    <input type="number" min="1" max="31" id="bill-settings-closing-date" required class="custom-input" placeholder="e.g. 10">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="bill-settings-closing-date" required class="custom-input" placeholder="e.g. 10">
                 </div>
             </div>
             
@@ -3987,7 +4202,7 @@ body.maximized-calendar .day-transaction-item {
                 <label for="prop-pay-amount">Payment Amount</label>
                 <div class="input-prefix-wrapper">
                     <span class="input-prefix">$</span>
-                    <input type="number" step="0.01" min="0.01" id="prop-pay-amount" required class="custom-input">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0.01" id="prop-pay-amount" required class="custom-input">
                 </div>
             </div>
             
@@ -4014,13 +4229,13 @@ body.maximized-calendar .day-transaction-item {
                 </div>
                 <div class="form-group">
                     <label for="payroll-base-pay">Base Net Pay ($)</label>
-                    <input type="number" step="0.01" id="payroll-base-pay" required class="custom-input">
+                    <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-base-pay" required class="custom-input">
                 </div>
             </div>
 
             <div class="form-group">
                 <label for="payroll-stipend">Cellular Stipend ($) <span style="font-size: 0.8rem; color: var(--text-secondary); font-weight: normal;">(Added to 1st paycheck of month)</span></label>
-                <input type="number" step="0.01" id="payroll-stipend" required class="custom-input">
+                <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-stipend" required class="custom-input">
             </div>
 
             <!-- Custom Rates Accordion/Toggle -->
@@ -4032,15 +4247,15 @@ body.maximized-calendar .day-transaction-item {
                 <div id="payroll-custom-rates-panel" class="hidden" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
                     <div class="form-group">
                         <label for="payroll-rate-1st">1st Paycheck</label>
-                        <input type="number" step="0.01" id="payroll-rate-1st" class="custom-input" style="padding: 0.4rem;">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-rate-1st" class="custom-input" style="padding: 0.4rem;">
                     </div>
                     <div class="form-group">
                         <label for="payroll-rate-2nd">2nd Paycheck</label>
-                        <input type="number" step="0.01" id="payroll-rate-2nd" class="custom-input" style="padding: 0.4rem;">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-rate-2nd" class="custom-input" style="padding: 0.4rem;">
                     </div>
                     <div class="form-group">
                         <label for="payroll-rate-3rd">3rd Paycheck</label>
-                        <input type="number" step="0.01" id="payroll-rate-3rd" class="custom-input" style="padding: 0.4rem;">
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-rate-3rd" class="custom-input" style="padding: 0.4rem;">
                     </div>
                 </div>
             </div>
@@ -4068,13 +4283,13 @@ body.maximized-calendar .day-transaction-item {
                                 <option value="Nov">Nov</option>
                                 <option value="Dec">Dec</option>
                             </select>
-                            <input type="number" id="payroll-est-year" value="2026" min="2026" max="2040" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:65px;">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" id="payroll-est-year" value="2026" min="2026" max="2040" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:65px;">
                         </div>
                     </div>
                     <div class="form-group" style="margin-bottom:0;">
                         <label style="font-size:0.75rem;">Increase Value</label>
                         <div style="display:flex; align-items:center; gap:0.25rem;">
-                            <input type="number" step="0.01" id="payroll-est-val" placeholder="3 or 3100" class="custom-input" style="padding:0.35rem; font-size:0.8rem;">
+                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-est-val" placeholder="3 or 3100" class="custom-input" style="padding:0.35rem; font-size:0.8rem;">
                         </div>
                     </div>
                     <div class="form-group" style="margin-bottom:0;">
@@ -13198,6 +13413,12 @@ window.INITIAL_BUDGET_DATA = {
     <script>
 // Budgetify - Application Logic (app.js)
 
+// Bumped by hand on each regeneration of Master Budget Unified.html. Shown in the sidebar footer so
+// it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
+// Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
+// guessing from behavior alone whether a reported bug is a real regression or a stale cache.
+const BUILD_VERSION = '2026-07-19 19:28';
+
 // --- CONFIG & STATE ---
 const CONFIG = {
     storageKey: 'budgetify_db_perpetual',
@@ -13549,9 +13770,12 @@ function renderPayrollEstimatesList() {
 
 // --- INITIALIZATION ---
 function init() {
+    const versionMarker = document.getElementById('build-version-marker');
+    if (versionMarker) versionMarker.textContent = 'Build ' + BUILD_VERSION;
+
     loadDatabase();
     setupEventListeners();
-    
+
     // Sync state selectors
     document.getElementById('year-select').value = state.currentYear;
     document.getElementById('month-select').value = state.currentMonth;
@@ -13576,6 +13800,12 @@ function init() {
     setupInlineAutocomplete('edit-tx-desc', 'checking-description-suggestions');
     renderApp();
     logSystem(`Application initialized. Switched to ${MONTH_NAMES[state.currentMonth]} ${state.currentYear}.`);
+
+    // Fire-and-forget: don't block the initial (already-rendered) view on a network call. Any
+    // section wired up to the Sheet gets refreshed in the background and the view updates again
+    // once that lands, so opening the app on a device that's never synced (or is just stale)
+    // ends up showing the latest data without any manual action.
+    pullAllWiredSectionsFromSheet();
 }
 
 // Checks the shape of a parsed backup file before it's allowed to replace the live database.
@@ -13691,7 +13921,26 @@ function saveDatabase() {
     // to make the chain invalidate itself on its own very first internal save and never resume. Actual
     // user edits still supersede any in-flight chain correctly: they're followed by renderApp(), which
     // calls queuePrewarmForCurrentMonth() and increments the generation there.
+
+    // Every kind of edit (financial data, UI preferences, anything else) already ends in a call to
+    // saveDatabase() — rather than wiring an explicit sync call into every single edit site
+    // individually, piggyback one debounced background push-everything here so any change
+    // eventually syncs on its own, no manual "Push ___" click required. Debounced 3s so a burst of
+    // rapid edits (e.g. typing) results in one push after things settle, not one per keystroke.
+    // Silent and best-effort: no log spam, and a missing/unreachable Web App URL is expected (not
+    // every session has sync configured) so failures here are swallowed rather than surfaced.
+    // The _syncPushInProgress guard matters: the push functions themselves call saveDatabase()
+    // (to persist freshly-assigned syncIds), so without it every auto-push would reschedule
+    // another auto-push from inside itself — an infinite 3-second sync loop.
+    if (getSyncWebAppUrl() && !_syncPushInProgress) {
+        clearTimeout(_pendingSyncPushTimer);
+        _pendingSyncPushTimer = setTimeout(() => {
+            pushAllWiredSectionsToSheet().catch(() => { /* best-effort background sync, not user-facing */ });
+        }, 3000);
+    }
 }
+let _pendingSyncPushTimer = null;
+let _syncPushInProgress = false;
 
 // Keep the card summary balance in sync with its calendar ledger.
 // Calendar charges are stored as negative amounts; payments are positive.
@@ -14366,6 +14615,645 @@ function isMobileViewport() {
     return window.matchMedia('(max-width: 900px)').matches;
 }
 
+// Whether tap-to-open-popup (vs. inline click-to-edit) is the right interaction model for a
+// field. Deliberately NOT based on viewport width like isMobileViewport(): when this page is
+// embedded in a Google Sites iframe, the iframe's own layout width doesn't necessarily match the
+// phone's screen width, so a width check can silently disagree with what the user is actually
+// touching the screen with. Touch capability is a direct signal and isn't affected by iframe sizing.
+function isTouchDevice() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+}
+
+// --- Google Sheets sync (Apps Script Web App) ---------------------------
+//
+// The Web App URL is a device-level setting, not app data, so it's kept in its own
+// localStorage key rather than in `state` (and therefore isn't included in JSON backups).
+//
+// Sections are wired up one at a time (see pushDeliveryEarningsToSheet() for the first one).
+// Each section maps its own state slice to an array of {id, data} records with a section-stable
+// id, then calls syncPushTab(tabName, records), which also tombstones any id that was present in
+// the previous push but is missing from this one (i.e. it was deleted locally) so the
+// corresponding Sheet row gets removed too.
+
+// Baked-in default so the app talks to your Sheet out of the box on every device/browser without
+// having to paste the URL in and hit Save each time. localStorage still overrides it if you ever
+// point the app at a different deployment via Sync Settings.
+const DEFAULT_SYNC_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyMP8TAkNQ2UItDugIcMifyOMHbL3zzNs-ripCBf7EbVUKobzWGfRL3mNn8kWT43ObQvg/exec';
+
+function getSyncWebAppUrl() {
+    return localStorage.getItem('budgetify_sync_webapp_url') || DEFAULT_SYNC_WEBAPP_URL;
+}
+
+function setSyncWebAppUrl(url) {
+    if (url) localStorage.setItem('budgetify_sync_webapp_url', url);
+    else localStorage.removeItem('budgetify_sync_webapp_url');
+}
+
+function getLastSyncedIds(tab) {
+    try {
+        return JSON.parse(localStorage.getItem(`budgetify_sync_ids_${tab}`) || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+function setLastSyncedIds(tab, ids) {
+    localStorage.setItem(`budgetify_sync_ids_${tab}`, JSON.stringify(ids));
+}
+
+// Sheet row ids used to be derived straight from each record's own data (a date, or the app's
+// internal random id like 'j-b7b8fo2dl') — functional, but meant scanning the Sheet UI for a
+// specific entry required opening each row's JSON blob, since column A gave no hint what it was.
+// These are deliberately a SEPARATE field from the app's own internal ids (never renamed/touched
+// here — those are referenced all over the rest of the app for things like linkedPaymentId/
+// seriesId/payoffTargetId, far too risky to repurpose). `syncId` exists purely for the Sheet and
+// is assigned once, the first time a record is ever pushed, then persisted on the record itself
+// so it's stable across every future sync rather than reassigned each time.
+const SYNC_ID_PREFIXES = {
+    DeliveryEarnings: 'DE',
+    SavingsTracker: 'SV',
+    Loans: 'IL',
+    CreditCards: 'CC',
+    BillTracker: 'BT',
+    Dashboard: 'DA',
+    BillSplitter: 'BS',
+    Settings: 'ST'
+};
+
+function getOrAssignSyncId(record, tab) {
+    if (record.syncId) return record.syncId;
+    const prefix = SYNC_ID_PREFIXES[tab];
+    state._syncIdCounters = state._syncIdCounters || {};
+    const next = (state._syncIdCounters[prefix] || 0) + 1;
+    state._syncIdCounters[prefix] = next;
+    record.syncId = `${prefix}-${next}`;
+    return record.syncId;
+}
+
+// When a pulled row's syncId is higher than this device has ever assigned for that prefix (e.g.
+// it was assigned by a different device), bump the local counter past it — otherwise this device
+// could later assign a "new" syncId that collides with one that already exists in the Sheet.
+function _reserveSyncId(syncId) {
+    const match = /^([A-Za-z]+)-(\d+)$/.exec(syncId || '');
+    if (!match) return;
+    const prefix = match[1];
+    const num = parseInt(match[2], 10);
+    state._syncIdCounters = state._syncIdCounters || {};
+    if (!state._syncIdCounters[prefix] || state._syncIdCounters[prefix] < num) {
+        state._syncIdCounters[prefix] = num;
+    }
+}
+
+async function syncFetchTab(tab) {
+    const url = getSyncWebAppUrl();
+    if (!url) throw new Error('No Web App URL configured. Save one in Sync Settings first.');
+    const resp = await fetch(`${url}?tab=${encodeURIComponent(tab)}`);
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error);
+    return json.rows;
+}
+
+// Apps Script web apps don't handle a CORS preflight (OPTIONS) request, so the POST body is
+// sent as text/plain rather than application/json to keep the browser from sending one — the
+// server-side doPost() ignores the declared content type and JSON.parses the raw body anyway.
+async function syncPostRecords(tab, records) {
+    const url = getSyncWebAppUrl();
+    if (!url) throw new Error('No Web App URL configured. Save one in Sync Settings first.');
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ tab, records })
+    });
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error);
+    return json.results;
+}
+
+// Per-tab fingerprints of what each record looked like the last time it was pushed, so a push can
+// skip everything unchanged. Stored in localStorage (id -> JSON string of the record's data) —
+// even the largest tab (~750 delivery-earnings rows) is well within localStorage limits.
+function getLastPushedHashes(tab) {
+    try {
+        return JSON.parse(localStorage.getItem(`budgetify_sync_hash_${tab}`) || '{}');
+    } catch (e) {
+        return {};
+    }
+}
+
+function setLastPushedHashes(tab, hashes) {
+    localStorage.setItem(`budgetify_sync_hash_${tab}`, JSON.stringify(hashes));
+}
+
+// currentRecords: [{id, data}]. Incremental: only records whose content actually changed since
+// the last successful push (plus brand-new ones) are sent — editing one delivery-earnings day
+// sends one row, not the whole tab. Ids present last push but missing now are sent as deletions.
+// Fingerprints are only updated after the POST succeeds, so a failed push retries everything
+// still-unsent next time rather than silently marking it as done.
+async function syncPushTab(tab, currentRecords) {
+    const currentIds = currentRecords.map(r => r.id);
+    const previousIds = getLastSyncedIds(tab);
+    const removedIds = previousIds.filter(id => !currentIds.includes(id));
+
+    const hashes = getLastPushedHashes(tab);
+    const changed = currentRecords.filter(r => hashes[r.id] !== JSON.stringify(r.data));
+
+    const records = [
+        ...changed.map(r => ({ id: r.id, data: r.data, deleted: false })),
+        ...removedIds.map(id => ({ id, deleted: true }))
+    ];
+    if (records.length === 0) {
+        setLastSyncedIds(tab, currentIds);
+        return [];
+    }
+
+    const results = await syncPostRecords(tab, records);
+    changed.forEach(r => { hashes[r.id] = JSON.stringify(r.data); });
+    removedIds.forEach(id => { delete hashes[id]; });
+    setLastPushedHashes(tab, hashes);
+    setLastSyncedIds(tab, currentIds);
+    return results;
+}
+
+// Every pull function does a network round trip (syncFetchTab) that takes real time — Apps
+// Script cold starts alone can take several seconds. If the user edits a record in the window
+// between when a pull starts and when it resolves, a naive "Sheet wins" merge silently reverts
+// their fresh edit back to the stale value the pull fetched, with no error or indication anything
+// happened (this is exactly what looked like "the site isn't saving my edits"). The fix: snapshot
+// each record right before the fetch, and after it resolves, only let the Sheet's value win for a
+// record that's byte-for-byte unchanged since that snapshot. If it changed in the meantime (the
+// user edited it while the fetch was in flight), keep the local edit and skip the Sheet's value
+// for that one id — it'll just get overwritten by the user's own next push instead.
+function _snapshotRecordsById(records, idFn) {
+    const map = new Map();
+    records.forEach(r => map.set(idFn(r), JSON.stringify(r)));
+    return map;
+}
+
+// True if there was no local record for this id at snapshot time (nothing to conflict with), or
+// the current live record is still identical to what it was at snapshot time (safe to overwrite).
+function _safeToOverwrite(snapshotById, id, liveRecord) {
+    if (!snapshotById.has(id)) return true;
+    return snapshotById.get(id) === (liveRecord !== undefined ? JSON.stringify(liveRecord) : undefined);
+}
+
+// First section wired up end-to-end: deliveryEarnings is a flat array keyed by 'date', which
+// makes it the simplest possible mapping. Other sections (Bill Splitter's per-month/cycle
+// nesting, the shared Loans/Credit Cards array, etc.) need their own id scheme worked out before
+// they can be wired the same way — see project memory for the section-by-section plan.
+// A handful of deliveryEarnings entries carry a real Date object for `date` instead of a plain
+// 'YYYY-MM-DD' string (seen in practice with at least one seeded record), which would otherwise
+// serialize into a garbage id like "2025-12-01T06:00:00.000Z". Normalize defensively so every
+// record gets the same plain-date id regardless of which shape it started as.
+function _deliveryEarningsDateKey(d) {
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    return String(d).slice(0, 10);
+}
+
+// The Sheet row id is the sequential syncId (e.g. 'DE-42'), but matching/merging between local
+// and remote is still done by date — a record's date is its real identity, syncId is just a
+// human-searchable label for the Sheet's column A. See getOrAssignSyncId()/_reserveSyncId().
+async function pushDeliveryEarningsToSheet() {
+    const records = (state.deliveryEarnings || []).map(rec => {
+        const budget = state.deliveryBudgets?.[_deliveryEarningsDateKey(rec.date)];
+        const data = budget !== undefined ? { ...rec, budget } : rec;
+        return { id: getOrAssignSyncId(rec, 'DeliveryEarnings'), data };
+    });
+    saveDatabase(); // persist any newly-assigned syncIds before the network call
+    return syncPushTab('DeliveryEarnings', records);
+}
+
+// Sheet rows win over local for any date both sides have — this is what makes a fresh device (or
+// a stale cached copy on an existing device) pick up the latest data pushed from elsewhere. Any
+// local-only date (never pushed anywhere yet) is kept as-is rather than dropped, so a device
+// that's made offline edits it hasn't pushed yet doesn't lose them just because it also pulled.
+async function pullDeliveryEarningsFromSheet() {
+    const snapshotByDate = _snapshotRecordsById(state.deliveryEarnings || [], rec => _deliveryEarningsDateKey(rec.date));
+    const rows = await syncFetchTab('DeliveryEarnings'); // [{id, updatedAt, data}]
+    const byDate = new Map(state.deliveryEarnings.map(rec => [_deliveryEarningsDateKey(rec.date), rec]));
+    const syncIds = new Set(state.deliveryEarnings.map(rec => rec.syncId).filter(Boolean));
+    state.deliveryBudgets = state.deliveryBudgets || {};
+    rows.forEach(row => {
+        _reserveSyncId(row.id);
+        const dateKey = _deliveryEarningsDateKey(row.data.date);
+        if (_safeToOverwrite(snapshotByDate, dateKey, byDate.get(dateKey))) {
+            const { budget, ...rec } = row.data;
+            byDate.set(dateKey, rec);
+            if (budget !== undefined) {
+                state.deliveryBudgets[dateKey] = budget;
+            }
+        }
+        syncIds.add(row.id);
+    });
+    state.deliveryEarnings = Array.from(byDate.values());
+    setLastSyncedIds('DeliveryEarnings', Array.from(syncIds));
+    return rows.length;
+}
+
+// Runs once on every page load, after the local/cached data has already rendered, so the app is
+// never blocked waiting on a network call to show something. Add one line here per section as
+// each one gets wired up to the Sheet (see pullDeliveryEarningsFromSheet() for the pattern) —
+// everything else still only syncs when you press its "Push ___" button in Sync Settings.
+// Second section wired up. savingsTransactions is a flat array with a real per-row `id` already
+// (see addLinkedSavingsTransfer/addSavingsInterest), so unlike deliveryEarnings there's no id
+// normalization needed. The starting/current balance settings aren't array rows at all, so they
+// ride along as one extra synthetic record (id '__settings__') in the same tab rather than
+// needing a whole separate tab of their own.
+const SAVINGS_SETTINGS_RECORD_ID = 'SV-SETTINGS';
+
+// Sheet row id is the sequential syncId; matching/merging is still by the app's own tx.id (its
+// real identity — never renamed, it's referenced elsewhere in the app).
+async function pushSavingsTrackerToSheet() {
+    const records = (state.savingsTransactions || []).map(tx => ({ id: getOrAssignSyncId(tx, 'SavingsTracker'), data: tx }));
+    records.push({
+        id: SAVINGS_SETTINGS_RECORD_ID,
+        data: {
+            savingsCurrentAmount: state.savingsCurrentAmount,
+            savingsStartingBalance: state.savingsStartingBalance
+        }
+    });
+    saveDatabase();
+    return syncPushTab('SavingsTracker', records);
+}
+
+async function pullSavingsTrackerFromSheet() {
+    const snapshotById = _snapshotRecordsById(state.savingsTransactions || [], tx => tx.id);
+    const settingsSnapshot = JSON.stringify({
+        savingsCurrentAmount: state.savingsCurrentAmount,
+        savingsStartingBalance: state.savingsStartingBalance
+    });
+    const rows = await syncFetchTab('SavingsTracker'); // [{id, updatedAt, data}]
+    const byId = new Map(state.savingsTransactions.map(tx => [tx.id, tx]));
+    const syncIds = new Set(state.savingsTransactions.map(tx => tx.syncId).filter(Boolean));
+    let pulledCount = 0;
+
+    rows.forEach(row => {
+        if (row.id === SAVINGS_SETTINGS_RECORD_ID) {
+            const liveSettings = JSON.stringify({
+                savingsCurrentAmount: state.savingsCurrentAmount,
+                savingsStartingBalance: state.savingsStartingBalance
+            });
+            if (liveSettings !== settingsSnapshot) return; // edited locally mid-fetch, keep local
+            if (row.data && typeof row.data.savingsCurrentAmount === 'number') {
+                state.savingsCurrentAmount = row.data.savingsCurrentAmount;
+            }
+            if (row.data && typeof row.data.savingsStartingBalance === 'number') {
+                state.savingsStartingBalance = row.data.savingsStartingBalance;
+            }
+            pulledCount++;
+            return;
+        }
+        _reserveSyncId(row.id);
+        const txId = row.data.id;
+        if (_safeToOverwrite(snapshotById, txId, byId.get(txId))) {
+            byId.set(txId, row.data);
+            pulledCount++;
+        }
+        syncIds.add(row.id);
+    });
+
+    state.savingsTransactions = Array.from(byId.values());
+    setLastSyncedIds('SavingsTracker', [...syncIds, SAVINGS_SETTINGS_RECORD_ID]);
+    return pulledCount;
+}
+
+// Third/fourth sections wired up. Loans and Credit Cards are actually ONE shared array in the
+// app (state.loans, distinguished by a `type` field: 'loan' vs 'credit' — see DEFAULT_LOANS),
+// but they get their own two Sheet tabs, so each push/pull filters by type and only ever touches
+// its own half of the array — pulling Loans must never clobber the Credit Cards half and vice versa.
+function _pushLoansByType(type) {
+    const tab = type === 'credit' ? 'CreditCards' : 'Loans';
+    const records = (state.loans || []).filter(l => l.type === type).map(l => ({ id: getOrAssignSyncId(l, tab), data: l }));
+    saveDatabase();
+    return syncPushTab(tab, records);
+}
+
+async function pushLoansToSheet() {
+    return _pushLoansByType('loan');
+}
+
+async function pushCreditCardsToSheet() {
+    return _pushLoansByType('credit');
+}
+
+async function _pullLoansByType(type) {
+    const tab = type === 'credit' ? 'CreditCards' : 'Loans';
+    const snapshotById = _snapshotRecordsById(state.loans.filter(l => l.type === type), l => l.id);
+    const rows = await syncFetchTab(tab);
+    const byId = new Map(state.loans.filter(l => l.type === type).map(l => [l.id, l]));
+    rows.forEach(row => {
+        _reserveSyncId(row.id);
+        const loanId = row.data.id;
+        if (_safeToOverwrite(snapshotById, loanId, byId.get(loanId))) byId.set(loanId, row.data);
+    });
+    const otherType = state.loans.filter(l => l.type !== type);
+    state.loans = [...otherType, ...Array.from(byId.values())];
+    setLastSyncedIds(tab, Array.from(byId.values()).map(l => l.syncId).filter(Boolean));
+    return rows.length;
+}
+
+async function pullLoansFromSheet() {
+    return _pullLoansByType('loan');
+}
+
+async function pullCreditCardsFromSheet() {
+    return _pullLoansByType('credit');
+}
+
+// Fifth section wired up. billTrackerSettings is the flat array of recurring-bill *templates*
+// (each with a stable 'bs-xxxx' id) that autopopulateBillsForMonth() reads to generate each
+// month's actual bill instances into state.monthlyBills — syncing the templates is what matters
+// here; the generated monthlyBills instances are derived data, not something to sync directly.
+async function pushBillTrackerToSheet() {
+    const records = (state.billTrackerSettings || []).map(b => ({ id: getOrAssignSyncId(b, 'BillTracker'), data: b }));
+    saveDatabase();
+    return syncPushTab('BillTracker', records);
+}
+
+async function pullBillTrackerFromSheet() {
+    const snapshotById = _snapshotRecordsById(state.billTrackerSettings || [], b => b.id);
+    const rows = await syncFetchTab('BillTracker');
+    const byId = new Map((state.billTrackerSettings || []).map(b => [b.id, b]));
+    rows.forEach(row => {
+        _reserveSyncId(row.id);
+        const billId = row.data.id;
+        if (_safeToOverwrite(snapshotById, billId, byId.get(billId))) byId.set(billId, row.data);
+    });
+    state.billTrackerSettings = Array.from(byId.values());
+    setLastSyncedIds('BillTracker', Array.from(byId.values()).map(b => b.syncId).filter(Boolean));
+    return rows.length;
+}
+
+// Sixth section wired up, and the trickiest so far. Dashboard covers two different state
+// shapes in one tab: jointRegister (a flat array, easy) and personalCalendar (an object keyed by
+// '<year>-<MonthShort>' month buckets, each holding a tx list). Confirmed by grep that the
+// "dynamic" transactions (dynamic-paycheck-*, xfer-1st-*, etc. — see isDynamicTxId()) are
+// computed on the fly at render time and never actually pushed into these arrays, so it's safe
+// to sync the raw arrays as-is without needing to filter anything out.
+//
+// Each record's `data` carries a `kind` tag so pull knows which state slice a given id belongs
+// to. For personalCalendar, the month bucket a tx belongs to is recomputed from its own `date`
+// field on pull (_personalCalendarKeyForDate) rather than stored separately, since the bucket is
+// fully determined by the date already.
+function _personalCalendarKeyForDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return `${d.getFullYear()}-${MONTH_ORDER[d.getMonth()]}`;
+}
+
+async function pushDashboardToSheet() {
+    const jointRecords = (state.jointRegister || []).map(tx => ({ id: getOrAssignSyncId(tx, 'Dashboard'), data: { kind: 'joint', tx } }));
+    const personalRecords = [];
+    Object.values(state.personalCalendar || {}).forEach(list => {
+        list.forEach(tx => personalRecords.push({ id: getOrAssignSyncId(tx, 'Dashboard'), data: { kind: 'personal', tx } }));
+    });
+    saveDatabase();
+    return syncPushTab('Dashboard', [...jointRecords, ...personalRecords]);
+}
+
+// Rebuilds by upserting into the EXISTING personalCalendar structure rather than replacing it
+// wholesale — a month bucket that currently has zero real transactions is still meaningfully
+// "initialized" (ensureYearMonthInitialized() only re-seeds template recurring transactions into
+// a month key that's entirely absent), so wiping empty-but-initialized buckets on every pull
+// would make deleted recurring occurrences silently reappear the next time that month renders.
+async function pullDashboardFromSheet() {
+    const jointSnapshotById = _snapshotRecordsById(state.jointRegister, tx => tx.id);
+    const allPersonalTx = [];
+    Object.values(state.personalCalendar).forEach(list => allPersonalTx.push(...list));
+    const personalSnapshotById = _snapshotRecordsById(allPersonalTx, tx => tx.id);
+
+    const rows = await syncFetchTab('Dashboard');
+    const jointById = new Map(state.jointRegister.map(tx => [tx.id, tx]));
+
+    const personalTxKeyById = new Map();
+    Object.entries(state.personalCalendar).forEach(([key, list]) => {
+        list.forEach(tx => personalTxKeyById.set(tx.id, key));
+    });
+
+    const syncIds = new Set();
+    state.jointRegister.forEach(tx => { if (tx.syncId) syncIds.add(tx.syncId); });
+    allPersonalTx.forEach(tx => { if (tx.syncId) syncIds.add(tx.syncId); });
+
+    rows.forEach(row => {
+        if (!row.data) return;
+        _reserveSyncId(row.id);
+        syncIds.add(row.id);
+
+        if (row.data.kind === 'joint') {
+            const txId = row.data.tx.id;
+            if (_safeToOverwrite(jointSnapshotById, txId, jointById.get(txId))) {
+                jointById.set(txId, row.data.tx);
+            }
+            return;
+        }
+        if (row.data.kind === 'personal') {
+            const tx = row.data.tx;
+            const oldKey = personalTxKeyById.get(tx.id);
+            const liveTx = oldKey ? state.personalCalendar[oldKey].find(t => t.id === tx.id) : undefined;
+            if (!_safeToOverwrite(personalSnapshotById, tx.id, liveTx)) return; // edited mid-fetch, keep local
+
+            const newKey = _personalCalendarKeyForDate(tx.date);
+            if (oldKey && oldKey !== newKey) {
+                state.personalCalendar[oldKey] = state.personalCalendar[oldKey].filter(t => t.id !== tx.id);
+            }
+            if (!state.personalCalendar[newKey]) state.personalCalendar[newKey] = [];
+            const idx = state.personalCalendar[newKey].findIndex(t => t.id === tx.id);
+            if (idx > -1) state.personalCalendar[newKey][idx] = tx;
+            else state.personalCalendar[newKey].push(tx);
+            personalTxKeyById.set(tx.id, newKey);
+        }
+    });
+
+    state.jointRegister = Array.from(jointById.values());
+    setLastSyncedIds('Dashboard', Array.from(syncIds));
+    return rows.length;
+}
+
+// Seventh and last section. Bill Splitter is the hardest of all of these: what's actually
+// user-edited data is TWO separate recurring-template maps (both keyed by seriesId) —
+// state.billRecurrenceTemplates (recurring bills) and state.allocationTemplates (recurring
+// personal allocations) — which get expanded into each month's state.monthlyBills[monthKey]
+// [cycleKey].bills/.contributions on demand. Those generated monthly instances are NOT synced
+// directly, for two reasons: (1) they're derived data, regenerated from the templates the same
+// way autopopulateBillsForMonth() does for Bill Tracker, and (2) some splitter rows are locked
+// and driven entirely by the Credit Cards section (linkedCardPaymentId/cardPaymentKind, see
+// syncCardPaymentSplitterRowsForMonth()) — syncing raw monthlyBills rows risks fighting with
+// that lock instead of respecting it. One-off (non-recurring, template-less) bills/contributions
+// that exist only inside a single month's monthlyBills are NOT covered by this — only recurring
+// series are template-backed. That's a known gap if the user relies heavily on one-off entries;
+// flagged rather than silently synced incorrectly.
+// The Sheet row id is the sequential syncId ('BS-3'); the real identity for merging is the
+// seriesId, which is carried inside the data envelope since the templates are stored as
+// {seriesId: tpl} maps and the syncId lives on the tpl object itself.
+async function pushBillSplitterToSheet() {
+    const billRecords = Object.entries(state.billRecurrenceTemplates || {})
+        .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'billTemplate', seriesId, tpl } }));
+    const allocRecords = Object.entries(state.allocationTemplates || {})
+        .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'allocationTemplate', seriesId, tpl } }));
+    saveDatabase();
+    return syncPushTab('BillSplitter', [...billRecords, ...allocRecords]);
+}
+
+async function pullBillSplitterFromSheet() {
+    if (!state.billRecurrenceTemplates) state.billRecurrenceTemplates = {};
+    if (!state.allocationTemplates) state.allocationTemplates = {};
+    const billSnapshotById = _snapshotRecordsById(Object.entries(state.billRecurrenceTemplates).map(([id, tpl]) => ({ id, tpl })), r => r.id);
+    const allocSnapshotById = _snapshotRecordsById(Object.entries(state.allocationTemplates).map(([id, tpl]) => ({ id, tpl })), r => r.id);
+    const syncIds = new Set();
+    Object.values(state.billRecurrenceTemplates).forEach(tpl => { if (tpl.syncId) syncIds.add(tpl.syncId); });
+    Object.values(state.allocationTemplates).forEach(tpl => { if (tpl.syncId) syncIds.add(tpl.syncId); });
+
+    const rows = await syncFetchTab('BillSplitter');
+
+    rows.forEach(row => {
+        if (!row.data) return;
+        _reserveSyncId(row.id);
+        syncIds.add(row.id);
+        // Rows pushed before the syncId scheme used the seriesId itself as the row id and had no
+        // `seriesId` field in the envelope — fall back to row.id so old rows still merge correctly.
+        const seriesId = row.data.seriesId || row.id;
+        if (row.data.kind === 'billTemplate') {
+            const live = state.billRecurrenceTemplates[seriesId];
+            if (_safeToOverwrite(billSnapshotById, seriesId, live !== undefined ? { id: seriesId, tpl: live } : undefined)) {
+                state.billRecurrenceTemplates[seriesId] = row.data.tpl;
+            }
+        } else if (row.data.kind === 'allocationTemplate') {
+            const live = state.allocationTemplates[seriesId];
+            if (_safeToOverwrite(allocSnapshotById, seriesId, live !== undefined ? { id: seriesId, tpl: live } : undefined)) {
+                state.allocationTemplates[seriesId] = row.data.tpl;
+            }
+        }
+    });
+
+    setLastSyncedIds('BillSplitter', Array.from(syncIds));
+    return rows.length;
+}
+
+// Eighth tab: UI preferences (column visibility, collapsed/expanded sections, calendar-vs-list
+// and month-vs-year view modes) rather than financial data. Bundled into a single record (id
+// 'ui-prefs') instead of one row per field, since these are simple flat settings, not a
+// collection needing per-item add/delete. Requires a 'Settings' tab in the Sheet — add
+// 'Settings' to SHEET_TABS in the Apps Script and re-run setupBudgetifySheet() once if it
+// doesn't already exist (safe to re-run, it only creates tabs that are missing).
+const SETTINGS_RECORD_ID = 'ST-1';
+const SETTINGS_KEYS = [
+    'deliveryColumnPrefs', 'deliveryYearSummaryCollapsed', 'metricsCollapsed',
+    'savingsMetricsCollapsed', 'savingsYearSummaryCollapsed', 'savingsViewMode', 'savingsListScope',
+    'viewMode', 'listScope', 'ccViewMode', 'ccListScope', 'billTrackerOwnership'
+];
+
+async function pushSettingsToSheet() {
+    const data = {};
+    SETTINGS_KEYS.forEach(key => { data[key] = state[key]; });
+    return syncPushTab('Settings', [{ id: SETTINGS_RECORD_ID, data }]);
+}
+
+async function pullSettingsFromSheet() {
+    const snapshot = JSON.stringify(SETTINGS_KEYS.map(key => state[key]));
+    const rows = await syncFetchTab('Settings');
+    const row = rows.find(r => r.id === SETTINGS_RECORD_ID);
+    if (!row || !row.data) return 0;
+
+    const liveSnapshot = JSON.stringify(SETTINGS_KEYS.map(key => state[key]));
+    if (liveSnapshot !== snapshot) return 0; // a preference changed locally mid-fetch, keep local
+
+    SETTINGS_KEYS.forEach(key => {
+        if (row.data[key] !== undefined) state[key] = row.data[key];
+    });
+    setLastSyncedIds('Settings', [SETTINGS_RECORD_ID]);
+    return 1;
+}
+
+async function pullAllWiredSectionsFromSheet() {
+    if (!getSyncWebAppUrl()) return;
+    let anyPulled = false;
+
+    try {
+        if (await pullDeliveryEarningsFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Delivery Earnings) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullSavingsTrackerFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Savings Tracker) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullLoansFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Loans) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullCreditCardsFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Credit Cards) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullBillTrackerFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Bill Tracker) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullDashboardFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Dashboard) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullBillSplitterFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Bill Splitter) failed: ${err.message}`);
+    }
+
+    try {
+        if (await pullSettingsFromSheet() > 0) anyPulled = true;
+    } catch (err) {
+        logError(`Auto-pull (Settings) failed: ${err.message}`);
+    }
+
+    if (anyPulled) {
+        saveDatabase();
+        renderApp();
+        logSuccess('Loaded latest data from Google Sheet.');
+    }
+}
+
+// Mirrors pullAllWiredSectionsFromSheet(), but pushing. Called from the debounced timer in
+// saveDatabase() so every section — not just Settings — ends up synced automatically a few
+// seconds after any change, with no manual "Push ___" click required. Each section's own push
+// function already does its own diffing/tombstoning via syncPushTab, so this is just "run all of
+// them"; failures are logged individually and don't stop the others from running.
+async function pushAllWiredSectionsToSheet() {
+    if (!getSyncWebAppUrl()) return;
+
+    const sections = [
+        ['Delivery Earnings', pushDeliveryEarningsToSheet],
+        ['Savings Tracker', pushSavingsTrackerToSheet],
+        ['Loans', pushLoansToSheet],
+        ['Credit Cards', pushCreditCardsToSheet],
+        ['Bill Tracker', pushBillTrackerToSheet],
+        ['Dashboard', pushDashboardToSheet],
+        ['Bill Splitter', pushBillSplitterToSheet],
+        ['Settings', pushSettingsToSheet]
+    ];
+
+    _syncPushInProgress = true;
+    try {
+        for (const [label, pushFn] of sections) {
+            try {
+                await pushFn();
+            } catch (err) {
+                logError(`Auto-push (${label}) failed: ${err.message}`);
+            }
+        }
+    } finally {
+        _syncPushInProgress = false;
+    }
+}
+
 function closeMobileSidebar() {
     const sidebar = document.querySelector('.app-sidebar');
     const backdrop = document.getElementById('sidebar-backdrop');
@@ -14377,15 +15265,22 @@ function openGigEntryDialog(date, key, label) {
     const dialog = document.getElementById('gig-entry-dialog');
     const input = document.getElementById('gig-entry-input');
     const subtitle = document.getElementById('gig-entry-subtitle');
+    const noEarnCheckbox = document.getElementById('gig-entry-no-earn');
     if (!dialog || !input) return;
 
     const rec = state.deliveryEarnings.find(item => item.date === date);
     const currentVal = rec ? (rec[key + 'Formula'] || (rec[key] ? String(rec[key]) : '')) : '';
+    const capKey = key.charAt(0).toUpperCase() + key.slice(1);
+    const isNoEarn = !!(rec && rec['noEarn' + capKey]);
 
     dialog.dataset.date = date;
     dialog.dataset.key = key;
     subtitle.textContent = `${label} — ${date}`;
     input.value = currentVal;
+    if (noEarnCheckbox) {
+        noEarnCheckbox.checked = isNoEarn;
+        input.disabled = isNoEarn;
+    }
 
     dialog.showModal();
     setTimeout(() => { input.focus(); input.select(); }, 50);
@@ -14628,16 +15523,39 @@ function setupEventListeners() {
     if (gigEntryCancelBtn) {
         gigEntryCancelBtn.addEventListener('click', () => gigEntryDialog.close());
     }
+    // Quick-insert +/-/×/÷ buttons — the mobile decimal keypad this input triggers has no operator
+    // keys, so formula entry (e.g. "50+25") was otherwise untypable without switching keyboards.
+    document.querySelectorAll('#gig-entry-ops .gig-op-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const op = btn.dataset.op;
+            const start = gigEntryInput.selectionStart ?? gigEntryInput.value.length;
+            const end = gigEntryInput.selectionEnd ?? gigEntryInput.value.length;
+            const val = gigEntryInput.value;
+            gigEntryInput.value = val.slice(0, start) + op + val.slice(end);
+            const newPos = start + op.length;
+            gigEntryInput.focus();
+            gigEntryInput.setSelectionRange(newPos, newPos);
+        });
+    });
     if (gigEntryForm) {
         gigEntryForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const date = gigEntryDialog.dataset.date;
             const key = gigEntryDialog.dataset.key;
-            const rawVal = gigEntryInput.value.trim();
-            const parsedVal = parseFormula(rawVal);
+            const noEarnCheckbox = document.getElementById('gig-entry-no-earn');
+            const noEarn = !!(noEarnCheckbox && noEarnCheckbox.checked);
+            let rawVal = gigEntryInput.value.trim();
+            // parseFormula() only evaluates as a formula when the string starts with "=" — without
+            // one, "30+20+15" was parsed with plain parseFloat(), which just reads the leading "30"
+            // and silently drops the rest. The modal's whole point is formula entry, so treat
+            // whatever's typed as a formula unless it's already prefixed.
+            if (rawVal && !rawVal.startsWith('=')) rawVal = '=' + rawVal;
+            const parsedVal = noEarn ? 0 : parseFormula(rawVal);
 
             const rec = state.deliveryEarnings.find(item => item.date === date);
             if (rec) {
+                const capKey = key.charAt(0).toUpperCase() + key.slice(1);
+                rec['noEarn' + capKey] = noEarn;
                 rec[key + 'Formula'] = rawVal;
                 rec[key] = parsedVal;
                 rec.total = (rec.cash || 0) + (rec.sideGigs || 0) + (rec.grubHub || 0) + (rec.uberEats || 0);
@@ -14645,6 +15563,13 @@ function setupEventListeners() {
                 renderApp();
             }
             gigEntryDialog.close();
+        });
+    }
+    const gigEntryNoEarn = document.getElementById('gig-entry-no-earn');
+    if (gigEntryNoEarn && gigEntryInput) {
+        gigEntryNoEarn.addEventListener('change', () => {
+            gigEntryInput.disabled = gigEntryNoEarn.checked;
+            if (gigEntryNoEarn.checked) gigEntryInput.value = '';
         });
     }
 
@@ -14992,6 +15917,18 @@ function setupEventListeners() {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
+            // Without these, a failed/aborted read (more common on iOS Safari inside a sandboxed
+            // embed, e.g. a Google Sites iframe) fires neither onload nor any visible feedback at
+            // all — the file picker closes and the page just... doesn't update, with nothing in the
+            // UI or console to explain why.
+            reader.onerror = () => {
+                console.error('FileReader failed to read the import file:', reader.error);
+                alert("Could not read the backup file: " + (reader.error ? reader.error.message : 'unknown error') + "\n\nYour current data was not changed.");
+            };
+            reader.onabort = () => {
+                console.warn('FileReader read was aborted while importing.');
+                alert("Reading the backup file was interrupted. Please try again.\n\nYour current data was not changed.");
+            };
             reader.onload = (event) => {
                 try {
                     const imported = JSON.parse(event.target.result);
@@ -16175,20 +17112,151 @@ function setupEventListeners() {
             : `Proposed payment of $${amount.toFixed(2)} to ${card.name} scheduled for ${date} from ${source === 'joint' ? 'Joint Checking' : 'Personal Checking'}!`);
     });
 
-    // Sync form submit (mock)
+    // Pre-fill the Web App URL field from the last-saved value on every load.
+    const syncWebAppUrlInput = document.getElementById('sync-webapp-url');
+    if (syncWebAppUrlInput) syncWebAppUrlInput.value = getSyncWebAppUrl();
+
+    // Sync form submit — persists the Apps Script Web App URL (a device-level setting, kept
+    // separate from `state`/JSON backups since it's not app data).
     document.getElementById('sync-settings-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        logSystem("Saved Google Sheets sync configuration.");
-        alert("Google Sheets configuration saved! Sync engine ready.");
+        const url = document.getElementById('sync-webapp-url').value.trim();
+        setSyncWebAppUrl(url);
+        logSuccess(url ? `Saved Web App URL: ${url}` : 'Cleared Web App URL.');
     });
 
-    // Test sync connection button
-    document.getElementById('btn-test-connection').addEventListener('click', () => {
-        logSystem("Connecting to Google Sheets API endpoint...");
-        setTimeout(() => {
-            logSuccess("Sheets API connection validated! Spreadsheet ID is accessible.");
-        }, 1200);
+    document.getElementById('btn-test-connection').addEventListener('click', async () => {
+        logSystem('Connecting to Apps Script Web App...');
+        try {
+            const rows = await syncFetchTab('DeliveryEarnings');
+            logSuccess(`Connected! DeliveryEarnings tab has ${rows.length} row(s) in the Sheet.`);
+        } catch (err) {
+            logError(`Connection failed: ${err.message}`);
+        }
     });
+
+    const btnSyncDeliveryEarnings = document.getElementById('btn-sync-delivery-earnings');
+    if (btnSyncDeliveryEarnings) {
+        btnSyncDeliveryEarnings.addEventListener('click', async () => {
+            logSystem('Pushing Delivery Earnings to Google Sheet...');
+            try {
+                const results = await pushDeliveryEarningsToSheet();
+                logSuccess(`Delivery Earnings synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Delivery Earnings sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncSavingsTracker = document.getElementById('btn-sync-savings-tracker');
+    if (btnSyncSavingsTracker) {
+        btnSyncSavingsTracker.addEventListener('click', async () => {
+            logSystem('Pushing Savings Tracker to Google Sheet...');
+            try {
+                const results = await pushSavingsTrackerToSheet();
+                logSuccess(`Savings Tracker synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Savings Tracker sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncLoans = document.getElementById('btn-sync-loans');
+    if (btnSyncLoans) {
+        btnSyncLoans.addEventListener('click', async () => {
+            logSystem('Pushing Loans to Google Sheet...');
+            try {
+                const results = await pushLoansToSheet();
+                logSuccess(`Loans synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Loans sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncCreditCards = document.getElementById('btn-sync-credit-cards');
+    if (btnSyncCreditCards) {
+        btnSyncCreditCards.addEventListener('click', async () => {
+            logSystem('Pushing Credit Cards to Google Sheet...');
+            try {
+                const results = await pushCreditCardsToSheet();
+                logSuccess(`Credit Cards synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Credit Cards sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncBillTracker = document.getElementById('btn-sync-bill-tracker');
+    if (btnSyncBillTracker) {
+        btnSyncBillTracker.addEventListener('click', async () => {
+            logSystem('Pushing Bill Tracker to Google Sheet...');
+            try {
+                const results = await pushBillTrackerToSheet();
+                logSuccess(`Bill Tracker synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Bill Tracker sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncDashboard = document.getElementById('btn-sync-dashboard');
+    if (btnSyncDashboard) {
+        btnSyncDashboard.addEventListener('click', async () => {
+            logSystem('Pushing Dashboard to Google Sheet...');
+            try {
+                const results = await pushDashboardToSheet();
+                logSuccess(`Dashboard synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Dashboard sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncBillSplitter = document.getElementById('btn-sync-bill-splitter');
+    if (btnSyncBillSplitter) {
+        btnSyncBillSplitter.addEventListener('click', async () => {
+            logSystem('Pushing Bill Splitter to Google Sheet...');
+            try {
+                const results = await pushBillSplitterToSheet();
+                logSuccess(`Bill Splitter synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Bill Splitter sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnSyncSettings = document.getElementById('btn-sync-settings');
+    if (btnSyncSettings) {
+        btnSyncSettings.addEventListener('click', async () => {
+            logSystem('Pushing Settings to Google Sheet...');
+            try {
+                const results = await pushSettingsToSheet();
+                logSuccess(`Settings synced: ${results.length} row(s) sent.`);
+            } catch (err) {
+                logError(`Settings sync failed: ${err.message}`);
+            }
+        });
+    }
+
+    const btnClearLocalData = document.getElementById('btn-clear-local-data');
+    if (btnClearLocalData) {
+        btnClearLocalData.addEventListener('click', () => {
+            if (!confirm('This permanently erases all local app data on this device and reloads to a blank slate. It does NOT touch the Google Sheet. Make sure you have a JSON backup first — this cannot be undone. Continue?')) return;
+
+            localStorage.removeItem(CONFIG.storageKey);
+            // Also clear the per-tab "last synced ids" tombstone-tracking, not just the app data
+            // itself — otherwise, after importing a fresh backup, the next push would see every
+            // record as "new since last sync" compared against stale tracking from the wiped-out
+            // data, which is harmless but pointless to carry forward. The Web App URL is a device
+            // setting, not app data, so it's deliberately left alone.
+            Object.keys(localStorage)
+                .filter(key => key.startsWith('budgetify_sync_ids_') || key.startsWith('budgetify_sync_hash_'))
+                .forEach(key => localStorage.removeItem(key));
+
+            location.reload();
+        });
+    }
 
     // Quick add Bill Splitter item
     document.getElementById('btn-add-joint-bill').addEventListener('click', () => {
@@ -16943,6 +18011,16 @@ function setupEventListeners() {
         renderApp();
     });
 
+    // Delivery earnings platform column visibility toggles (mobile)
+    document.querySelectorAll('.delivery-col-toggle').forEach(cb => {
+        cb.addEventListener('change', () => {
+            state.deliveryColumnPrefs = state.deliveryColumnPrefs || {};
+            state.deliveryColumnPrefs[cb.dataset.col] = cb.checked;
+            saveDatabase();
+            syncDeliveryColumnToggles();
+        });
+    });
+
     // Metrics visibility toggle listener
     document.getElementById('btn-toggle-metrics').addEventListener('click', () => {
         state.metricsCollapsed = !state.metricsCollapsed;
@@ -17194,6 +18272,10 @@ function scheduleMonthPrewarm(year, monthShort) {
 // (personal/joint dashboard, credit cards, savings) to list mode. Matches the CSS breakpoint that
 // hides the calendar containers and the "Calendar" toggle buttons (see index.css @media 900px), and
 // reuses the same isMobileViewport() the sidebar/resize logic already defines.
+// Set once per session the first time a mobile render happens, not on every render — otherwise it
+// would stomp the user's own "Hide Metrics" toggle back to visible on the very next render after
+// they click it (this was a real bug: clicking Hide Metrics appeared to do nothing on phones).
+let _mobileMetricsDefaultApplied = false;
 function enforceMobileListView() {
     if (!isMobileViewport()) return;
     state.viewMode = 'list';
@@ -17201,8 +18283,16 @@ function enforceMobileListView() {
     state.savingsViewMode = 'list';
     // The metrics-collapsed state persists from whatever it was last set to (often on desktop), and
     // .metrics-collapsed fully hides the summary cards — on a phone that reads as "metrics missing"
-    // rather than "collapsed," so always show them by default on mobile.
-    state.metricsCollapsed = false;
+    // rather than "collapsed," so default them to visible the first time we render on mobile. After
+    // that, leave it alone so the user's own toggle sticks.
+    if (!_mobileMetricsDefaultApplied) {
+        _mobileMetricsDefaultApplied = true;
+        state.metricsCollapsed = false;
+        // Unlike metrics, the yearly delivery summary is a big scrollable year-of-weeks table that's
+        // mostly noise until you actually want it — default it collapsed on mobile (once; the user's
+        // own Hide/Show Details toggle takes over after that).
+        state.deliveryYearSummaryCollapsed = true;
+    }
 }
 
 function renderAppImmediate() {
@@ -17648,8 +18738,11 @@ function renderDeliveryYearSummary() {
         return `${isNeg ? '-' : ''}$${formatted}`;
     };
     
-    document.getElementById('delivery-year-summary-title').textContent = `Yearly Weekly Delivery Summary - ${year}`;
-    
+    document.getElementById('delivery-year-summary-title').textContent = `Weekly Delivery Summary - ${year}`;
+    const yearSubtitle = document.getElementById('delivery-year-summary-subtitle');
+    if (yearSubtitle) yearSubtitle.textContent = `Actual vs. budgeted earnings for ${year}.`;
+
+
     // Calculate yearly totals
     const monthlyWeeks = getWeeksGroupedByMonth(year);
     let yearlyCash = 0;
@@ -17682,10 +18775,10 @@ function renderDeliveryYearSummary() {
         totalsHeader.innerHTML = `
             <div class="yearly-totals-summary-container">
                 <div class="platform-totals">
-                    <span>Cash: <strong>${formatVal(yearlyCash)}</strong></span>
-                    <span>DoorDash: <strong>${formatVal(yearlySideGigs)}</strong></span>
-                    <span>Grubhub: <strong>${formatVal(yearlyGrubHub)}</strong></span>
-                    <span>UberEats: <strong>${formatVal(yearlyUberEats)}</strong></span>
+                    <span><span class="full-label">Cash</span><span class="abbr-label">C</span>: <strong>${formatVal(yearlyCash)}</strong></span>
+                    <span><span class="full-label">DoorDash</span><span class="abbr-label">DD</span>: <strong>${formatVal(yearlySideGigs)}</strong></span>
+                    <span><span class="full-label">Grubhub</span><span class="abbr-label">GH</span>: <strong>${formatVal(yearlyGrubHub)}</strong></span>
+                    <span><span class="full-label">UberEats</span><span class="abbr-label">UE</span>: <strong>${formatVal(yearlyUberEats)}</strong></span>
                 </div>
                 <div class="overall-totals">
                     <span>Budget: <strong>${formatVal(yearlyBudget)}</strong></span>
@@ -17729,7 +18822,7 @@ function renderDeliveryYearSummary() {
             
             return `
                 <tr>
-                    <td><strong>Week ${wIdx + 1}</strong></td>
+                    <td style="text-align: center;"><strong>${wIdx + 1}</strong></td>
                     <td class="muted-text">${monStr} - ${sunStr}</td>
                     <td style="text-align: right;">${formatVal(pureWeekBudget)}</td>
                     <td style="text-align: right; font-weight: 600;">${formatVal(pureWeekActual)}</td>
@@ -17758,10 +18851,10 @@ function renderDeliveryYearSummary() {
                     <table class="data-table">
                         <thead>
                             <tr>
-                                <th>Week</th>
-                                <th>Date Range</th>
-                                <th style="text-align: right;">Budgeted Goal</th>
-                                <th style="text-align: right;">Actual Earnings</th>
+                                <th style="text-align: center;">Week</th>
+                                <th><span class="full-label">Date Range</span><span class="abbr-label">Range</span></th>
+                                <th style="text-align: right;"><span class="full-label">Budgeted Goal</span><span class="abbr-label">Goal</span></th>
+                                <th style="text-align: right;"><span class="full-label">Actual Earnings</span><span class="abbr-label">Actual</span></th>
                                 <th style="text-align: right;">Variance</th>
                             </tr>
                         </thead>
@@ -21113,6 +22206,20 @@ function renderBillsTab() {
     // table body simply blank instead.
 }
 // 4. RENDER DELIVERY EARNINGS TAB (Platform totals & weekly grid)
+// Reflects state.deliveryColumnPrefs (which platform columns are visible, mobile-only feature — cash
+// and grub hub especially are rarely used by some, and the log is cramped enough on a phone that
+// hiding unused columns matters) onto both the checkboxes and the table's hide-col-* classes.
+function syncDeliveryColumnToggles() {
+    const prefs = state.deliveryColumnPrefs || {};
+    const table = document.getElementById('delivery-table');
+    document.querySelectorAll('.delivery-col-toggle').forEach(cb => {
+        const col = cb.dataset.col;
+        const visible = prefs[col] !== false;
+        cb.checked = visible;
+        if (table) table.classList.toggle(`hide-col-${col}`, !visible);
+    });
+}
+
 function renderDeliveryTab() {
     const month = state.currentMonth;
     
@@ -21243,29 +22350,34 @@ function renderDeliveryTab() {
                 const val = gRecord[k];
                 return val ? `$${val.toFixed(2)}` : '$0.00';
             };
-            const mobileReadonly = isMobileViewport() ? 'readonly' : '';
+            const mobileReadonly = isTouchDevice() ? 'readonly' : '';
+            // On mobile the input is already readonly and tapping it opens the entry modal — it must
+            // stay enabled (just visually greyed) so that tap still works, otherwise a disabled field
+            // can't be clicked at all and there's no way back into the modal to un-check "no earnings".
+            // Desktop edits the field directly, so disabling it there to block typing is correct.
+            const noEarnAttrs = isTouchDevice() ? 'style="opacity:0.5;"' : 'disabled style="opacity:0.5;"';
             colsHtml = `
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="cash" data-label="Cash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnCash ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('cash')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="cash" data-label="Cash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnCash ? noEarnAttrs : ''}>${formatVal('cash')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="cash" ${gRecord.noEarnCash ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="sideGigs" data-label="Door Dash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnSideGigs ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('sideGigs')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="sideGigs" data-label="Door Dash" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnSideGigs ? noEarnAttrs : ''}>${formatVal('sideGigs')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="sideGigs" ${gRecord.noEarnSideGigs ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="grubHub" data-label="Grub Hub" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnGrubHub ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('grubHub')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="grubHub" data-label="Grub Hub" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnGrubHub ? noEarnAttrs : ''}>${formatVal('grubHub')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="grubHub" ${gRecord.noEarnGrubHub ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
                 <td>
                     <div class="gig-cell-content">
-                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="uberEats" data-label="Uber Eats" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnUberEats ? 'disabled style="opacity:0.5;"' : ''}>${formatVal('uberEats')}</textarea>
+                        <textarea class="gig-input" rows="1" data-date="${gRecord.date}" data-key="uberEats" data-label="Uber Eats" placeholder="$0.00" ${mobileReadonly} ${gRecord.noEarnUberEats ? noEarnAttrs : ''}>${formatVal('uberEats')}</textarea>
                         <input type="checkbox" class="gig-no-earn" tabindex="-1" data-date="${gRecord.date}" data-key="uberEats" ${gRecord.noEarnUberEats ? 'checked' : ''} title="No earnings">
                     </div>
                 </td>
@@ -21301,6 +22413,20 @@ function renderDeliveryTab() {
                     openGigEntryDialog(gRecord.date, key, input.dataset.label);
                 }
             });
+
+            // iOS Safari doesn't reliably fire `click` on the first tap of a readonly (not
+            // disabled) text field — it treats that tap as a text-selection gesture first, so
+            // opening the dialog took two taps. The wrapper div has no such quirk, so once the
+            // field is readonly (mobile), let taps pass through to it via CSS (pointer-events)
+            // and handle the open here instead.
+            const wrapper = input.closest('.gig-cell-content');
+            if (wrapper) {
+                wrapper.addEventListener('click', (e) => {
+                    if (input.hasAttribute('readonly') && !input.disabled) {
+                        openGigEntryDialog(gRecord.date, key, input.dataset.label);
+                    }
+                });
+            }
 
             input.addEventListener('focus', (e) => {
                 const rec = state.deliveryEarnings.find(item => item.date === gRecord.date);
@@ -21486,6 +22612,9 @@ function renderDeliveryTab() {
                         rec.noEarnSideGigs = false;
                         rec.noEarnGrubHub = false;
                         rec.noEarnUberEats = false;
+                        if (state.deliveryBudgets) {
+                            delete state.deliveryBudgets[date];
+                        }
                     } else {
                         rec.offDayReason = '';
                     }
@@ -21498,8 +22627,9 @@ function renderDeliveryTab() {
         gridBody.appendChild(row);
     });
     
+    syncDeliveryColumnToggles();
     renderDeliveryYearSummary();
-    
+
     // Restore focus if a tab navigation was queued
     if (state.nextFocusDate && state.nextFocusKey) {
         const targetInput = document.querySelector(`textarea.gig-input[data-date="${state.nextFocusDate}"][data-key="${state.nextFocusKey}"]`);
@@ -22265,6 +23395,26 @@ function logSuccess(msg) {
     const entry = document.createElement('div');
     entry.className = 'log-entry success';
     entry.textContent = `[SUCCESS]: ${msg}`;
+    container.appendChild(entry);
+    container.scrollTop = container.scrollHeight;
+}
+
+function logError(msg) {
+    const container = document.getElementById('logs-container');
+    if (!container) return;
+    const entry = document.createElement('div');
+    entry.className = 'log-entry error';
+    entry.textContent = `[ERROR]: ${msg}`;
+    container.appendChild(entry);
+    container.scrollTop = container.scrollHeight;
+}
+
+function logInfo(msg) {
+    const container = document.getElementById('logs-container');
+    if (!container) return;
+    const entry = document.createElement('div');
+    entry.className = 'log-entry info';
+    entry.textContent = `[INFO]: ${msg}`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
 }
