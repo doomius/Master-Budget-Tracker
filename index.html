@@ -17466,7 +17466,7 @@ function setupEventListeners() {
     const btnClearLocalData = document.getElementById('btn-clear-local-data');
     if (btnClearLocalData) {
         btnClearLocalData.addEventListener('click', () => {
-            if (!confirm('This permanently erases all local app data on this device and reloads to a blank slate. It does NOT touch the Google Sheet. Make sure you have a JSON backup first — this cannot be undone. Continue?')) return;
+            if (!confirm('This permanently erases all local app data on this device and resets to a blank slate. It does NOT touch the Google Sheet. Make sure you have a JSON backup first — this cannot be undone. Continue?')) return;
 
             localStorage.removeItem(CONFIG.storageKey);
             // Also clear the per-tab "last synced ids" tombstone-tracking, not just the app data
@@ -17478,10 +17478,31 @@ function setupEventListeners() {
                 .filter(key => key.startsWith('budgetify_sync_ids_') || key.startsWith('budgetify_sync_hash_'))
                 .forEach(key => localStorage.removeItem(key));
 
-            // sessionStorage (not the state that just got wiped) so init() can restore the Sync
-            // Settings tab after the reload instead of landing back on the Dashboard by default.
-            sessionStorage.setItem('budgetify_post_reload_tab', 'sync');
-            location.reload();
+            // In-place reset instead of location.reload() — a reload works fine as a top-level page,
+            // but when this app is embedded in an iframe (e.g. a Google Sites custom-HTML embed),
+            // the sandboxed frame can block the reload's navigation outright and leave the whole
+            // embed blank with no error, no confirmation the clear even happened. loadDatabase() with
+            // no cached data falls through to resetToDefaults(), which is the same fresh-state path a
+            // real first-ever load takes — renderApp() alone is enough to reflect it, so a hard
+            // reload was never actually necessary for correctness (same reasoning as the JSON import
+            // handler above).
+            loadDatabase();
+            try {
+                document.getElementById('year-select').value = state.currentYear;
+                document.getElementById('month-select').value = state.currentMonth;
+                updateSegmentedControlsUI();
+                const isJoint = state.dashboardType === 'joint';
+                document.getElementById('joint-type-group').classList.toggle('hidden', !isJoint);
+                document.getElementById('dashboard-calendar-view').classList.toggle('hidden', state.viewMode === 'list');
+                document.getElementById('dashboard-list-view').classList.toggle('hidden', state.viewMode === 'calendar');
+                updateQuickAddFormFields();
+                updateTabTitles();
+            } catch (syncErr) {
+                console.warn('Non-critical UI sync after clearing local data failed (data was still cleared):', syncErr);
+            }
+            renderApp();
+            switchToTab('sync');
+            logSuccess('All local data cleared and reset to defaults.');
         });
     }
 
