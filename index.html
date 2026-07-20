@@ -80,7 +80,10 @@ body {
     color: var(--text-primary);
     font-family: var(--font-body);
     min-height: 100vh;
-    overflow-x: hidden;
+    /* clip (not hidden) avoids the CSS rule that forces overflow-y to become a scroll container
+       whenever overflow-x isn't visible — that forced auto would otherwise hijack position:sticky
+       descendants (e.g. the delivery table header) away from the real page scroll. */
+    overflow-x: clip;
     -webkit-font-smoothing: antialiased;
 }
 
@@ -1021,13 +1024,9 @@ label {
     font-size: 0.95rem;
 }
 
-/* Pinned just below .main-sticky-dashboard so it's still visible while scrolling through a long
-   week of rows — otherwise there's no reminder of which checkbox toggles which column once you've
-   scrolled past it. `top` is set dynamically by _updateDeliveryStickyOffsets() (called after every
-   delivery render and on resize), not hardcoded here — .main-sticky-dashboard's actual height
-   differs a lot by context (and on mobile it drops to position:static entirely, see the 900px
-   media query above), so a fixed pixel guess landed right on desktop but put this row floating
-   mid-page on mobile. The JS measures the real height of whatever's actually sticky above it. */
+/* Deliberately NOT sticky — only the table header itself should stay pinned while scrolling.
+   Making this row sticky too meant it stacked on top of the header, permanently consuming two
+   rows' worth of vertical space and pushing/hiding actual data rows underneath it. */
 .delivery-col-toggles {
     display: flex;
     flex-wrap: wrap;
@@ -1035,12 +1034,7 @@ label {
     gap: 0.75rem;
     padding: 0.5rem 0;
     font-size: 0.8rem;
-    position: sticky;
-    top: 0;
-    z-index: 11;
     background: rgba(6, 9, 19, 0.98);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
 }
 .delivery-col-toggles label {
     display: inline-flex;
@@ -1687,7 +1681,7 @@ label {
         padding-top: calc(4.5rem + env(safe-area-inset-top, 0px));
         padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
         max-width: 100vw;
-        overflow-x: hidden;
+        overflow-x: clip;
     }
     .split-columns {
         flex-direction: column;
@@ -2395,12 +2389,22 @@ body.maximized-calendar .day-transaction-item {
 @media (max-width: 900px) {
     /* Broad safety net: let any card scroll horizontally instead of clipping/pushing content off
        screen with no way to reach it. Cards that don't overflow are unaffected. */
-    .glass-card {
+    .glass-card:not(.delivery-grid-card) {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
     }
     .table-responsive {
         -webkit-overflow-scrolling: touch;
+    }
+    /* The delivery table's header/column-toggle bar use position:sticky to stay pinned while
+       scrolling the page. overflow-x:auto on an ancestor forces browsers to also treat overflow-y
+       as a scroll container, which hijacks sticky positioning away from the real page scroll (the
+       element then "sticks" relative to its own non-scrolling box instead, i.e. doesn't stick at
+       all). Column visibility is already controlled manually via the "Show columns" toggles, so we
+       don't need automatic horizontal scroll here. */
+    .delivery-grid-card,
+    .delivery-grid-card .table-responsive {
+        overflow: visible;
     }
 
     /* table-card-header (title+subtitle block next to action buttons) squeezes both onto one flex
@@ -13555,12 +13559,11 @@ function _updateDeliveryStickyOffsets() {
     const stickyDashboard = document.querySelector('.main-sticky-dashboard');
     const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
     const dashboardHeight = dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
-    colToggles.style.top = `${dashboardHeight}px`;
 
-    const togglesHeight = colToggles.getBoundingClientRect().height;
-    const theadTop = dashboardHeight + togglesHeight;
+    // .delivery-col-toggles is not sticky (see index.css) — only the header itself pins, directly
+    // below whatever's sticky above it (the dashboard on desktop, nothing on mobile).
     table.querySelectorAll('thead th').forEach(th => {
-        th.style.top = `${theadTop}px`;
+        th.style.top = `${dashboardHeight}px`;
     });
 }
 
