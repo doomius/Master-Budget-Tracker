@@ -2635,6 +2635,7 @@ body.maximized-calendar .day-transaction-item {
 
                 <!-- 3. RIGHT SIDE: Action Buttons -->
                 <div class="header-right" style="display: flex; align-items: center; gap: 0.75rem; margin-left: auto;">
+                    <button type="button" class="action-btn outline-btn" id="btn-open-starting-balance" title="Reset a checking account's balance as of a specific date" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⚙️ Starting Balance</button>
                     <button type="button" class="action-btn outline-btn" id="btn-toggle-metrics" title="Toggle metrics dashboard visibility" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">📊 Hide Metrics</button>
                     <button type="button" class="action-btn outline-btn" id="btn-toggle-layout-maximize" title="Toggle full-screen view" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⤢ Expand View</button>
                 </div>
@@ -2853,6 +2854,9 @@ body.maximized-calendar .day-transaction-item {
                                     <h3>Personal Allocations / Individual Cash</h3>
                                     <div style="display:flex; gap:0.5rem; align-items:center;">
                                         <button class="action-btn small-btn solid-btn" id="btn-add-allocation">+ Add Allocation</button>
+                                        <button type="button" class="action-btn small-btn danger-btn hidden" id="btn-delete-selected-allocations" title="Delete only the checked allocations">Delete Selected</button>
+                                        <button type="button" class="action-btn small-btn danger-btn" id="btn-clear-month-allocations" title="Remove every personal allocation shown for the current month">Clear This Month</button>
+                                        <button type="button" class="action-btn small-btn danger-btn" id="btn-clear-recurring-allocations" title="Delete every recurring allocation series and all of its generated occurrences, in every month">Clear All Recurring</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="personal-allocations-content" data-key="personalAllocations">&#9660;</button>
                                     </div>
                                 </div>
@@ -2861,6 +2865,7 @@ body.maximized-calendar .day-transaction-item {
                                     <table class="data-table">
                                         <thead>
                                             <tr>
+                                                <th style="width:2rem;"><input type="checkbox" id="alloc-select-all" title="Select all shown"></th>
                                                 <th data-allocation-sort="name" style="cursor:pointer;">Name</th>
                                                 <th data-allocation-sort="cycle" style="cursor:pointer;">Due Cycle</th>
                                                 <th data-allocation-sort="jason" style="cursor:pointer;">Jason Amt</th>
@@ -3653,25 +3658,28 @@ body.maximized-calendar .day-transaction-item {
             <div class="form-row">
                 <div class="form-group">
                     <label class="checkbox-label"><input type="checkbox" id="alloc-jason-enabled"> Jason</label>
-                    <div class="input-prefix-wrapper hidden" id="alloc-jason-group">
-                        <span class="input-prefix">$</span>
-                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-jason" class="custom-input" placeholder="Allocation amount">
+                    <div class="form-row hidden" id="alloc-jason-group">
+                        <div class="form-group"><label for="alloc-jason-increase" style="font-size:.75rem;">Increase Transfer</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-jason-increase" class="custom-input" placeholder="0.00"></div></div>
+                        <div class="form-group"><label for="alloc-jason-reduce" style="font-size:.75rem;">Reduce Transfer</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-jason-reduce" class="custom-input" placeholder="0.00"></div></div>
                     </div>
                 </div>
                 <div class="form-group">
                     <label class="checkbox-label"><input type="checkbox" id="alloc-asia-enabled"> Asia</label>
-                    <div class="input-prefix-wrapper hidden" id="alloc-asia-group">
-                        <span class="input-prefix">$</span>
-                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-asia" class="custom-input" placeholder="Allocation amount">
+                    <div class="form-row hidden" id="alloc-asia-group">
+                        <div class="form-group"><label for="alloc-asia-increase" style="font-size:.75rem;">Increase Transfer</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-asia-increase" class="custom-input" placeholder="0.00"></div></div>
+                        <div class="form-group"><label for="alloc-asia-reduce" style="font-size:.75rem;">Reduce Transfer</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-asia-reduce" class="custom-input" placeholder="0.00"></div></div>
                     </div>
                 </div>
             </div>
             <div class="form-group">
-                <label class="checkbox-label"><input type="checkbox" id="alloc-offset-enabled"> Add an offset debit in the following cycle</label>
+                <label class="checkbox-label"><input type="checkbox" id="alloc-offset-enabled"> Add an offset in the following cycle</label>
+                <small class="muted-text">Auto-fills below from the amounts above — an increase here becomes a reduction next cycle, and vice versa. Edit if you need different numbers.</small>
             </div>
             <div class="form-row hidden" id="alloc-offset-fields">
-                <div class="form-group"><label for="alloc-offset-jason">Following Cycle — Jason</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-offset-jason" class="custom-input" placeholder="Leave blank for no change"></div></div>
-                <div class="form-group"><label for="alloc-offset-asia">Following Cycle — Asia</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="alloc-offset-asia" class="custom-input" placeholder="Leave blank for no change"></div></div>
+                <div class="form-group"><label for="alloc-offset-jason-increase" style="font-size:.75rem;">Following Cycle — Jason Increase</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-offset-jason-increase" class="custom-input" placeholder="0.00"></div></div>
+                <div class="form-group"><label for="alloc-offset-jason-reduce" style="font-size:.75rem;">Following Cycle — Jason Reduce</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-offset-jason-reduce" class="custom-input" placeholder="0.00"></div></div>
+                <div class="form-group"><label for="alloc-offset-asia-increase" style="font-size:.75rem;">Following Cycle — Asia Increase</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-offset-asia-increase" class="custom-input" placeholder="0.00"></div></div>
+                <div class="form-group"><label for="alloc-offset-asia-reduce" style="font-size:.75rem;">Following Cycle — Asia Reduce</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="alloc-offset-asia-reduce" class="custom-input" placeholder="0.00"></div></div>
             </div>
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" id="alloc-recurring"> Recurring charge</label>
@@ -4064,6 +4072,31 @@ body.maximized-calendar .day-transaction-item {
         <div id="day-highlights-dialog-content" class="highlights-list"></div>
     </dialog>
 
+    <dialog id="starting-balance-dialog" class="glass-modal">
+        <form id="starting-balance-form" class="detail-form">
+            <h3>Reset Checking Balance</h3>
+            <p class="muted-text" style="margin-top:-0.5rem;">Sets a checking account's balance as of a specific date. Every transaction dated before that date is deleted and the running balance for all earlier dates is zeroed — this cannot be undone.</p>
+            <div class="form-group">
+                <label for="starting-balance-account">Account</label>
+                <select id="starting-balance-account" class="custom-select">
+                    <option value="personal">Personal Checking</option>
+                    <option value="joint">Joint Checking</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="starting-balance-date">As Of Date</label>
+                <input type="date" id="starting-balance-date" required class="custom-input">
+            </div>
+            <div class="form-group">
+                <label for="starting-balance-amount">Starting Balance</label>
+                <div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="starting-balance-amount" required class="custom-input"></div>
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-starting-balance">Cancel</button>
+                <button type="submit" class="action-btn danger-btn">Wipe &amp; Reset Balance</button>
+            </div>
+        </form>
+    </dialog>
     <dialog id="savings-balance-dialog" class="glass-modal">
         <form id="savings-balance-form" class="detail-form">
             <h3>Savings Balance Settings</h3>
@@ -4431,13 +4464,18 @@ window.INITIAL_BUDGET_DATA = {
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-07-19 19:28';
+const BUILD_VERSION = '2026-07-21 11:00';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
     storageKey: 'budgetify_db_perpetual',
     taxRate: 0.20 // 20% tax savings on side gigs
 };
+
+// Checked-row selection for the Personal Allocations table's bulk delete. Deliberately not part of
+// `state` — it's a transient UI selection, not data worth persisting or syncing — but module-level
+// so it survives the re-renders that happen between checking a box and clicking "Delete Selected".
+let _selectedAllocationIds = new Set();
 
 // A fresh copy of the baseline shape every field not explicitly listed here still needs to start
 // from. resetToDefaults() (used by both first-ever load and "Clear All Local Data") reassigns
@@ -4474,7 +4512,13 @@ function _createBlankState() {
         savingsMetricsCollapsed: false,
         savingsYearSummaryCollapsed: false,
         deliveryYearSummaryCollapsed: false,
-        platformBreakdownCollapsed: false
+        platformBreakdownCollapsed: false,
+        // A one-time reset point: { date: 'YYYY-MM-DD', amount: number } or null. When set, every
+        // running-balance calculation for that account treats `amount` as the true balance at the
+        // start of `date` and ignores everything before it — see getPersonalStartingBalanceAnchor()/
+        // getJointStartingBalanceAnchor() and the checkpoint functions that consult them.
+        personalStartingBalance: null,
+        jointStartingBalance: null
     };
 }
 
@@ -4694,7 +4738,14 @@ function getPersonalTransactionsForPeriod(year, monthShort) {
     const skippedPaychecks = state.payrollConfig?.skippedPaychecks || [];
     const monthPaychecks = yearPaychecks.filter(d => d.startsWith(prefix) && !skippedPaychecks.includes(d));
     
+    // A starting-balance reset wipes stored transactions before it, but paychecks/delivery earnings
+    // aren't stored rows — they're regenerated from payrollConfig/deliveryEarnings every time this
+    // runs, so without this check they'd keep reappearing (cosmetically, and in the balance math both)
+    // for every date before the reset no matter how many times it's cleared.
+    const personalDynamicAnchor = getPersonalStartingBalanceAnchor();
+
     monthPaychecks.forEach(dateStr => {
+        if (personalDynamicAnchor && dateStr <= personalDynamicAnchor.date) return;
         const id = `dynamic-paycheck-${dateStr}`;
         const override = (state.dynamicOverrides || {})[id];
         if (override?.deleted) return;
@@ -4737,8 +4788,9 @@ function getPersonalTransactionsForPeriod(year, monthShort) {
         
         if (weekGrossTotal > 0) {
             const sundayDateStr = week[6].date;
+            if (personalDynamicAnchor && sundayDateStr <= personalDynamicAnchor.date) return;
             const id = `dynamic-delivery-${sundayDateStr}`;
-            
+
             // Check if there is a deletion override
             const override = (state.dynamicOverrides || {})[id];
             if (override?.deleted) return;
@@ -5178,6 +5230,8 @@ function migrateDatabase() {
         migrated = true;
     }
     if (!state.seasonalExpenses) { state.seasonalExpenses = []; migrated = true; }
+    if (state.personalStartingBalance === undefined) { state.personalStartingBalance = null; migrated = true; }
+    if (state.jointStartingBalance === undefined) { state.jointStartingBalance = null; migrated = true; }
     if (!state.manualTransfers) { state.manualTransfers = []; migrated = true; }
     if (!state.deliveryBudgets) { state.deliveryBudgets = {}; migrated = true; }
     if (!state.billsAndAllocationsCleared20260714) {
@@ -5529,6 +5583,36 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount) {
     }
     
     dialog.showModal();
+}
+
+// Resets a checking account's running balance to `amount` as of the morning of `dateStr`: every
+// stored transaction dated ON OR before it is deleted, and every running-balance calculation for this
+// account from then on treats `amount` as the true opening balance at that point, ignoring anything
+// before it — see getPersonalStartingBalanceAnchor()/getJointStartingBalanceAnchor() and the
+// checkpoint functions that consult them. The anchor date itself must be wiped too, not just kept as
+// a cutoff: getPersonalRunningBalanceAtDate()/getJointRunningBalanceAtDate() treat anything dated
+// exactly on the anchor as happening AT/AFTER the reset (matching how every other date comparison in
+// this app already works) and will still add it to the total — a leftover transaction dated exactly
+// on `dateStr` (e.g. an old one-off balance correction made on that same day, before this feature
+// existed) would otherwise silently survive the reset and get added on top of `amount`, which is
+// exactly the bug this comment used to gloss over by claiming deletion "isn't load-bearing." It is,
+// for this one day. This cannot be undone; the caller is expected to confirm first.
+function applyStartingBalanceReset(account, dateStr, amount) {
+    if (account === 'personal') {
+        Object.keys(state.personalCalendar).forEach(key => {
+            state.personalCalendar[key] = (state.personalCalendar[key] || []).filter(tx => tx.date > dateStr);
+        });
+        // Delivery earnings power the dynamic "Delivery Earnings" entries getPersonalTransactionsForPeriod()
+        // injects on the fly — deleting the underlying logged amounts here means there's nothing left to
+        // (re)generate for dates at/before the reset, on top of that function's own date suppression.
+        // Paychecks have no equivalent per-date storage to delete (they're derived from payrollConfig's
+        // recurring schedule, not a logged list) — suppressing their generation there is the only lever.
+        state.deliveryEarnings = (state.deliveryEarnings || []).filter(rec => _deliveryEarningsDateKey(rec.date) > dateStr);
+        state.personalStartingBalance = { date: dateStr, amount };
+    } else {
+        state.jointRegister = (state.jointRegister || []).filter(tx => tx.date > dateStr);
+        state.jointStartingBalance = { date: dateStr, amount };
+    }
 }
 
 function resetToDefaults() {
@@ -6275,25 +6359,56 @@ async function pullDashboardFromSheet() {
 // user-edited data is TWO separate recurring-template maps (both keyed by seriesId) —
 // state.billRecurrenceTemplates (recurring bills) and state.allocationTemplates (recurring
 // personal allocations) — which get expanded into each month's state.monthlyBills[monthKey]
-// [cycleKey].bills/.contributions on demand. Those generated monthly instances are NOT synced
-// directly, for two reasons: (1) they're derived data, regenerated from the templates the same
-// way autopopulateBillsForMonth() does for Bill Tracker, and (2) some splitter rows are locked
-// and driven entirely by the Credit Cards section (linkedCardPaymentId/cardPaymentKind, see
-// syncCardPaymentSplitterRowsForMonth()) — syncing raw monthlyBills rows risks fighting with
-// that lock instead of respecting it. One-off (non-recurring, template-less) bills/contributions
-// that exist only inside a single month's monthlyBills are NOT covered by this — only recurring
-// series are template-backed. That's a known gap if the user relies heavily on one-off entries;
-// flagged rather than silently synced incorrectly.
-// The Sheet row id is the sequential syncId ('BS-3'); the real identity for merging is the
-// seriesId, which is carried inside the data envelope since the templates are stored as
-// {seriesId: tpl} maps and the syncId lives on the tpl object itself.
+// [cycleKey].bills/.contributions on demand. Most of those generated monthly instances don't need
+// their own sync record: they're derived data, regenerated from the templates the same way
+// autopopulateBillsForMonth() does for Bill Tracker. But two kinds of allocation row are NOT
+// reproducible from a template alone and used to be silently dropped by a "Clear All Local Data"
+// + "Pull from Google Sheet" round trip: (1) the origin-month occurrence, which is written
+// directly into that month's contributions the moment the row is created and is never re-derived
+// by applyAllocationTemplatesForMonth() (it only ever generates rows for months AFTER the
+// template's startIndex), and (2) genuinely one-off, non-recurring allocations that have no
+// seriesId/template at all. Both are pushed/pulled here as 'allocationRow' records, identified by
+// their own per-item syncId (see getOrAssignSyncId) rather than by month/cycle position, so they
+// survive a clear+pull the same way templates already did. A row is skipped here (left to
+// regenerate for free from its template) only when its id still matches the deterministic
+// `alloc-<seriesId>-<year>-<month>-<role>` pattern applyAllocationTemplatesForMonth() stamps on
+// every row it generates — see _isTemplateGeneratedAllocationRowId(). Known remaining gap: if a
+// derived occurrence is edited in place without checking "apply to future," it keeps that same
+// deterministic id, so the edit alone still won't sync — flagged rather than silently handled.
+// Bill rows (as opposed to allocations) keep the old template-only behavior; the user's reported
+// data loss was specific to Bill Splitter's personal allocations.
+// The Sheet row id is the sequential syncId ('BS-3'); for templates the real identity for merging
+// is the seriesId (carried inside the data envelope, since templates are stored as {seriesId: tpl}
+// maps); for concrete allocation rows the row's own syncId IS the merge identity.
+function _isTemplateGeneratedAllocationRowId(item, year, month) {
+    if (!item.seriesId) return false;
+    const role = item.role || 'base';
+    return item.id === `alloc-${item.seriesId}-${year}-${month}-${role}`;
+}
+
+function _collectConcreteAllocationRows() {
+    const results = [];
+    Object.entries(state.monthlyBills || {}).forEach(([monthKey, mBills]) => {
+        const [year, month] = monthKey.split('-');
+        ['cycle1st', 'cycle15th'].forEach(cycleKey => {
+            (mBills?.[cycleKey]?.contributions || []).forEach(item => {
+                if (_isTemplateGeneratedAllocationRowId(item, year, month)) return;
+                results.push({ monthKey, cycleKey, item });
+            });
+        });
+    });
+    return results;
+}
+
 async function pushBillSplitterToSheet() {
     const billRecords = Object.entries(state.billRecurrenceTemplates || {})
         .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'billTemplate', seriesId, tpl } }));
     const allocRecords = Object.entries(state.allocationTemplates || {})
         .map(([seriesId, tpl]) => ({ id: getOrAssignSyncId(tpl, 'BillSplitter'), data: { kind: 'allocationTemplate', seriesId, tpl } }));
+    const concreteAllocRecords = _collectConcreteAllocationRows()
+        .map(({ monthKey, cycleKey, item }) => ({ id: getOrAssignSyncId(item, 'BillSplitter'), data: { kind: 'allocationRow', monthKey, cycleKey, item } }));
     _persistSyncIdsOnly();
-    return syncPushTab('BillSplitter', [...billRecords, ...allocRecords]);
+    return syncPushTab('BillSplitter', [...billRecords, ...allocRecords, ...concreteAllocRecords]);
 }
 
 async function pullBillSplitterFromSheet() {
@@ -6301,9 +6416,22 @@ async function pullBillSplitterFromSheet() {
     if (!state.allocationTemplates) state.allocationTemplates = {};
     const billSnapshotById = _snapshotRecordsById(Object.entries(state.billRecurrenceTemplates).map(([id, tpl]) => ({ id, tpl })), r => r.id);
     const allocSnapshotById = _snapshotRecordsById(Object.entries(state.allocationTemplates).map(([id, tpl]) => ({ id, tpl })), r => r.id);
+
+    // Concrete rows are keyed by their own syncId (assigned per-item at push time, same as
+    // templates) rather than by month/cycle — that's what lets _safeToOverwrite() protect an
+    // in-flight local edit exactly the same way it does for every other synced section.
+    const concreteRowsBySyncId = new Map();
+    _collectConcreteAllocationRows().forEach(({ monthKey, cycleKey, item }) => {
+        if (item.syncId) concreteRowsBySyncId.set(item.syncId, { monthKey, cycleKey, item });
+    });
+    const concreteSnapshotById = _snapshotRecordsById(
+        Array.from(concreteRowsBySyncId.entries()).map(([id, r]) => ({ id, item: r.item })), r => r.id
+    );
+
     const syncIds = new Set();
     Object.values(state.billRecurrenceTemplates).forEach(tpl => { if (tpl.syncId) syncIds.add(tpl.syncId); });
     Object.values(state.allocationTemplates).forEach(tpl => { if (tpl.syncId) syncIds.add(tpl.syncId); });
+    concreteRowsBySyncId.forEach((_row, id) => syncIds.add(id));
 
     const rows = await syncFetchTab('BillSplitter');
 
@@ -6324,6 +6452,21 @@ async function pullBillSplitterFromSheet() {
             if (_safeToOverwrite(allocSnapshotById, seriesId, live !== undefined ? { id: seriesId, tpl: live } : undefined)) {
                 state.allocationTemplates[seriesId] = row.data.tpl;
             }
+        } else if (row.data.kind === 'allocationRow') {
+            const existingEntry = concreteRowsBySyncId.get(row.id);
+            const liveSnapshotRecord = existingEntry ? { id: row.id, item: existingEntry.item } : undefined;
+            if (!_safeToOverwrite(concreteSnapshotById, row.id, liveSnapshotRecord)) return;
+            const targetMonthKey = existingEntry?.monthKey || row.data.monthKey;
+            const targetCycleKey = existingEntry?.cycleKey || row.data.cycleKey;
+            if (!targetMonthKey || !targetCycleKey) return;
+            const [yearStr, monthStr] = targetMonthKey.split('-');
+            ensureYearMonthInitialized(Number(yearStr), monthStr);
+            const mBills = state.monthlyBills[targetMonthKey];
+            if (!mBills || !mBills[targetCycleKey]) return;
+            const list = mBills[targetCycleKey].contributions;
+            const idx = list.findIndex(i => i.syncId === row.id);
+            const restored = { ...row.data.item, syncId: row.id };
+            if (idx > -1) list[idx] = restored; else list.push(restored);
         }
     });
 
@@ -6946,6 +7089,47 @@ function setupEventListeners() {
         document.getElementById('savings-balance-dialog').showModal();
     });
     document.getElementById('btn-cancel-savings-balance').addEventListener('click', () => document.getElementById('savings-balance-dialog').close());
+
+    document.getElementById('btn-open-starting-balance').addEventListener('click', () => {
+        document.getElementById('starting-balance-form').reset();
+        document.getElementById('starting-balance-account').value = state.dashboardType === 'joint' ? 'joint' : 'personal';
+        document.getElementById('starting-balance-date').value = formatLocalDate(new Date());
+        document.getElementById('starting-balance-dialog').showModal();
+    });
+    document.getElementById('btn-cancel-starting-balance').addEventListener('click', () => document.getElementById('starting-balance-dialog').close());
+    document.getElementById('starting-balance-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const account = document.getElementById('starting-balance-account').value === 'joint' ? 'joint' : 'personal';
+        const dateStr = document.getElementById('starting-balance-date').value;
+        const amount = Number(document.getElementById('starting-balance-amount').value);
+        if (!dateStr || !Number.isFinite(amount)) return;
+        const accountLabel = account === 'joint' ? 'Joint Checking' : 'Personal Checking';
+        if (!confirm(`Reset ${accountLabel} to $${amount.toFixed(2)} as of ${dateStr}?\n\nEvery transaction dated before ${dateStr} will be permanently deleted and the running balance for all earlier dates will read $0. This cannot be undone.`)) return;
+        applyStartingBalanceReset(account, dateStr, amount);
+        saveDatabase(true); // skipAutoSync — pushing the deletion is handled explicitly below, awaited, before this closes
+        // Both personalCalendar and jointRegister sync through the Dashboard tab. If a Sheet is
+        // configured, the deletion above HAS to reach it before anything else can pull from that same
+        // tab — otherwise the normal 10s auto-push debounce leaves a window where an auto-pull (e.g.
+        // the very next page load) still finds the old rows on the Sheet and silently restores every
+        // transaction this reset just deleted, since a row missing locally but present on the Sheet
+        // looks identical to a fresh Sheet-side addition, not a deliberate deletion, to the pull merge
+        // logic. Pushing synchronously here, before renderApp()/closing the dialog, closes that window.
+        if (getSyncWebAppUrl()) {
+            const overlay = document.getElementById('app-busy-overlay');
+            if (overlay) overlay.classList.remove('hidden');
+            try {
+                await pushDashboardToSheet();
+            } catch (err) {
+                logError(`Reset applied locally, but pushing the deletion to the Sheet failed: ${err.message}. Push manually from Sync Settings before pulling again, or the deleted transactions may reappear.`);
+            } finally {
+                if (overlay) overlay.classList.add('hidden');
+            }
+        }
+        renderApp();
+        document.getElementById('starting-balance-dialog').close();
+        logSystem(`Reset ${accountLabel} to $${amount.toFixed(2)} as of ${dateStr}; earlier transactions deleted.`);
+    });
+
     document.getElementById('btn-toggle-savings-metrics').addEventListener('click', () => {
         state.savingsMetricsCollapsed = !state.savingsMetricsCollapsed;
         saveDatabase();
@@ -7864,25 +8048,46 @@ function setupEventListeners() {
         document.getElementById('alloc-frequency-preview').textContent = `${count} ${labels[frequency]} in ${MONTH_NAMES[state.currentMonth]}; entered amounts are applied ${count} time${count === 1 ? '' : 's'}.`;
     };
     document.getElementById('alloc-frequency').addEventListener('change', updateAllocationFrequencyPreview);
-    document.getElementById('alloc-start-date').addEventListener('change', updateAllocationFrequencyPreview);    const readOptionalAllocationAmount = id => {
-        const raw = document.getElementById(id).value.trim();
-        if (raw === '') return null;
-        const value = Number(raw);
-        return Number.isFinite(value) ? value : NaN;
+    document.getElementById('alloc-start-date').addEventListener('change', updateAllocationFrequencyPreview);
+    // Each person gets an "Increase Transfer" and a "Reduce Transfer" field instead of one signed
+    // amount box — positive-only entry on both sides is easier to reason about than remembering
+    // which sign means what. The two combine into the single signed number (increase - reduce)
+    // that the rest of the app (totals, templates, sync) has always stored and read.
+    const readAllocationNetAmount = prefix => {
+        const incRaw = document.getElementById(`${prefix}-increase`).value.trim();
+        const redRaw = document.getElementById(`${prefix}-reduce`).value.trim();
+        if (incRaw === '' && redRaw === '') return null;
+        const inc = incRaw === '' ? 0 : Number(incRaw);
+        const red = redRaw === '' ? 0 : Number(redRaw);
+        if (!Number.isFinite(inc) || !Number.isFinite(red)) return NaN;
+        return inc - red;
+    };
+    // Checking "offset" mirrors this cycle's amounts into the following cycle's fields so they
+    // don't have to be retyped: an Increase here becomes a Reduce there and vice versa, since the
+    // point of an offset is for the following cycle's transfer to move back the other way by the
+    // same dollar figure. Kept live (not just a one-time copy on check) so continuing to edit the
+    // amounts above keeps the offset fields in sync for as long as the checkbox stays checked.
+    const syncOffsetFieldsFromMain = () => {
+        document.getElementById('alloc-offset-jason-reduce').value = document.getElementById('alloc-jason-increase').value;
+        document.getElementById('alloc-offset-jason-increase').value = document.getElementById('alloc-jason-reduce').value;
+        document.getElementById('alloc-offset-asia-reduce').value = document.getElementById('alloc-asia-increase').value;
+        document.getElementById('alloc-offset-asia-increase').value = document.getElementById('alloc-asia-reduce').value;
     };
     document.getElementById('alloc-offset-enabled').addEventListener('change', (e) => {
         document.getElementById('alloc-offset-fields').classList.toggle('hidden', !e.target.checked);
-        if (e.target.checked) {
-            if (!document.getElementById('alloc-offset-jason').value) document.getElementById('alloc-offset-jason').value = document.getElementById('alloc-jason').value;
-            if (!document.getElementById('alloc-offset-asia').value) document.getElementById('alloc-offset-asia').value = document.getElementById('alloc-asia').value;
-        }
+        if (e.target.checked) syncOffsetFieldsFromMain();
     });
-    // Per-person checkboxes reveal the amount field; unchecking clears it so a hidden field never
-    // silently contributes an amount on save.
-    [['alloc-jason-enabled', 'alloc-jason-group', 'alloc-jason'], ['alloc-asia-enabled', 'alloc-asia-group', 'alloc-asia']].forEach(([cbId, groupId, inputId]) => {
+    ['alloc-jason-increase', 'alloc-jason-reduce', 'alloc-asia-increase', 'alloc-asia-reduce'].forEach(id => {
+        document.getElementById(id).addEventListener('input', () => {
+            if (document.getElementById('alloc-offset-enabled').checked) syncOffsetFieldsFromMain();
+        });
+    });
+    // Per-person checkboxes reveal the amount fields; unchecking clears them so a hidden field
+    // never silently contributes an amount on save.
+    [['alloc-jason-enabled', 'alloc-jason-group', ['alloc-jason-increase', 'alloc-jason-reduce']], ['alloc-asia-enabled', 'alloc-asia-group', ['alloc-asia-increase', 'alloc-asia-reduce']]].forEach(([cbId, groupId, inputIds]) => {
         document.getElementById(cbId).addEventListener('change', (e) => {
             document.getElementById(groupId).classList.toggle('hidden', !e.target.checked);
-            if (!e.target.checked) document.getElementById(inputId).value = '';
+            if (!e.target.checked) inputIds.forEach(id => { document.getElementById(id).value = ''; });
         });
     });
     document.getElementById('alloc-recurring').addEventListener('change', (e) => {
@@ -7900,11 +8105,11 @@ function setupEventListeners() {
         const occurrenceCount = getAllocationOccurrenceCount(frequency, startDate, state.currentYear, state.currentMonth);
         const jasonEnabled = document.getElementById('alloc-jason-enabled').checked;
         const asiaEnabled = document.getElementById('alloc-asia-enabled').checked;
-        const jasonInput = jasonEnabled ? readOptionalAllocationAmount('alloc-jason') : null;
-        const asiaInput = asiaEnabled ? readOptionalAllocationAmount('alloc-asia') : null;
+        const jasonInput = jasonEnabled ? readAllocationNetAmount('alloc-jason') : null;
+        const asiaInput = asiaEnabled ? readAllocationNetAmount('alloc-asia') : null;
         const offsetEnabled = document.getElementById('alloc-offset-enabled').checked;
-        const offsetJasonInput = readOptionalAllocationAmount('alloc-offset-jason');
-        const offsetAsiaInput = readOptionalAllocationAmount('alloc-offset-asia');
+        const offsetJasonInput = readAllocationNetAmount('alloc-offset-jason');
+        const offsetAsiaInput = readAllocationNetAmount('alloc-offset-asia');
         const applyFuture = isRecurringAlloc;
         const allocEndDate = isRecurringAlloc ? document.getElementById('alloc-end-date').value : '';
         const editId = document.getElementById('alloc-edit-id').value;
@@ -8679,14 +8884,55 @@ function setupEventListeners() {
         document.getElementById('alloc-offset-fields').classList.add('hidden');
         document.getElementById('alloc-jason-group').classList.add('hidden');
         document.getElementById('alloc-asia-group').classList.add('hidden');
-        document.getElementById('alloc-recurring').checked = true;
-        document.getElementById('alloc-recurrence-dates-group').classList.remove('hidden');
+        document.getElementById('alloc-recurring').checked = false;
+        document.getElementById('alloc-recurrence-dates-group').classList.add('hidden');
         document.getElementById('alloc-end-date').value = '';
         document.getElementById('alloc-frequency').value = 'monthly';
         document.getElementById('alloc-start-date').value = state.currentYear + '-' + String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0') + '-01';
         document.getElementById('alloc-frequency-preview').textContent = '1 monthly occurrence in ' + MONTH_NAMES[state.currentMonth] + '; entered amounts are applied once.';
         document.getElementById('allocation-modal-title').textContent = "Add Personal Allocation";
         document.getElementById('allocation-dialog').showModal();
+    });
+
+    // Clears every personal allocation row shown for the current month only (both cycles).
+    // Recurring series aren't touched — applyAllocationTemplatesForMonth() will just regenerate
+    // this month's occurrence again the next time the tab renders, unless the series is also
+    // stopped/skipped or removed entirely via "Clear All Recurring" below.
+    document.getElementById('btn-clear-month-allocations').addEventListener('click', () => {
+        const key = `${state.currentYear}-${state.currentMonth}`;
+        const mBills = state.monthlyBills[key];
+        if (!mBills) return;
+        const count = (mBills.cycle1st.contributions || []).length + (mBills.cycle15th.contributions || []).length;
+        if (count === 0) { alert('There are no personal allocations to clear for this month.'); return; }
+        if (!confirm(`Remove all ${count} personal allocation(s) shown for ${MONTH_NAMES[state.currentMonth]} ${state.currentYear}? Recurring series will keep generating in other months. This cannot be undone.`)) return;
+        mBills.cycle1st.contributions = [];
+        mBills.cycle15th.contributions = [];
+        recalculateBillCycleTotals(mBills);
+        saveDatabase(); renderApp();
+        logSystem(`Cleared ${count} personal allocation(s) for ${state.currentMonth} ${state.currentYear}.`);
+    });
+
+    // Deletes every recurring allocation template outright, plus every occurrence any of them has
+    // ever generated in any month (past or future) — a full purge, not just a future-facing stop.
+    // One-off, template-less allocations are untouched (use "Clear This Month" for those instead).
+    document.getElementById('btn-clear-recurring-allocations').addEventListener('click', () => {
+        const seriesIds = new Set(Object.keys(state.allocationTemplates || {}));
+        if (seriesIds.size === 0) { alert('There are no recurring allocation series to clear.'); return; }
+        if (!confirm(`Delete all ${seriesIds.size} recurring allocation series and every occurrence they've generated, across every month? This cannot be undone.`)) return;
+        let removed = 0;
+        Object.values(state.monthlyBills || {}).forEach(mBills => {
+            ['cycle1st', 'cycle15th'].forEach(cycleKey => {
+                const before = mBills[cycleKey].contributions.length;
+                mBills[cycleKey].contributions = mBills[cycleKey].contributions.filter(item => !item.seriesId || !seriesIds.has(item.seriesId));
+                removed += before - mBills[cycleKey].contributions.length;
+            });
+            recalculateBillCycleTotals(mBills);
+        });
+        state.allocationTemplates = {};
+        state.allocationRecurrenceSkips = {};
+        state.allocationRecurrenceStops = {};
+        saveDatabase(); renderApp();
+        logSystem(`Cleared ${seriesIds.size} recurring allocation series (${removed} occurrence(s) removed).`);
     });
 
     // Quick add loan trigger helper
@@ -9701,6 +9947,30 @@ function renderAppImmediate() {
     } else if (activeTab === 'billtracker') {
         renderBillTrackerTab();
     }
+
+    refreshOpenDayHighlightsDialog();
+}
+
+// Keeps an already-open "Day Details" dialog in sync with whatever just changed — every edit/delete
+// path already ends by calling renderApp() (this function), so hooking the refresh in here once
+// covers all of them instead of needing a matching fix at every individual delete/edit call site.
+// Without this, the dialog's content — a one-time snapshot copied out of #today-highlights-list at
+// open time, not a live view of it — kept showing stale amounts/rows (or ones that had just been
+// deleted) until the user closed and reopened it.
+function refreshOpenDayHighlightsDialog() {
+    const dialog = document.getElementById('day-highlights-dialog');
+    if (!dialog || !dialog.open || dialog.dataset.refreshKind !== 'personal-joint') return;
+    const targetDate = dialog.dataset.refreshDate;
+    if (!targetDate || !window.activeCalendarDays) return;
+    const updatedDay = window.activeCalendarDays.find(d => d.date === targetDate);
+    if (!updatedDay) return;
+    renderDayHighlights(updatedDay);
+    // Re-sync the dialog's content from the freshly rebuilt #today-highlights-list without calling
+    // showDayHighlightsDialog() here — that also calls showModal(), which throws if the dialog is
+    // already open (exactly the case every time this function actually has work to do).
+    const source = document.getElementById('today-highlights-list');
+    const content = document.getElementById('day-highlights-dialog-content');
+    content.replaceChildren(...Array.from(source.childNodes));
 }
 
 function getSavingsToday() {
@@ -10332,6 +10602,40 @@ function getPersonalMonthFullContribution(key, includeDeliveryEarnings) {
     return contribution;
 }
 
+// Reads state.personalStartingBalance into a normalized shape (parsed timestamp + month order) or
+// null if unset — a reset point that makes every checkpoint/running-balance calculation below treat
+// `amount` as the true balance at the start of `date` and ignore everything before it.
+function getPersonalStartingBalanceAnchor() {
+    const anchor = state.personalStartingBalance;
+    if (!anchor || !anchor.date) return null;
+    const d = new Date(anchor.date + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return null;
+    return { date: anchor.date, amount: Number(anchor.amount) || 0, time: d.getTime(), order: d.getFullYear() * 12 + d.getMonth() };
+}
+
+// The anchor's own month can't use getPersonalMonthFullContribution's unconditional whole-month
+// formula (that would include transfers/transactions from before the exact reset instant, which the
+// anchor is meant to erase) — this mirrors that formula but only counts what falls at/after the
+// anchor's precise date, the same day-level cutoff getPersonalRunningBalanceAtDate already applies
+// for whichever month is currently the *target*.
+function getPersonalAnchorMonthPartialContribution(anchor, includeDeliveryEarnings) {
+    const d = new Date(anchor.date + 'T00:00:00');
+    const y = d.getFullYear();
+    const mStr = MONTH_ORDER[d.getMonth()];
+    const mIdx = d.getMonth();
+    let contribution = 0;
+    const date1stStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-01`;
+    if (new Date(date1stStr + 'T00:00:00').getTime() >= anchor.time) contribution -= getCalculatedTransferForJason(y, mStr, '1st');
+    const date15thStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-15`;
+    if (new Date(date15thStr + 'T00:00:00').getTime() >= anchor.time) contribution -= getCalculatedTransferForJason(y, mStr, '15th');
+    getPersonalTransactionsForPeriod(y, mStr).forEach(tx => {
+        if (tx.description === 'Xfer to Joint' && !tx.transferId) return;
+        if (!includeDeliveryEarnings && tx.id.startsWith('dynamic-delivery-')) return;
+        if (new Date(tx.date + 'T00:00:00').getTime() >= anchor.time) contribution += tx.amount;
+    });
+    return contribution;
+}
+
 // Balance as of the very start of the given month (i.e. before any of that month's own transactions),
 // equal to the opening balance plus every full month-contribution strictly before it.
 function getPersonalBalanceCheckpointBeforeMonth(year, monthShort, includeDeliveryEarnings) {
@@ -10348,15 +10652,26 @@ function getPersonalBalanceCheckpointBeforeMonth(year, monthShort, includeDelive
     // locally means a wipe only costs a cheap re-lookup of that one month's own contribution, not a
     // redo of everything before it.
     const targetOrder = year * 12 + MONTH_ORDER.indexOf(monthShort);
+    const anchor = getPersonalStartingBalanceAnchor();
+    let balance = 0;
+    let lowerBoundOrder = -Infinity;
+    if (anchor) {
+        balance = anchor.amount;
+        lowerBoundOrder = anchor.order;
+    }
     const priorKeys = getSortedPersonalCalendarKeys().filter(k => {
         const [yS, mS] = k.split('-');
-        return parseInt(yS) * 12 + MONTH_ORDER.indexOf(mS) < targetOrder;
+        const order = parseInt(yS) * 12 + MONTH_ORDER.indexOf(mS);
+        return order < targetOrder && order > lowerBoundOrder;
     });
 
-    let balance = 0;
     priorKeys.forEach(k => {
         balance += getPersonalMonthFullContribution(k, includeDeliveryEarnings);
     });
+
+    if (anchor && anchor.order < targetOrder) {
+        balance += getPersonalAnchorMonthPartialContribution(anchor, includeDeliveryEarnings);
+    }
 
     _personalMonthStartCheckpointCache[includeDeliveryEarnings][key] = balance;
     return balance;
@@ -10372,24 +10687,46 @@ function getPersonalRunningBalanceAtDate(targetDateStr, includeDeliveryEarnings 
     const mStr = MONTH_ORDER[targetDateObj.getMonth()];
     const mIdx = targetDateObj.getMonth();
 
+    const anchor = getPersonalStartingBalanceAnchor();
+    // Querying at or before the reset: strictly before it, there's nothing left to show (history was
+    // wiped, balance reads $0); exactly on the reset date, it's whatever was entered. Matches the
+    // "< targetTime" exclusion convention used everywhere else here (a transaction dated exactly on
+    // targetDateStr isn't counted yet either — the reset behaves the same way).
+    if (anchor && targetTime <= anchor.time) {
+        const result = targetDateStr < anchor.date ? 0 : anchor.amount;
+        _personalRunningBalanceCache[cacheKey] = result;
+        return result;
+    }
+
     let balance = getPersonalBalanceCheckpointBeforeMonth(y, mStr, includeDeliveryEarnings);
+    // The checkpoint above deliberately contributes nothing for the anchor's own month (it's handled
+    // via getPersonalAnchorMonthPartialContribution only once that month is fully in the past); when
+    // the target date falls inside that same month, this function IS that partial handling, so it
+    // needs the anchor amount as its own starting point instead of the checkpoint's 0.
+    const anchorAppliesThisMonth = anchor && anchor.order === y * 12 + mIdx;
+    if (anchorAppliesThisMonth) balance = anchor.amount;
+    const lowerBoundTime = anchorAppliesThisMonth ? anchor.time : -Infinity;
 
     // Partial contribution from the target month itself — only the transfers/transactions that fall
-    // strictly before targetDateStr, mirroring the original day-level cutoff behavior.
+    // strictly before targetDateStr (and at/after the anchor, if one lands in this same month),
+    // mirroring the original day-level cutoff behavior.
     const key = `${y}-${mStr}`;
     if (state.personalCalendar[key]) {
         const date1stStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-01`;
-        if (new Date(date1stStr + 'T00:00:00').getTime() < targetTime) {
+        const time1st = new Date(date1stStr + 'T00:00:00').getTime();
+        if (time1st < targetTime && time1st >= lowerBoundTime) {
             balance -= getCalculatedTransferForJason(y, mStr, '1st');
         }
         const date15thStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-15`;
-        if (new Date(date15thStr + 'T00:00:00').getTime() < targetTime) {
+        const time15th = new Date(date15thStr + 'T00:00:00').getTime();
+        if (time15th < targetTime && time15th >= lowerBoundTime) {
             balance -= getCalculatedTransferForJason(y, mStr, '15th');
         }
         getPersonalTransactionsForPeriod(y, mStr).forEach(tx => {
             if (tx.description === 'Xfer to Joint' && !tx.transferId) return;
             if (!includeDeliveryEarnings && tx.id.startsWith('dynamic-delivery-')) return;
-            if (new Date(tx.date + 'T00:00:00').getTime() < targetTime) {
+            const txTime = new Date(tx.date + 'T00:00:00').getTime();
+            if (txTime < targetTime && txTime >= lowerBoundTime) {
                 balance += tx.amount;
             }
         });
@@ -10404,7 +10741,7 @@ function getPersonalRunningBalanceAtDate(targetDateStr, includeDeliveryEarnings 
 function getSortedJointRegisterWithPrefix() {
     if (_jointRegisterSortedCache) return _jointRegisterSortedCache;
     const register = [...state.jointRegister]
-        .filter(tx => !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId))
+        .filter(tx => !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId && !tx.contributionDirection))
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     const times = new Array(register.length);
@@ -10429,8 +10766,38 @@ function getJointMonthFullContribution(year, monthShort) {
     return contribution;
 }
 
+// Reads state.jointStartingBalance the same way getPersonalStartingBalanceAnchor() does — see that
+// function's comment.
+function getJointStartingBalanceAnchor() {
+    const anchor = state.jointStartingBalance;
+    if (!anchor || !anchor.date) return null;
+    const d = new Date(anchor.date + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return null;
+    return { date: anchor.date, amount: Number(anchor.amount) || 0, time: d.getTime(), order: d.getFullYear() * 12 + d.getMonth() };
+}
+
+// Mirrors getPersonalAnchorMonthPartialContribution() for the joint side: the anchor's own month
+// only counts the 1st/15th transfer contributions that land at/after the exact reset instant.
+function getJointAnchorMonthPartialContribution(anchor) {
+    const d = new Date(anchor.date + 'T00:00:00');
+    const y = d.getFullYear();
+    const mStr = MONTH_ORDER[d.getMonth()];
+    const mIdx = d.getMonth();
+    let contribution = 0;
+    const date1stStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-01`;
+    if (new Date(date1stStr + 'T00:00:00').getTime() >= anchor.time) {
+        contribution += getCalculatedTransferForJason(y, mStr, '1st') + getCalculatedTransferForAsia(y, mStr, '1st');
+    }
+    const date15thStr = `${y}-${String(mIdx + 1).padStart(2, '0')}-15`;
+    if (new Date(date15thStr + 'T00:00:00').getTime() >= anchor.time) {
+        contribution += getCalculatedTransferForJason(y, mStr, '15th') + getCalculatedTransferForAsia(y, mStr, '15th');
+    }
+    return contribution;
+}
+
 // Sum of every joint month's full dynamic-transfer contribution strictly before the given month,
-// starting from the 2027 split-tracking start year. Flat forward walk with a local accumulator (see
+// starting from the 2027 split-tracking start year (or from the starting-balance anchor's month, if
+// one is set — see getJointStartingBalanceAnchor()). Flat forward walk with a local accumulator (see
 // getPersonalBalanceCheckpointBeforeMonth above for why: a recursive version re-derives every earlier
 // month from scratch each time a materialized-month side effect wipes this cache mid-walk).
 function getJointDynamicCheckpointBeforeMonth(year, monthShort) {
@@ -10439,13 +10806,24 @@ function getJointDynamicCheckpointBeforeMonth(year, monthShort) {
 
     const startYear = 2027;
     const targetOrder = year * 12 + MONTH_ORDER.indexOf(monthShort);
-    const startOrder = startYear * 12;
-
+    const anchor = getJointStartingBalanceAnchor();
     let balance = 0;
+    let startOrder = startYear * 12;
+    if (anchor) {
+        balance = anchor.amount;
+        // The anchor's own month gets its own partial-contribution handling below, not the
+        // unconditional full-month formula — start the walk the month after it.
+        startOrder = anchor.order + 1;
+    }
+
     for (let order = startOrder; order < targetOrder; order++) {
         const y = Math.floor(order / 12);
         const mStr = MONTH_ORDER[((order % 12) + 12) % 12];
         balance += getJointMonthFullContribution(y, mStr);
+    }
+
+    if (anchor && anchor.order < targetOrder) {
+        balance += getJointAnchorMonthPartialContribution(anchor);
     }
 
     _jointDynamicCheckpointCache[key] = balance;
@@ -10456,10 +10834,21 @@ function getJointRunningBalanceAtDate(targetDateStr) {
     if (Object.prototype.hasOwnProperty.call(_jointRunningBalanceCache, targetDateStr)) return _jointRunningBalanceCache[targetDateStr];
 
     const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+    const anchor = getJointStartingBalanceAnchor();
+    // Querying at or before the reset: strictly before it, balance reads $0 (history was wiped);
+    // exactly on the reset date, it's whatever was entered.
+    if (anchor && targetTime <= anchor.time) {
+        const result = targetDateStr < anchor.date ? 0 : anchor.amount;
+        _jointRunningBalanceCache[targetDateStr] = result;
+        return result;
+    }
+
     let balance = 0;
 
     // Binary search for how many sorted register entries fall strictly before targetTime, then look up
-    // their precomputed prefix sum instead of re-scanning the whole register.
+    // their precomputed prefix sum instead of re-scanning the whole register. Entries before an anchor
+    // are expected to have been deleted when the anchor was set, so this naturally reflects only
+    // post-reset activity with no extra filtering needed here.
     const { times, prefix } = getSortedJointRegisterWithPrefix();
     let lo = 0, hi = times.length;
     while (lo < hi) {
@@ -10468,23 +10857,37 @@ function getJointRunningBalanceAtDate(targetDateStr) {
     }
     balance += prefix[lo];
 
-    // Add dynamic contributions up to targetTime (2027+ only)
+    // Add dynamic contributions up to targetTime (2027+ only, unless a starting-balance anchor sets
+    // an earlier reset point — the anchor's own amount/month still needs this block to run so it
+    // actually gets added, even for a target date that falls before 2027).
     const startYear = 2027;
     const targetDateObj = new Date(targetDateStr + 'T00:00:00');
     const ty = targetDateObj.getFullYear();
     const tmStr = MONTH_ORDER[targetDateObj.getMonth()];
     const tmIdx = targetDateObj.getMonth();
 
-    if (ty >= startYear) {
+    if (ty >= startYear || anchor) {
         balance += getJointDynamicCheckpointBeforeMonth(ty, tmStr);
 
+        // Same reasoning as getPersonalRunningBalanceAtDate: the checkpoint above contributes nothing
+        // extra for the anchor's own month, so when the target date falls inside that month, this is
+        // the partial handling for it and needs the anchor amount as its own starting point.
+        const anchorAppliesThisMonth = anchor && anchor.order === ty * 12 + tmIdx;
+        // getJointDynamicCheckpointBeforeMonth() already returns exactly anchor.amount (nothing more)
+        // when queried for the anchor's own month, so `balance` at this point is already correct —
+        // register activity (added above) plus the anchor amount, nothing to add or overwrite here.
+        // Only the lower time bound for the 1st/15th transfer checks below needs the anchor's cutoff.
+        const lowerBoundTime = anchorAppliesThisMonth ? anchor.time : -Infinity;
+
         const date1stStr = `${ty}-${String(tmIdx + 1).padStart(2, '0')}-01`;
-        if (new Date(date1stStr + 'T00:00:00').getTime() < targetTime) {
+        const time1st = new Date(date1stStr + 'T00:00:00').getTime();
+        if (time1st < targetTime && time1st >= lowerBoundTime) {
             balance += getCalculatedTransferForJason(ty, tmStr, '1st');
             balance += getCalculatedTransferForAsia(ty, tmStr, '1st');
         }
         const date15thStr = `${ty}-${String(tmIdx + 1).padStart(2, '0')}-15`;
-        if (new Date(date15thStr + 'T00:00:00').getTime() < targetTime) {
+        const time15th = new Date(date15thStr + 'T00:00:00').getTime();
+        if (time15th < targetTime && time15th >= lowerBoundTime) {
             balance += getCalculatedTransferForJason(ty, tmStr, '15th');
             balance += getCalculatedTransferForAsia(ty, tmStr, '15th');
         }
@@ -10633,7 +11036,7 @@ function renderSummaryCards() {
             dynamicContributionsAsia += getCalculatedTransferForAsia(year, m, '1st') + getCalculatedTransferForAsia(year, m, '15th');
         });
 
-        const manualContributions = state.jointRegister.filter(tx => tx.date >= periodStart && tx.date <= periodEnd && tx.type === 'contribution' && tx.transferId);
+        const manualContributions = state.jointRegister.filter(tx => tx.date >= periodStart && tx.date <= periodEnd && tx.type === 'contribution' && (tx.transferId || tx.contributionDirection));
         const manualJason = manualContributions.reduce((sum, tx) => sum + (Number(tx.jason) || 0), 0);
         const manualAsia = manualContributions.reduce((sum, tx) => sum + (Number(tx.asia) || 0), 0);
 
@@ -10879,6 +11282,10 @@ function renderCalendarDashboard() {
     // Populate transactions based on Personal vs Joint dashboard type
     if (state.dashboardType === 'personal') {
         // Personal Dashboard Calendar
+        // Declared here (not just below, where it's used for the balance walk) so the 1st/15th
+        // dynamic-transfer block further down can also suppress itself for dates at/before a reset —
+        // getPersonalTransactionsForPeriod() already does the same for paychecks/delivery earnings.
+        const personalBalanceAnchor = getPersonalStartingBalanceAnchor();
         daysData.forEach(day => {
             const cellDateObj = new Date(day.date + 'T00:00:00');
             const cellYear = cellDateObj.getFullYear();
@@ -10908,7 +11315,7 @@ function renderCalendarDashboard() {
 
             // Dynamic check for 1st or 15th
             const cellDayNum = cellDateObj.getDate();
-            if (cellDayNum === 1 || cellDayNum === 15) {
+            if ((cellDayNum === 1 || cellDayNum === 15) && !(personalBalanceAnchor && day.date <= personalBalanceAnchor.date)) {
                 const cycleKey = cellDayNum === 1 ? '1st' : '15th';
                 const dynId = `xfer-${cycleKey}-${cellYear}-${cellMonth}`;
                 const adj = adjustments.transfers[dynId];
@@ -10924,7 +11331,7 @@ function renderCalendarDashboard() {
             }
 
             adjustments.deferred.forEach(def => {
-                if (def.date === day.date) {
+                if (def.date === day.date && !(personalBalanceAnchor && day.date <= personalBalanceAnchor.date)) {
                     day.transactions.push({
                         id: `deferred-xfer-${day.date}`,
                         description: def.description,
@@ -10937,24 +11344,35 @@ function renderCalendarDashboard() {
             });
         });
 
-        // Sort transactions and compute running balances
+        // Sort transactions and compute running balances. getPersonalRunningBalanceAtDate() already
+        // anchors the SEED correctly, but this loop then walks forward adding every displayed day's
+        // own transactions — a day at/before the reset must stay pinned to what
+        // getPersonalRunningBalanceAtDate() itself would return for that date (0 strictly before the
+        // reset date, the entered amount exactly on it) instead of accumulating on top of it.
         let runningBalance = getPersonalRunningBalanceAtDate(daysData[0].date);
         daysData.forEach(day => {
             day.transactions.sort((a, b) => b.amount - a.amount);
-            day.transactions.forEach(t => {
-                runningBalance += t.amount;
-            });
+            if (personalBalanceAnchor && day.date <= personalBalanceAnchor.date) {
+                runningBalance = day.date < personalBalanceAnchor.date ? 0 : personalBalanceAnchor.amount;
+            } else {
+                day.transactions.forEach(t => {
+                    runningBalance += t.amount;
+                });
+            }
             day.balance = runningBalance;
         });
     } else if (state.dashboardType === 'joint') {
         // Joint Dashboard Calendar
+        // Same reasoning as the personal branch's anchor: declared here so the 1st/15th dynamic
+        // contribution block below can suppress itself too, not just the balance walk further down.
+        const jointBalanceAnchor = getJointStartingBalanceAnchor();
         daysData.forEach(day => {
             const cellDateObj = new Date(day.date + 'T00:00:00');
             const cellYear = cellDateObj.getFullYear();
             const cellMonth = MONTH_ORDER[cellDateObj.getMonth()];
 
             // Filter out static contributions that don't have transferId
-            const matchedTx = state.jointRegister.filter(tx => tx.date === day.date && !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId));
+            const matchedTx = state.jointRegister.filter(tx => tx.date === day.date && !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId && !tx.contributionDirection));
 
             matchedTx.forEach(tx => {
                 if (tx.type !== 'balance') {
@@ -10974,7 +11392,7 @@ function renderCalendarDashboard() {
 
             // Dynamic check for 1st or 15th (joint calendar)
             const cellDayNum = cellDateObj.getDate();
-            if (cellDayNum === 1 || cellDayNum === 15) {
+            if ((cellDayNum === 1 || cellDayNum === 15) && !(jointBalanceAnchor && day.date <= jointBalanceAnchor.date)) {
                 const cycleKey = cellDayNum === 1 ? '1st' : '15th';
                 
                 const dynId = `xfer-${cycleKey}-${cellYear}-${cellMonth}`;
@@ -11007,7 +11425,7 @@ function renderCalendarDashboard() {
             }
 
             adjustments.deferred.forEach(def => {
-                if (def.date === day.date) {
+                if (def.date === day.date && !(jointBalanceAnchor && day.date <= jointBalanceAnchor.date)) {
                     day.transactions.push({
                         id: `deferred-joint-contrib-${day.date}`,
                         description: `Deferred Jason Joint Contribution (Dynamic)`,
@@ -11020,13 +11438,18 @@ function renderCalendarDashboard() {
             });
         });
 
-        // Sort transactions and compute running balances
+        // Sort transactions and compute running balances (see the matching personal-dashboard
+        // comment above for why the anchor guard is needed here too).
         let runningBalance = getJointRunningBalanceAtDate(daysData[0].date);
         daysData.forEach(day => {
             day.transactions.sort((a, b) => b.amount - a.amount);
-            day.transactions.forEach(t => {
-                runningBalance += t.amount;
-            });
+            if (jointBalanceAnchor && day.date <= jointBalanceAnchor.date) {
+                runningBalance = day.date < jointBalanceAnchor.date ? 0 : jointBalanceAnchor.amount;
+            } else {
+                day.transactions.forEach(t => {
+                    runningBalance += t.amount;
+                });
+            }
             day.balance = runningBalance;
         });
     } else {
@@ -11094,7 +11517,13 @@ function renderCalendarDashboard() {
         
         let txsHtml = '';
         day.transactions.slice(0, 3).forEach(t => {
-            const typeClass = t.type;
+            // Colored strictly by the sign of the amount, not by category (income/expense/transfer/
+            // contribution) — a transfer or contribution can carry a negative amount (money moving the
+            // other direction, a correction, an offset), and coloring by category alone showed those as
+            // the same green as a genuine positive entry. The dollar figure inside this same chip is
+            // what needs to read unambiguously as "money out" vs "money in," regardless of what kind of
+            // entry produced it.
+            const typeClass = t.amount < 0 ? 'expense' : 'income';
             const isGig = t.isGig ? 'true' : 'false';
             
             txsHtml += `
@@ -11249,6 +11678,13 @@ function renderCalendarDashboard() {
             e.stopPropagation();
             dayCell.click();
             renderDayHighlights(day);
+            // Remembered so refreshOpenDayHighlightsDialog() can re-render this same day's contents
+            // (from the freshly rebuilt window.activeCalendarDays) after an edit/delete made while the
+            // dialog is open — otherwise the dialog keeps showing whatever was in it at open time until
+            // manually closed and reopened, since showDayHighlightsDialog() below only takes a one-time
+            // snapshot of #today-highlights-list rather than staying live-linked to it.
+            document.getElementById('day-highlights-dialog').dataset.refreshKind = 'personal-joint';
+            document.getElementById('day-highlights-dialog').dataset.refreshDate = day.date;
             showDayHighlightsDialog('today-highlights-list');
         });
         
@@ -11981,9 +12417,10 @@ function renderPersonalList() {
         // calendar for the same real-world transfer.
         const monthAdjustedTransfers = getAdjustedTransferAmountsForMonth(year, m);
 
+        const personalListDynamicAnchor = getPersonalStartingBalanceAnchor();
         const dynId1st = `xfer-1st-${year}-${m}`;
         const ovr1st = (state.dynamicOverrides || {})[dynId1st];
-        if (!ovr1st || !ovr1st.deleted) {
+        if ((!ovr1st || !ovr1st.deleted) && !(personalListDynamicAnchor && `${yStr}-${mPart}-01` <= personalListDynamicAnchor.date)) {
             const adj1st = monthAdjustedTransfers[dynId1st];
             const amt1st = adj1st ? adj1st.amount : 0;
             if (amt1st !== 0) {
@@ -12001,7 +12438,7 @@ function renderPersonalList() {
 
         const dynId15th = `xfer-15th-${year}-${m}`;
         const ovr15th = (state.dynamicOverrides || {})[dynId15th];
-        if (!ovr15th || !ovr15th.deleted) {
+        if ((!ovr15th || !ovr15th.deleted) && !(personalListDynamicAnchor && `${yStr}-${mPart}-15` <= personalListDynamicAnchor.date)) {
             const adj15th = monthAdjustedTransfers[dynId15th];
             const amt15th = adj15th ? adj15th.amount : 0;
             if (amt15th !== 0) {
@@ -12032,9 +12469,16 @@ function renderPersonalList() {
     if (txList.length > 0) {
         balance = getPersonalRunningBalanceAtDate(txList[0].date);
     }
-    
+    // See the matching comment in the calendar renderer: a transaction dated at/before a starting-
+    // balance reset must not accumulate on top of the seeded anchor amount, even though it's still
+    // shown in the list for reference.
+    const personalListAnchor = getPersonalStartingBalanceAnchor();
     txList.forEach(t => {
-        balance += t.amount;
+        if (personalListAnchor && t.date <= personalListAnchor.date) {
+            balance = t.date < personalListAnchor.date ? 0 : personalListAnchor.amount;
+        } else {
+            balance += t.amount;
+        }
         t.runningBalance = balance;
     });
     
@@ -12251,8 +12695,10 @@ function renderJointList() {
         // in the app, so it stays on the raw calculated amount.
         const monthAdjustedTransfers = getAdjustedTransferAmountsForMonth(year, m);
 
+        const jointListDynamicAnchor = getJointStartingBalanceAnchor();
         const addDynamicContributions = (cycle, date) => {
             if (date < periodStart || date > periodEnd) return;
+            if (jointListDynamicAnchor && date <= jointListDynamicAnchor.date) return;
 
             const jasonAdj = monthAdjustedTransfers[`xfer-${cycle}-${year}-${m}`];
             const definitions = [
@@ -12297,7 +12743,7 @@ function renderJointList() {
     });
 
     const register = [...state.jointRegister]
-        .filter(tx => tx.date >= periodStart && tx.date <= periodEnd && !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId))
+        .filter(tx => tx.date >= periodStart && tx.date <= periodEnd && !tx.billOccurrenceDeleted && !(tx.type === 'contribution' && !tx.transferId && !tx.contributionDirection))
         .concat(dynamicTxs)
         .sort((a, b) => a.date.localeCompare(b.date) || String(a.id).localeCompare(String(b.id)));
 
@@ -12306,10 +12752,16 @@ function renderJointList() {
     const asiaTotal = contributions.reduce((sum, tx) => sum + (Number(tx.asia) || 0), 0);
     const contributionTotal = jasonTotal + asiaTotal;
     
-    // First compute running balance chronologically
+    // First compute running balance chronologically (see the matching comment in the calendar
+    // renderer for why a starting-balance anchor needs this same guard here).
     let runningVal = getJointRunningBalanceAtDate(periodStart);
+    const jointListAnchor = getJointStartingBalanceAnchor();
     register.forEach(tx => {
-        runningVal += Number(tx.amount) || 0;
+        if (jointListAnchor && tx.date <= jointListAnchor.date) {
+            runningVal = tx.date < jointListAnchor.date ? 0 : jointListAnchor.amount;
+        } else {
+            runningVal += Number(tx.amount) || 0;
+        }
         tx.runningBalance = runningVal;
     });
 
@@ -12448,7 +12900,10 @@ function renderDayHighlights(day) {
     }
     
     day.transactions.forEach(t => {
-        const highlightClass = t.type;
+        // Colored by the sign of the amount, not by category — see the matching fix in the calendar
+        // chip renderer for why a transfer/contribution can carry a negative amount and still needs
+        // to read as "money out" (red), not the category's usual color.
+        const highlightClass = t.amount < 0 ? 'expense' : 'income';
         const prefix = t.amount >= 0 ? '+' : '';
         const itemHtml = document.createElement('div');
         itemHtml.className = 'highlight-item';
@@ -12897,8 +13352,12 @@ function openAllocationEditor(allocation, cycleKey) {
     document.getElementById('alloc-asia-enabled').checked = hasAsia;
     document.getElementById('alloc-jason-group').classList.toggle('hidden', !hasJason);
     document.getElementById('alloc-asia-group').classList.toggle('hidden', !hasAsia);
-    document.getElementById('alloc-jason').value = hasJason ? jasonAmount : '';
-    document.getElementById('alloc-asia').value = hasAsia ? asiaAmount : '';
+    // A signed amount stored from before (or from the net of increase/reduce) splits back out into
+    // whichever single field it came from — positive lands in Increase, negative in Reduce.
+    document.getElementById('alloc-jason-increase').value = hasJason && jasonAmount > 0 ? jasonAmount : '';
+    document.getElementById('alloc-jason-reduce').value = hasJason && jasonAmount < 0 ? Math.abs(jasonAmount) : '';
+    document.getElementById('alloc-asia-increase').value = hasAsia && asiaAmount > 0 ? asiaAmount : '';
+    document.getElementById('alloc-asia-reduce').value = hasAsia && asiaAmount < 0 ? Math.abs(asiaAmount) : '';
     document.getElementById('alloc-frequency').value = allocation.frequency || 'monthly';
     document.getElementById('alloc-start-date').value = allocation.startDate || '';
     const occurrenceCount = getAllocationOccurrenceCount(allocation.frequency || 'monthly', allocation.startDate || '', state.currentYear, state.currentMonth);
@@ -13066,12 +13525,13 @@ function renderBillSplitterMetrics(mBills, allBills) {
     const expense1st = scopedBills.reduce((sum, bill) => sum + allocateBillToCycle(bill, '1st'), 0);
     const expense15th = scopedBills.reduce((sum, bill) => sum + allocateBillToCycle(bill, '15th'), 0);
     const expenseMonth = expense1st + expense15th;
-    const allocationTotal = (person, cycle) => (mBills[cycle === '1st' ? 'cycle1st' : 'cycle15th']?.contributions || [])
-        .reduce((sum, allocation) => sum + Math.abs(Number(allocation[person]) || 0), 0);
-    const jason1st = allocationTotal('jason', '1st');
-    const jason15th = allocationTotal('jason', '15th');
-    const asia1st = allocationTotal('asia', '1st');
-    const asia15th = allocationTotal('asia', '15th');
+    // Signed net per cycle (increase minus reduce) via the same helper the transfer calculations
+    // use — NOT Math.abs() of each row, which used to add every "Reduce" allocation's magnitude
+    // instead of subtracting it, silently inflating both totals by 2x the reduced amount.
+    const jason1st = getAllocationCycleTotal(mBills, 'cycle1st', 'jason');
+    const jason15th = getAllocationCycleTotal(mBills, 'cycle15th', 'jason');
+    const asia1st = getAllocationCycleTotal(mBills, 'cycle1st', 'asia');
+    const asia15th = getAllocationCycleTotal(mBills, 'cycle15th', 'asia');
     const selectCycle = (first, second) => metricCycle === '1st' ? first : metricCycle === '15th' ? second : first + second;
     const formatMoney = value => `${value < 0 ? '-' : ''}$${Math.abs(value).toFixed(2)}`;
     const setMetric = (valueId, value, subId, subText, tone = value >= 0 ? 'positive' : 'negative') => {
@@ -13243,6 +13703,21 @@ document.addEventListener('click', (e) => {
         closeAllColumnFilterPopovers();
     }
 });
+
+// Lets every native date input in the app accept a 2-digit year for speed (e.g. typing "26"
+// instead of "2026") without giving up the native calendar picker. The browser's own date input
+// can't be told to interpret a partial year as-you-type, but whatever it ends up storing once the
+// field commits (on 'change') is still just a plain ISO string we can inspect and correct: a year
+// under 100 only ever happens here because someone typed a short year, never a real one, so it's
+// safe to always assume the 2000s and rewrite it before anything else reads the field's value.
+document.addEventListener('change', (e) => {
+    if (!(e.target instanceof HTMLInputElement) || e.target.type !== 'date' || !e.target.value) return;
+    const [y, m, d] = e.target.value.split('-');
+    if (y && Number(y) < 100) {
+        e.target.value = `${2000 + Number(y)}-${m}-${d}`;
+        e.target.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+}, true);
 
 // Describes a non-monthly subscription bill by the weekday it recurs on (e.g. "Weekly on
 // Wednesdays", "Every 2 weeks on Fridays") instead of the raw anchor date, since the weekday is what
@@ -13489,6 +13964,19 @@ function renderBillsTab() {
         const comparison = typeof first === 'number' ? first - second : first.localeCompare(second);
         return allocationSort.direction === 'desc' ? -comparison : comparison;
     });
+    const displayedAllocIds = new Set(displayAllocations.map(({ alloc }) => alloc.id));
+    Array.from(_selectedAllocationIds).forEach(id => { if (!displayedAllocIds.has(id)) _selectedAllocationIds.delete(id); });
+    const deleteSelectedBtn = document.getElementById('btn-delete-selected-allocations');
+    const selectAllCheckbox = document.getElementById('alloc-select-all');
+    const updateAllocSelectionUI = () => {
+        if (deleteSelectedBtn) {
+            deleteSelectedBtn.classList.toggle('hidden', _selectedAllocationIds.size === 0);
+            deleteSelectedBtn.textContent = `Delete Selected (${_selectedAllocationIds.size})`;
+        }
+        if (selectAllCheckbox) {
+            selectAllCheckbox.checked = displayAllocations.length > 0 && displayAllocations.every(({ alloc }) => _selectedAllocationIds.has(alloc.id));
+        }
+    };
     displayAllocations.forEach(({ alloc, idx, cycle, cycleKey }) => {
             const row = document.createElement('tr');
             if (!alloc.id) alloc.id = 'alloc-' + Math.random().toString(36).substr(2, 9);
@@ -13503,20 +13991,53 @@ function renderBillsTab() {
             const jasonHtml = formatAllocationAmount(alloc.jason, alloc.jason !== null && alloc.jason !== undefined && Number(alloc.jason) !== 0);
             const asiaHtml = formatAllocationAmount(alloc.asia, alloc.asia !== null && alloc.asia !== undefined && Number(alloc.asia) !== 0);
             const cycleDisplay = alloc.cycle === 'both' ? '1st & 15th' : cycle;
-            row.innerHTML = `<td><strong>${escapeHTML(alloc.name)}</strong><br><span class="muted-text">${(alloc.frequency || 'monthly').charAt(0).toUpperCase() + (alloc.frequency || 'monthly').slice(1)}${alloc.frequency === 'weekly' ? ' Â· ' + (alloc.occurrenceCount || 0) + ' occurrences this month' : ''}</span></td><td><span class="card-icon info" style="font-size:.75rem;padding:2px 6px;">Due on ${cycleDisplay}</span></td><td class="font-heading">${jasonHtml}</td><td class="font-heading">${asiaHtml}</td><td class="table-actions-cell"><button class="action-btn small-btn outline-btn edit-alloc-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-alloc-btn">Delete</button></td>`;
+            row.innerHTML = `<td><input type="checkbox" class="alloc-select-row" ${_selectedAllocationIds.has(alloc.id) ? 'checked' : ''}></td><td><strong>${escapeHTML(alloc.name)}</strong><br><span class="muted-text">${(alloc.frequency || 'monthly').charAt(0).toUpperCase() + (alloc.frequency || 'monthly').slice(1)}${alloc.frequency === 'weekly' ? ' Â· ' + (alloc.occurrenceCount || 0) + ' occurrences this month' : ''}</span></td><td><span class="card-icon info" style="font-size:.75rem;padding:2px 6px;">Due on ${cycleDisplay}</span></td><td class="font-heading">${jasonHtml}</td><td class="font-heading">${asiaHtml}</td><td class="table-actions-cell"><button class="action-btn small-btn outline-btn edit-alloc-btn">Edit</button> <button class="action-btn small-btn danger-btn delete-alloc-btn">Delete</button></td>`;
+            row.querySelector('.alloc-select-row').addEventListener('change', (e) => {
+                if (e.target.checked) _selectedAllocationIds.add(alloc.id); else _selectedAllocationIds.delete(alloc.id);
+                updateAllocSelectionUI();
+            });
             row.querySelector('.edit-alloc-btn').addEventListener('click', () => openAllocationEditor(alloc, cycleKey));
             row.querySelector('.delete-alloc-btn').addEventListener('click', () => {
                 if (!confirm(`Delete ${alloc.name} from ${state.currentMonth} ${state.currentYear}?`)) return;
                 const deleteFuture = confirm(`Also delete this allocation from all future months?\n\nOK = current and future\nCancel = current month only`);
                 deleteAllocationOccurrence(alloc, state.currentYear, state.currentMonth, deleteFuture);
+                _selectedAllocationIds.delete(alloc.id);
                 saveDatabase();
                 renderApp();
                 logSystem(`Deleted personal allocation: ${alloc.name}${deleteFuture ? ' (current and future)' : ' (current month only)'}`);
             });
             personalBody.appendChild(row);
     });
-    if (!displayAllocations.length) personalBody.innerHTML = '<tr><td colspan="5" class="muted-text" style="text-align:center;">No personal allocations logged for this period.</td></tr>';
-    setupTableColumnFilters('#personal-allocations-content thead', 'personalAllocations', () => document.getElementById('personal-allocations-body'), [4]);
+    if (!displayAllocations.length) personalBody.innerHTML = '<tr><td colspan="6" class="muted-text" style="text-align:center;">No personal allocations logged for this period.</td></tr>';
+    updateAllocSelectionUI();
+    if (selectAllCheckbox && !selectAllCheckbox._wired) {
+        selectAllCheckbox._wired = true;
+        selectAllCheckbox.addEventListener('change', (e) => {
+            const rows = personalBody.querySelectorAll('.alloc-select-row');
+            const ids = displayAllocations.map(({ alloc }) => alloc.id);
+            if (e.target.checked) ids.forEach(id => _selectedAllocationIds.add(id));
+            else ids.forEach(id => _selectedAllocationIds.delete(id));
+            rows.forEach(cb => { cb.checked = e.target.checked; });
+            updateAllocSelectionUI();
+        });
+    }
+    if (deleteSelectedBtn && !deleteSelectedBtn._wired) {
+        deleteSelectedBtn._wired = true;
+        deleteSelectedBtn.addEventListener('click', () => {
+            if (_selectedAllocationIds.size === 0) return;
+            const targets = allocationEntries.filter(({ alloc }) => _selectedAllocationIds.has(alloc.id));
+            if (!targets.length) return;
+            if (!confirm(`Delete ${targets.length} selected personal allocation(s) from ${state.currentMonth} ${state.currentYear}?`)) return;
+            const deleteFuture = confirm(`Also delete these from all future months where they recur?\n\nOK = current and future\nCancel = current month only`);
+            let removed = 0;
+            targets.forEach(({ alloc }) => { removed += deleteAllocationOccurrence(alloc, state.currentYear, state.currentMonth, deleteFuture); });
+            _selectedAllocationIds.clear();
+            saveDatabase();
+            renderApp();
+            logSystem(`Deleted ${targets.length} selected personal allocation(s) (${removed} occurrence(s) removed).`);
+        });
+    }
+    setupTableColumnFilters('#personal-allocations-content thead', 'personalAllocations', () => document.getElementById('personal-allocations-body'), [0, 5]);
     applyColumnFilters(personalBody, 'personalAllocations');
     const seasonalBody = document.getElementById('seasonal-expenses-body');
     seasonalBody.innerHTML = '';
