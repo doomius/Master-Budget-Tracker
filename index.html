@@ -4464,7 +4464,7 @@ window.INITIAL_BUDGET_DATA = {
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-07-21 11:00';
+const BUILD_VERSION = '2026-07-21 11:15';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -5479,7 +5479,8 @@ function isDynamicTxId(id) {
     const s = String(id);
     return s.startsWith('xfer-1st-') || s.startsWith('xfer-15th-') ||
            s.startsWith('joint-xfer-jason-') || s.startsWith('joint-xfer-asia-') ||
-           s.startsWith('dynamic-paycheck-') || s.startsWith('dynamic-delivery-');
+           s.startsWith('dynamic-paycheck-') || s.startsWith('dynamic-delivery-') ||
+           s.startsWith('deferred-xfer-');
 }
 
 // Jason's dynamic joint contribution and personal transfer represent the same money movement.
@@ -11199,14 +11200,24 @@ function simulateJasonCheckingAndAdjustTransfers(daysData) {
         if (deferredBalance > 0 && (isSunday || deliveryAmt > 0)) {
             const available = Math.max(0, runningBalance);
             if (available > 0) {
-                const payAmount = Math.min(deferredBalance, available);
-                deferredBalance -= payAmount;
-                runningBalance -= payAmount;
-                adjustments.deferred.push({
-                    date: day.date,
-                    amount: payAmount,
-                    description: `Deferred Xfer to Joint (Dynamic)`
-                });
+                // Shared with the joint calendar's mirrored "Deferred Jason Joint Contribution"
+                // entry (same id, see the joint render branch below) so one delete/edit governs
+                // both sides of the same event, the same way getLinkedDynamicTxId() mirrors the
+                // ordinary 1st/15th transfer overrides. Deleting skips this occurrence's catch-up
+                // attempt — the remaining deferredBalance carries forward to try again on a later
+                // Sunday/delivery day, rather than the underlying debt just vanishing.
+                const deferredId = `deferred-xfer-${day.date}`;
+                const deferredOverride = (state.dynamicOverrides || {})[deferredId];
+                if (!deferredOverride?.deleted) {
+                    const payAmount = deferredOverride?.amount !== undefined ? Math.abs(deferredOverride.amount) : Math.min(deferredBalance, available);
+                    deferredBalance -= payAmount;
+                    runningBalance -= payAmount;
+                    adjustments.deferred.push({
+                        date: day.date,
+                        amount: payAmount,
+                        description: deferredOverride?.description || `Deferred Xfer to Joint (Dynamic)`
+                    });
+                }
             }
         }
     });
@@ -11427,7 +11438,9 @@ function renderCalendarDashboard() {
             adjustments.deferred.forEach(def => {
                 if (def.date === day.date && !(jointBalanceAnchor && day.date <= jointBalanceAnchor.date)) {
                     day.transactions.push({
-                        id: `deferred-joint-contrib-${day.date}`,
+                        // Same id as the personal side's mirrored entry (see
+                        // simulateJasonCheckingAndAdjustTransfers) so one delete/edit governs both.
+                        id: `deferred-xfer-${day.date}`,
                         description: `Deferred Jason Joint Contribution (Dynamic)`,
                         amount: def.amount,
                         type: 'income',
