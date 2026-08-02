@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-01 23:22';
+const BUILD_VERSION = '2026-08-02 07:34';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -20729,6 +20729,7 @@ function setupCCDashboardListeners() {
 
             if (activeCard) activeCard.currentBal = Math.max(0, activeCard.currentBal - amount);
 
+            refreshMaterializedCardStatementCharges(cardId);
             saveDatabase();
             renderCardDashboard(cardId);
             document.getElementById('cc-trans-merchant').value = '';
@@ -20778,6 +20779,7 @@ function setupCCDashboardListeners() {
             adjustCardCurrentBalance(cardId, signedAmount);
         }
 
+        refreshMaterializedCardStatementCharges(cardId);
         saveDatabase();
         renderCardDashboard(cardId);
 
@@ -20876,6 +20878,7 @@ function setupCCDashboardListeners() {
                 linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
             });
             if (activeCard) activeCard.currentBal = Math.max(0, activeCard.currentBal - amount);
+            refreshMaterializedCardStatementCharges(cardId);
             saveDatabase();
             e.target.reset();
             let d = date;
@@ -20901,6 +20904,7 @@ function setupCCDashboardListeners() {
                 createdAt: Date.now()
             });
             adjustCardCurrentBalance(cardId, signedAmount);
+            refreshMaterializedCardStatementCharges(cardId);
             saveDatabase();
             e.target.reset();
             let d = date;
@@ -21400,8 +21404,17 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     if (!state.cardCalendars[cardId][key]) state.cardCalendars[cardId][key] = [];
     const cardList = state.cardCalendars[cardId][key];
 
-    // If ANY payment (Payoff Payment, manual payment, etc.) is already present on dueDate, early return so no duplicate auto payment is created
-    const existingPmtOnDate = cardList.find(tx => (tx.transactionKind === 'payment' || tx.kind === 'payment') && tx.date === dueDate);
+    // If ANY OTHER payment (Payoff Payment, manual payment, etc.) is already present on dueDate,
+    // early return so no duplicate auto payment is created. Must exclude the automatic payment
+    // itself — it's transactionKind 'payment' and dated on dueDate same as any fresh one would be,
+    // so without this exclusion this check always matched the automatic payment's own prior
+    // instance and returned before the removal-and-recompute logic below ever ran. That silently
+    // froze every automatic-payment amount at whatever it was the first time it was computed —
+    // confirmed as a real bug: adding a new charge/credit to the card never updated a following
+    // automatic payment's amount no matter what triggered a recompute attempt, only actually
+    // taking effect once Card Settings' Save handler separately deleted future automatic payments
+    // outright (clearFutureAutomaticCardPayments) and let them regenerate from scratch.
+    const existingPmtOnDate = cardList.find(tx => !tx.isAutomaticCardPayment && (tx.transactionKind === 'payment' || tx.kind === 'payment') && tx.date === dueDate);
     if (existingPmtOnDate) {
         return;
     }
