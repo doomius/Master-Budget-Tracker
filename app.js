@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-03 14:52';
+const BUILD_VERSION = '2026-08-03 16:04';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -4743,6 +4743,7 @@ function setupEventListeners() {
         if (savingsMasterSearchEl) savingsMasterSearchEl.value = '';
     });
     document.getElementById('savings-list-master-search')?.addEventListener('input', debounce(renderSavingsTab, 300));
+    document.getElementById('btn-export-savingslist-csv')?.addEventListener('click', exportSavingsListToCSV);
 
     const updateSavingsEntryForm = () => {
         const isInterest = document.getElementById('savings-entry-type').value === 'interest';
@@ -21351,6 +21352,7 @@ function setupCCDashboardListeners() {
         Object.keys(columnFilterState).forEach(k => { if (k.startsWith('ccList:')) delete columnFilterState[k]; });
         if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
     });
+    document.getElementById('btn-export-cc-list-csv')?.addEventListener('click', exportCCListToCSV);
 
 
     document.getElementById('btn-calculate-payoff').addEventListener('click', () => {
@@ -23433,6 +23435,7 @@ function renderBillTrackerTab() {
     document.getElementById('billtracker-card-search-wrapper')?.classList.toggle('hidden', !isCards);
     document.getElementById('billtracker-sort-label')?.classList.toggle('hidden', !isCards);
     document.getElementById('btn-reset-billtracker-filters')?.classList.toggle('hidden', !isList);
+    document.getElementById('btn-export-billtracker-csv')?.classList.toggle('hidden', !isList);
     const sortSelect = document.getElementById('billtracker-sort');
     if (sortSelect) sortSelect.value = state.billTrackerCardSort || 'name';
     renderSeasonalExpensesSection();
@@ -23786,6 +23789,7 @@ function setupBillTrackerListeners() {
         const billTrackerListSearchEl = document.getElementById('billtracker-list-master-search');
         if (billTrackerListSearchEl) billTrackerListSearchEl.value = '';
     });
+    document.getElementById('btn-export-billtracker-csv')?.addEventListener('click', exportBillTrackerListToCSV);
     document.getElementById('btn-close-bill-calendar-day')?.addEventListener('click', () => {
         document.getElementById('bill-calendar-day-dialog').close();
     });
