@@ -621,6 +621,7 @@
                                                 <option value="payDate">Pay Date</option>
                                             </select>
                                         </label>
+                                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-export-billtracker-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
                                         <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-reset-billtracker-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
                                         <button class="action-btn small-btn solid-btn" id="btn-add-bill-tracker-setting">+ Add Bill Setting</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="billtracker-list-content" data-key="billTrackerList">Hide</button>
@@ -808,7 +809,10 @@
 
                     <div class="table-card-header savings-view-header">
                         <h3 id="savings-ledger-title">Savings Calendar</h3>
-                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <button type="button" class="action-btn small-btn outline-btn" id="btn-export-savingslist-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
+                            <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                        </div>
                     </div>
                     <input type="search" id="savings-list-master-search" class="custom-input" placeholder="Search description, type, date, amount..." style="margin-bottom: 1rem; width: 100%; box-sizing: border-box;">
                     <div class="view-grid savings-calendar-layout" id="savings-calendar-layout">
