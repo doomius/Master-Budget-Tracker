@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-03 07:18';
+const BUILD_VERSION = '2026-08-03 14:52';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -4115,6 +4115,16 @@ function switchToTab(tabName) {
         if (!selectionMatchesTab) {
             state.ccSelectedCardId = '';
             placeCreditCardToolbar(false);
+        }
+
+        // The Sort/Hide-$0/Add/Reset Filters toolbar (and its table) on the Installment Loans and
+        // Credit Cards summary pages should always start collapsed when you navigate to that page,
+        // rather than remembering whatever expand/collapse state it was left in — per explicit user
+        // request, 2026-08-03.
+        if (tabName === 'loans' || tabName === 'creditcards') {
+            const debtType = tabName === 'loans' ? 'loan' : 'credit';
+            getDebtSummaryCollapsed()[debtType] = true;
+            applyDebtSummaryCollapsedState(debtType);
         }
 
         updateGlobalTogglesPlacement();
@@ -8789,9 +8799,11 @@ function updateGlobalTogglesPlacement() {
                 if (id === 'scope-toggle-container') shouldBeVisible = true;
                 if (id === 'cycle-filter-container') shouldBeVisible = true;
             } else if (activeTab === 'creditcards' || activeTab === 'loans') {
+                // Both relocated to the top-right action cluster (ahead of Expand View) instead of
+                // their own row further down the toolbar — per explicit user request, 2026-08-03.
                 if (state.ccSelectedCardId) {
-                    if (id === 'cc-view-toggle') shouldBeVisible = true;
-                    if (id === 'cc-scope-toggle' && state.ccViewMode === 'list') shouldBeVisible = true;
+                    if (id === 'cc-view-toggle') { shouldBeVisible = true; targetHost = hostRight; }
+                    if (id === 'cc-scope-toggle' && state.ccViewMode === 'list') { shouldBeVisible = true; targetHost = hostRight; }
                 }
             } else if (activeTab === 'savings') {
                 if (id === 'savings-header-view-toggle') {
@@ -8803,9 +8815,12 @@ function updateGlobalTogglesPlacement() {
                     targetHost = hostRight;
                 }
             } else if (activeTab === 'bills') {
+                // Both relocated to the top-right action cluster (ahead of Expand View), Current
+                // Month sitting right after the Month/1st Cycle/15th Cycle toggle — per explicit user
+                // request, 2026-08-03. Was hostLeft (under the title) before that.
                 if (id === 'bills-metrics-cycle-toggle') {
                     shouldBeVisible = true;
-                    targetHost = hostLeft;
+                    targetHost = hostRight;
                 }
                 // Joint Transfers has no month/year picker of its own (the global one is hidden on
                 // this tab — see updateTabTitles()'s headerPeriodNav gating), so with no month nav at
@@ -8813,7 +8828,7 @@ function updateGlobalTogglesPlacement() {
                 // another tab, changing the month there, then switching back.
                 if (id === 'btn-bills-today') {
                     shouldBeVisible = true;
-                    targetHost = hostLeft;
+                    targetHost = hostRight;
                 }
             }
 
@@ -8883,6 +8898,7 @@ function getMasterCollapseControls() {
             const isLoan = account.type === 'loan';
             controls.push(sectionKey(isLoan ? 'loanMetrics' : 'ccMetrics'), sectionKey(isLoan ? 'loanPlanner' : 'ccPlanner'));
             if (!isLoan) controls.push(sectionKey('ccPlans'));
+            controls.push(sectionKey(isLoan ? 'loanHeaderCard' : 'ccHeaderCard'));
         }
     }
     return controls;
@@ -8900,6 +8916,78 @@ function updateMasterCollapseButton() {
     if (show) {
         const allCollapsed = controls.every(c => c.get());
         btn.textContent = allCollapsed ? 'Show All' : 'Hide All';
+    }
+}
+
+// Shows/hides and positions the shared date-nav (#header-period-nav) and Today button for the
+// active tab. Pulled out of renderAppImmediate() so Bill Settings' own view-toggle handler
+// (renderBillTrackerTab(), which doesn't go through a full renderAppImmediate() pass) can also call
+// this directly — otherwise switching between its Cards/List/Calendar sub-views left the date-nav
+// and Today's visibility stuck at whatever the last full render had computed.
+function updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans) {
+    const headerPeriodNav = document.getElementById('header-period-nav');
+    if (!headerPeriodNav) return;
+    const isLoanHome = isLoans && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'loan');
+    const isCreditCardHome = isCC && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'credit');
+    // Bill Settings' own Cards sub-view has no notion of a "current day/month" (its cards aren't
+    // scoped to any one month), so the date-nav is pure clutter there — per explicit user
+    // request, 2026-08-03. Its List/Calendar sub-views keep it, since those genuinely page by
+    // month.
+    const isBillTrackerCards = activeTab === 'billtracker' && (state.billTrackerViewMode || 'cards') === 'cards';
+    headerPeriodNav.classList.toggle('hidden', activeTab === 'sync' || activeTab === 'bills' || isLoanHome || isCreditCardHome || isBillTrackerCards);
+
+    const isDebtDetail = (isCC && !isCreditCardHome) || (isLoans && !isLoanHome);
+    const leftJumpHost = document.getElementById('header-left-jump-host');
+
+    const todayBtn = document.getElementById('btn-header-today');
+    if (todayBtn) {
+        const hideToday = isLoans || activeTab === 'bills' || activeTab === 'billsplitter' || isBillTrackerCards;
+        todayBtn.classList.toggle('hidden', hideToday);
+        // Bill Settings' List/Calendar sub-views only ever jump to the current *month* here (no
+        // single day is meaningful the way it is on Dashboard/Savings) — relabeled so the button
+        // doesn't imply it jumps to today's specific date. Per explicit user request, 2026-08-03.
+        todayBtn.textContent = activeTab === 'billtracker' ? 'Current Month' : 'Today';
+        // Savings and Bill Settings' List/Calendar pull Today up into the top-right action cluster
+        // (ahead of Expand View) instead of its default spot next to the date-nav. On the loan/card
+        // detail page it instead lands top-LEFT, alongside Payment/Statement (see below) — per
+        // explicit user request, 2026-08-03. Every other tab keeps it in its original home row.
+        const hostRight = document.getElementById('header-right-actions');
+        const homeRow = document.getElementById('header-left-buttons-row');
+        if (!hideToday && isDebtDetail && leftJumpHost) {
+            if (todayBtn.parentElement !== leftJumpHost) leftJumpHost.prepend(todayBtn);
+        } else if (!hideToday && (activeTab === 'savings' || activeTab === 'billtracker') && hostRight) {
+            if (todayBtn.parentElement !== hostRight) hostRight.prepend(todayBtn);
+        } else if (homeRow && todayBtn.parentElement !== homeRow) {
+            homeRow.prepend(todayBtn);
+        }
+    }
+
+    // Jump-to-Statement only makes sense with a specific card/loan selected in List view — a
+    // statement closing day is a per-account setting (loans have one too now, same as credit
+    // cards), and Calendar view already has its own visual (the dashed cycle-boundary outline),
+    // not a scrollable divider to jump to.
+    const shouldShowJumpBtns = isDebtDetail && state.ccViewMode === 'list';
+    const paymentBtn = document.getElementById('btn-header-payment');
+    const statementBtn = document.getElementById('btn-header-statement');
+    paymentBtn?.classList.toggle('hidden', !shouldShowJumpBtns);
+    statementBtn?.classList.toggle('hidden', !shouldShowJumpBtns);
+    // Top-left, right after the Back link — per explicit user request, 2026-08-03 (an earlier pass
+    // had put these top-right; moved back left, alongside Today, with the standalone header-collapse
+    // hint button removed from that spot entirely).
+    if (leftJumpHost) {
+        if (shouldShowJumpBtns) {
+            if (statementBtn && statementBtn.parentElement !== leftJumpHost) leftJumpHost.prepend(statementBtn);
+            if (paymentBtn && paymentBtn.parentElement !== leftJumpHost) leftJumpHost.prepend(paymentBtn);
+            // Re-prepend Today last so the final order reads Today, Payment, Statement — harmless
+            // no-op if Today isn't in this host (e.g. on the Loans tab, where it's hidden entirely).
+            if (todayBtn && todayBtn.parentElement === leftJumpHost) leftJumpHost.prepend(todayBtn);
+        } else {
+            const homeRow = document.getElementById('header-left-buttons-row');
+            if (homeRow) {
+                if (paymentBtn && paymentBtn.parentElement !== homeRow) homeRow.appendChild(paymentBtn);
+                if (statementBtn && statementBtn.parentElement !== homeRow) homeRow.appendChild(statementBtn);
+            }
+        }
     }
 }
 
@@ -8974,22 +9062,7 @@ function renderAppImmediate() {
         }
     }
 
-    const headerPeriodNav = document.getElementById('header-period-nav');
-    if (headerPeriodNav) {
-        const isLoanHome = isLoans && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'loan');
-        const isCreditCardHome = isCC && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'credit');
-        headerPeriodNav.classList.toggle('hidden', activeTab === 'sync' || activeTab === 'bills' || isLoanHome || isCreditCardHome);
-
-        document.getElementById('btn-header-today')?.classList.toggle('hidden', isLoans || activeTab === 'bills' || activeTab === 'billsplitter');
-
-        // Jump-to-Statement only makes sense with a specific card/loan selected in List view — a
-        // statement closing day is a per-account setting (loans have one too now, same as credit
-        // cards), and Calendar view already has its own visual (the dashed cycle-boundary outline),
-        // not a scrollable divider to jump to.
-        const shouldShowJumpBtns = (((isCC && !isCreditCardHome) || (isLoans && !isLoanHome)) && state.ccViewMode === 'list');
-        document.getElementById('btn-header-statement')?.classList.toggle('hidden', !shouldShowJumpBtns);
-        document.getElementById('btn-header-payment')?.classList.toggle('hidden', !shouldShowJumpBtns);
-    }
+    updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans);
 
     // Jump-to-Below-Threshold only makes sense on the Personal/Joint dashboard, where the dynamic
     // 1st/15th joint transfer chips/rows can carry the belowThreshold flag — Calendar and List view
@@ -17241,19 +17314,27 @@ function updateTabTitles() {
         const loan = state.loans.find(item => item.id === state.ccSelectedCardId && item.type === 'loan');
         if (loan) {
             const balance = calculateCardLedgerBalance(loan.id);
-            const paidPct = loan.startBal > 0 ? Math.min(100, Math.max(0, ((loan.startBal - balance) / loan.startBal) * 100)) : 100;
+            const startBal = Number(loan.startBal) || 0;
+            const paidPct = startBal > 0 ? Math.min(100, Math.max(0, ((startBal - balance) / startBal) * 100)) : 100;
+            const apr = Number(loan.interestRate) || 0;
+            const monthlyPayment = getLoanDebtPaymentAmount(loan);
             const icon = getDebtAccountIcon(loan);
             // Current Balance and Projected Payoff live here (the truly-sticky page header — see
-            // .main-sticky-dashboard in index.css) instead of only in #card-payoff-widgets further
-            // down the page, so they stay visible while scrolling through the rest of the card's
-            // details. renderCardPayoffWidgets() still recomputes the same payoff projection for
-            // its own metrics grid, independently of this.
+            // .main-sticky-dashboard in index.css) instead of down in the page body, so they stay
+            // visible while scrolling through the rest of the card's details.
             const payoffDate = projectCardPayoffPath(loan.id, 0, formatLocalDate(new Date()), 0, 0, false, 600).payoffDate;
             title.innerHTML = `${renderDebtAccountIconBadge(loan, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open loan settings">${escapeHTML(loan.name)}</button>`;
             subtitle.classList.add('header-subtitle-highlight');
+            // Order per explicit user request, 2026-08-03: Original Balance, Monthly Payment, APR,
+            // Paid, Current Balance, Payoff — folds in what the removed "Card Metrics" section used
+            // to show (APR/Monthly Payment/Original Balance) alongside the balance/payoff chips that
+            // already lived here.
             subtitle.innerHTML = [
-                headerStatChip('Balance', formatCardBalance(balance)),
+                headerStatChip('Original Balance', formatCardBalance(startBal)),
+                headerStatChip('Monthly Payment', `$${monthlyPayment.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`),
+                headerStatChip('APR', `${apr.toFixed(2)}%`),
                 headerStatChip('Paid', `${paidPct.toFixed(0)}%`),
+                headerStatChip('Current Balance', formatCardBalance(balance)),
                 headerStatChip('Payoff', payoffDate)
             ].join('');
             document.getElementById('btn-header-card-settings').onclick = () => openEditLoanModal(loan.id);
@@ -17264,16 +17345,28 @@ function updateTabTitles() {
     } else if (activeTab === 'creditcards') {
         const card = state.loans.find(item => item.id === state.ccSelectedCardId);
         if (card) {
-            const limitValue = card.isChargeCard ? 'None' : `$${(Number(card.limit) || 0).toFixed(0)}`;
-            const balanceText = formatCardBalance(calculateCardLedgerBalance(card.id));
+            const balance = calculateCardLedgerBalance(card.id);
+            const limit = Math.max(0, Number(card.limit) || 0);
+            const apr = getEffectiveCardRateForMonth(card, 0);
             const icon = getDebtAccountIcon(card);
             // See the matching comment in the 'loans' branch above — same reasoning for cards.
             const payoffDate = projectCardPayoffPath(card.id, 0, formatLocalDate(new Date()), 0, 0, false, 600).payoffDate;
             title.innerHTML = `${renderDebtAccountIconBadge(card, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open card settings">${escapeHTML(card.name)}</button>`;
             subtitle.classList.add('header-subtitle-highlight');
+            // Credit cards get their own bubble set (distinct from loans' Original
+            // Balance/Monthly Payment/Paid/Current Balance) — per explicit user request,
+            // 2026-08-03: Credit Limit, Balance, Available Limit, Utilization, APR, Payoff.
+            // Charge cards (no preset limit) show "None"/"No preset limit"/"N/A" in place of the
+            // limit-derived fields, same as the old removed "Card Metrics" section used to.
+            const limitText = card.isChargeCard ? 'None' : formatCardBalance(limit);
+            const availableText = card.isChargeCard ? 'No preset limit' : formatCardBalance(Math.max(0, limit - balance));
+            const utilizationText = card.isChargeCard ? 'N/A' : `${(limit > 0 ? Math.min(100, Math.max(0, (balance / limit) * 100)) : 0).toFixed(0)}%`;
             subtitle.innerHTML = [
-                headerStatChip('Balance', balanceText),
-                headerStatChip('Limit', limitValue),
+                headerStatChip('Credit Limit', limitText),
+                headerStatChip('Balance', formatCardBalance(balance)),
+                headerStatChip('Available Limit', availableText),
+                headerStatChip('Utilization', utilizationText),
+                headerStatChip('APR', `${apr.toFixed(2)}%`),
                 headerStatChip('Payoff', payoffDate)
             ].join('');
             document.getElementById('btn-header-card-settings').onclick = () => openEditLoanModal(card.id);
@@ -20743,14 +20836,29 @@ function placeCreditCardToolbar(inHeader) {
     const subtitle = document.getElementById('current-tab-subtitle');
     const accountNav = document.getElementById('cc-account-nav');
     const periodNav = document.getElementById('header-period-nav');
+    // Home containers for the two elements this function borrows from the generic top header row
+    // while a specific loan/card is open — captured once so they can be put back exactly where they
+    // started when backing out to the account list.
+    const headerTopRow = document.querySelector('.header-top-row');
+    const backBtn = document.getElementById('btn-cc-back');
+    const backBtnHome = document.querySelector('.cc-toolbar-left');
+    const periodNavHome = document.getElementById('unified-header-layout');
+    const globalTogglesHost = document.getElementById('global-toggles-host');
     if (!toolbar || !appHeader) return;
     if (inHeader) {
         appHeader.classList.add('cc-account-header');
         appHeader.classList.remove('hidden');
         if (toolbar.parentElement !== appHeader) appHeader.insertBefore(toolbar, appHeader.firstChild);
+        // Back link moves up to the top-left of the page (level with the title/Expand View), and the
+        // date-nav sits between the account name and the account prev/select/next row — per explicit
+        // user request, 2026-08-03.
+        if (headerTopRow && backBtn && backBtn.parentElement !== headerTopRow) {
+            headerTopRow.insertBefore(backBtn, headerTopRow.firstChild);
+        }
         if (accountSlot && title && subtitle) {
             accountSlot.classList.remove('hidden');
             accountSlot.append(title);
+            if (periodNav) accountSlot.append(periodNav);
             if (accountNav) accountSlot.append(accountNav);
             accountSlot.append(subtitle);
         }
@@ -20758,13 +20866,14 @@ function placeCreditCardToolbar(inHeader) {
         appHeader.classList.remove('cc-account-header');
         appHeader.classList.add('hidden');
         if (titleHome && title && subtitle) {
-            if (periodNav && periodNav.parentElement === titleHome) {
-                titleHome.insertBefore(title, periodNav);
-                titleHome.insertBefore(subtitle, periodNav);
-            } else {
-                titleHome.appendChild(title);
-                titleHome.appendChild(subtitle);
-            }
+            titleHome.appendChild(title);
+            titleHome.appendChild(subtitle);
+        }
+        if (backBtnHome && backBtn && backBtn.parentElement !== backBtnHome) {
+            backBtnHome.insertBefore(backBtn, backBtnHome.firstChild);
+        }
+        if (periodNavHome && periodNav && periodNav.parentElement !== periodNavHome) {
+            periodNavHome.insertBefore(periodNav, globalTogglesHost);
         }
         if (accountSlot) accountSlot.classList.add('hidden');
         if (accountNav) accountNav.classList.add('hidden');
@@ -20792,6 +20901,21 @@ function applyCreditCardSectionState(renderPlannerOnOpen = true) {
         state.uiCollapsedSections.ccPlans = true;
         ccSectionDefaultsResetForPageLoad = true;
     }
+
+    // Only the account prev/select/next row and the stat-bubble row collapse — the title and
+    // date-nav must always stay visible. Toggled solely via the page-level Hide All button (see
+    // getMasterCollapseControls()); there's no dedicated button of its own. Per explicit user
+    // request, 2026-08-03 (an earlier version collapsed the whole title/date-nav/bubbles card,
+    // which hid too much).
+    const headerCardKey = isLoan ? 'loanHeaderCard' : 'ccHeaderCard';
+    const headerCardCollapsed = !!state.uiCollapsedSections[headerCardKey];
+    const headerCardAccountNav = document.getElementById('cc-account-nav');
+    const headerCardBubbles = document.getElementById('current-tab-subtitle');
+    // header-card-force-hidden (defined in index.css) uses !important so it reliably wins over
+    // #cc-account-nav's own nav-count-based .hidden toggle (updateCCAccountNavControls()) when
+    // collapsed, while leaving that existing logic in sole control when not collapsed.
+    headerCardAccountNav?.classList.toggle('header-card-force-hidden', headerCardCollapsed);
+    headerCardBubbles?.classList.toggle('header-card-force-hidden', headerCardCollapsed);
 
     const metricsCollapsed = !!state.uiCollapsedSections[metricsKey];
     const plannerCollapsed = !!state.uiCollapsedSections[plannerKey];
@@ -20827,6 +20951,14 @@ function applyCreditCardSectionState(renderPlannerOnOpen = true) {
     if (renderPlannerOnOpen && !plannerCollapsed && plannerWasHidden && account) {
         renderCardPayoffEstimator(account.id);
     }
+
+    // Clicking a card/loan from the overview grid or table calls renderLoansTab()/
+    // renderCreditCardsTab() directly rather than going through a full renderAppImmediate() pass —
+    // updateMasterCollapseButton() (which decides whether the page-level Hide All/Show All button
+    // is visible at all) normally only runs at the tail of that full pass, so Show All stayed
+    // invisible until some *other* action (e.g. Expand View) triggered a full render. Since this
+    // function already runs on every card render, call it here too. Confirmed bug, 2026-08-03.
+    updateMasterCollapseButton();
 }
 
 function setupCCDashboardListeners() {
@@ -20862,17 +20994,12 @@ function setupCCDashboardListeners() {
         saveDatabase();
         applyCreditCardSectionState();
     };
-    document.getElementById('btn-cc-metrics-toggle').addEventListener('click', () => toggleSection('metrics'));
+    // btn-cc-metrics-toggle and btn-cc-toggle-all were removed along with the "Card Metrics"
+    // section, 2026-08-03 (its values now render as header stat-chip bubbles instead, and the
+    // page-level Hide All button already covers this account's remaining collapsible sections —
+    // see getMasterCollapseControls()). The header-card collapse (account-nav + bubbles) has no
+    // dedicated button either — it's driven solely by getMasterCollapseControls()/Hide All.
     document.getElementById('btn-cc-plans-toggle').addEventListener('click', () => toggleSection('plans'));
-    document.getElementById('btn-cc-toggle-all').addEventListener('click', () => {
-        if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
-        const keys = sectionKeys().all;
-        const collapse = !keys.every(key => !!state.uiCollapsedSections[key]);
-        keys.forEach(key => { state.uiCollapsedSections[key] = collapse; });
-        state.ccPayoffCollapsed = collapse;
-        saveDatabase();
-        applyCreditCardSectionState();
-    });
 
     document.getElementById('btn-add-loan-payment').addEventListener('click', () => {
         if (state.ccSelectedCardId) openLoanExtraPayment(state.ccSelectedCardId);
@@ -21968,51 +22095,10 @@ function renderCreditCardDashboardHeaderSummaries(card) {
 function renderCardPayoffWidgets(card) {
     renderCreditCardDashboardHeaderSummaries(card);
     const isLoan = card.type === 'loan';
-    const balance = Math.max(0, calculateCardLedgerBalance(card.id));
-    const apr = isLoan ? (Number(card.interestRate) || 0) : getEffectiveCardRateForMonth(card, 0);
-    const monthlyPayment = isLoan
-        ? getLoanDebtPaymentAmount(card)
-        : (Number(card.monthlyMin) || 0);
-
-    // Current Balance and Projected Payoff now live in the sticky page header (updateTabTitles())
-    // instead of here, so they stay visible while scrolling the rest of this page. This grid's
-    // two freed-up slots show Utilization/% Paid and Available Credit/Original Balance instead —
-    // both already computed elsewhere for other purposes, just not previously surfaced here.
-    document.getElementById('payoff-apr').textContent = `${apr.toFixed(2)}%`;
-    document.getElementById('payoff-minimum').textContent = `$${monthlyPayment.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    document.getElementById('debt-metric-payment-label').textContent = isLoan ? 'Monthly Payment' : 'Minimum Payment';
-
-    const utilizationLabel = document.getElementById('debt-metric-utilization-label');
-    const utilizationValue = document.getElementById('payoff-utilization');
-    if (isLoan) {
-        const paidPct = card.startBal > 0
-            ? Math.min(100, Math.max(0, ((Number(card.startBal) - balance) / Number(card.startBal)) * 100))
-            : 100;
-        utilizationLabel.textContent = 'Paid Off';
-        utilizationValue.textContent = `${paidPct.toFixed(1)}%`;
-    } else if (card.isChargeCard) {
-        utilizationLabel.textContent = 'Utilization';
-        utilizationValue.textContent = 'N/A';
-    } else {
-        const limit = Math.max(0, Number(card.limit) || 0);
-        const utilizationPct = limit > 0 ? Math.min(100, Math.max(0, (balance / limit) * 100)) : 0;
-        utilizationLabel.textContent = 'Credit Utilization';
-        utilizationValue.textContent = `${utilizationPct.toFixed(0)}%`;
-    }
-
-    const availableLabel = document.getElementById('debt-metric-available-label');
-    const availableValue = document.getElementById('payoff-available');
-    if (isLoan) {
-        availableLabel.textContent = 'Original Balance';
-        availableValue.textContent = formatCardBalance(Number(card.startBal) || 0);
-    } else if (card.isChargeCard) {
-        availableLabel.textContent = 'Available Credit';
-        availableValue.textContent = 'No preset limit';
-    } else {
-        const limit = Math.max(0, Number(card.limit) || 0);
-        availableLabel.textContent = 'Available Credit';
-        availableValue.textContent = formatCardBalance(Math.max(0, limit - balance));
-    }
+    // APR/Monthly Payment/Utilization/Available-Credit/Original-Balance used to render into a
+    // dedicated "Card Metrics" section here — that section was removed, 2026-08-03, in favor of
+    // header stat-chip bubbles (Original Balance, Monthly Payment, APR, Paid, Current Balance,
+    // Payoff — see updateTabTitles()), so this function no longer computes or writes them.
 
     const targetInput = document.getElementById('payoff-target-date');
     if (card.payoffTargetDate) targetInput.value = card.payoffTargetDate;
@@ -22192,12 +22278,20 @@ function renderCardDashboard(cardId) {
     document.getElementById('cc-list-view-title').textContent = isLoan
         ? 'Loan Payment Ledger'
         : 'Card Transaction Ledger';
-    document.getElementById('btn-cc-toggle-all').title = isLoan
-        ? 'Expand or collapse loan metrics and the payoff planner'
-        : 'Expand or collapse card metrics, the payoff planner, and payment plans';
+    // btn-cc-toggle-all was removed, 2026-08-03 (the page-level Hide All button already covers
+    // this account's collapsible sections), so this element no longer exists.
 
     // Place the card navigation/view controls in the sticky global header, above the account name.
     placeCreditCardToolbar(true);
+    // Selecting a card from the overview grid/table calls renderLoansTab()/renderCreditCardsTab()
+    // directly rather than through a full renderAppImmediate() pass, so the Today/Payment/Statement
+    // jump-button placement (and the Calendar/List + Month/Year toggle relocation) — both normally
+    // driven from that full pass — would otherwise sit stale (wrong position, or still reflecting
+    // whatever tab was active before) until some other action forced a full render. Confirmed bug,
+    // 2026-08-03 — same root cause as the earlier Show All fix just above in
+    // applyCreditCardSectionState().
+    updateGlobalTogglesPlacement();
+    updateHeaderPeriodNavAndToday(isLoan ? 'loans' : 'creditcards', !isLoan, isLoan);
 
     // Keep one planner instance shared by calendar and ledger views, directly below the metrics.
     const payoffHost = document.getElementById('cc-payoff-planner-host');
@@ -22568,8 +22662,13 @@ function renderCCDayHighlights(cardId, day) {
 // rendered DOM rows rather than re-deriving the data from state. Skips summary/divider rows
 // (cc-list-divider, e.g. "— 1st Cycle Ends —") by only reading <tr> elements that carry the
 // data-id every real transaction row has (see buildJointRowHtml/buildPersonalRowHtml).
-function exportListViewToCSV() {
-    const table = document.querySelector('#list-view-table-container table');
+// Generic CSV export shared by every list-view page's own "Export CSV" button — reads whatever
+// table is currently rendered inside containerSelector, honoring whatever search/column filters
+// and sort are currently applied (reads the already-rendered DOM rows rather than re-deriving the
+// data from state). Skips summary/divider rows (e.g. "— Statement Closed —", "— 1st Cycle Ends —")
+// by only reading <tr> elements that carry the data-id every real transaction/entry row has.
+function exportTableToCSV(containerSelector, filenamePrefix) {
+    const table = document.querySelector(`${containerSelector} table`);
     if (!table) { logError('No list view is currently open to export.'); return; }
     const headerCells = Array.from(table.querySelectorAll('thead th'));
     // Read just the label span (.col-th-inner, added by setupColumnFilterButton) rather than the
@@ -22603,16 +22702,38 @@ function exportListViewToCSV() {
     // standard signal Excel actually honors for a bare .csv file.
     const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const viewLabel = state.dashboardType === 'joint' ? 'joint' : 'personal';
     const dateStamp = formatLocalDate(new Date());
     const link = document.createElement('a');
     link.href = url;
-    link.download = `budgetify_${viewLabel}_list_${dateStamp}.csv`;
+    link.download = `budgetify_${filenamePrefix}_${dateStamp}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     logSuccess(`Exported ${dataRows.length} row(s) to CSV.`);
+}
+
+function exportListViewToCSV() {
+    const viewLabel = state.dashboardType === 'joint' ? 'joint' : 'personal';
+    exportTableToCSV('#list-view-table-container', `${viewLabel}_list`);
+}
+
+// Credit Cards/Installment Loans ledger — one shared table/container for both, per explicit user
+// request, 2026-08-03 (every list view should have its own CSV export, matching Dashboard's).
+function exportCCListToCSV() {
+    const account = state.loans.find(item => item.id === state.ccSelectedCardId);
+    const slug = account ? account.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') : 'account';
+    exportTableToCSV('#cc-list-view-table-container', `${slug}_ledger`);
+}
+
+// Savings Tracker list view.
+function exportSavingsListToCSV() {
+    exportTableToCSV('#savings-list-view', 'savings_list');
+}
+
+// Bill Settings (Bill Tracker) list view.
+function exportBillTrackerListToCSV() {
+    exportTableToCSV('#billtracker-table-view', 'bill_settings_list');
 }
 
 // Multi-word AND match against every field the row actually displays (not raw internal values —
@@ -23292,6 +23413,10 @@ function renderBillTrackerTab() {
     const isCalendar = viewMode === 'calendar';
     const isList = viewMode === 'list';
     const isCards = !isCalendar && !isList;
+    // Switching Cards/List/Calendar here doesn't go through a full renderAppImmediate() pass, so the
+    // shared date-nav/Today visibility (which depends on billTrackerViewMode) needs its own refresh
+    // — otherwise it stays stuck at whatever the last full render computed.
+    updateHeaderPeriodNavAndToday('billtracker', false, false);
     document.getElementById('billtracker-calendar-view')?.classList.toggle('hidden', !isCalendar);
     document.getElementById('billtracker-cards-view')?.classList.toggle('hidden', !isCards);
     document.getElementById('billtracker-table-view')?.classList.toggle('hidden', !isList);
@@ -23390,6 +23515,9 @@ function renderBillTrackerTab() {
             listVisibleSettings.forEach(bill => {
                 const { sourceName, recurDesc, paymentDateText, closingDateText, icon } = describeBillTrackerSetting(bill);
                 const row = document.createElement('tr');
+                // exportTableToCSV() (see app.js) identifies real data rows by this attribute — the
+                // row itself didn't carry one before, only its Edit/Delete buttons did.
+                row.dataset.id = bill.id;
                 // Visible confirmation that "Exclude from Bill Splitter" actually saved — otherwise
                 // there was no way to tell from this view, and the checkbox's own persistence (it
                 // does persist correctly) looked broken any time someone didn't reopen Edit to check.
