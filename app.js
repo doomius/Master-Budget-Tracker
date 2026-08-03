@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-02 07:34';
+const BUILD_VERSION = '2026-08-02 21:02';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -916,10 +916,20 @@ async function init() {
     logSystem('Pulling latest data from Google Drive...');
     await pullStateFromDrive(false);
 
-    // Once data successfully loads from Google Drive, turn Auto Sync ON
-    setAutoSyncEnabled(true);
-    syncAutoSyncCheckboxesUI();
-    logSuccess('Latest data loaded from Google Drive. Auto Sync is now ON.');
+    // Auto Sync only turns on if that pull actually confirmed real (or confirmed-empty) data —
+    // pullStateFromDrive() sets _driveSyncBaselineEstablished itself on success. Do NOT force it on
+    // here regardless of outcome like the old code did: on a failed startup pull (e.g. a flaky
+    // connection while out doing field testing) `state` is still whatever resetToDefaults() just
+    // seeded it with, and turning Auto Sync on anyway meant the very next edit auto-pushed that
+    // placeholder data over the real Google Drive file — a real data-loss incident, 2026-08-02.
+    if (_driveSyncBaselineEstablished) {
+        setAutoSyncEnabled(true);
+        syncAutoSyncCheckboxesUI();
+        logSuccess('Latest data loaded from Google Drive. Auto Sync is now ON.');
+    } else {
+        syncAutoSyncCheckboxesUI();
+        logError('Could not confirm a successful sync with Google Drive on startup. Auto Sync stays OFF for safety — go to Sync Settings and click "Pull from Google Drive" to retry before making any edits, or your changes won\'t be saved to Drive.');
+    }
 }
 
 // Checks the shape of a parsed backup file before it's allowed to replace the live database.
@@ -3102,6 +3112,11 @@ function resetToDefaults() {
         // Without this, first-ever load on a fresh device schedules a push shortly after with
         // nothing the user actually changed.
         saveDatabase(true);
+        // Fingerprint this exact placeholder state — see _freshResetStateSnapshot's own comment.
+        // Every real load calls resetToDefaults() first (init() wipes the IndexedDB cache on every
+        // page load by design, see init()'s own comment), so this always reflects the untouched
+        // seed data a fresh pull or real edit hasn't landed on top of yet.
+        _freshResetStateSnapshot = JSON.stringify(state);
         logSystem("Database reset to original spreadsheet data (perpetual structure initialized).");
     } else {
         console.error("INITIAL_BUDGET_DATA not loaded in global window context.");
@@ -3536,6 +3551,29 @@ function setSyncWebAppUrl(url) {
 // must not be mistaken for one of the three user-triggered kill actions.
 let _autoSyncKilledThisSession = false;
 
+// Set true ONLY by pullStateFromDrive() itself, at the exact moment it confirms either (a) real
+// data came back from Google Drive and was applied to `state`, or (b) the Drive file was reached
+// and confirmed to be genuinely empty (a brand-new deployment nothing has ever been pushed to).
+// Every other outcome — network error, timeout, validation failure — leaves this false. This is
+// the actual fix for a real data-loss incident (2026-08-02 field test): local state is always
+// wiped and reseeded from the bundled INITIAL_BUDGET_DATA on every load (see init()), and the old
+// code turned Auto Sync ON unconditionally right after the startup pull attempt regardless of
+// whether that pull actually succeeded — so a flaky connection left `state` full of placeholder
+// seed data, Auto Sync silently on, and the very next edit auto-pushed that placeholder data over
+// the real Drive file. getAutoSyncEnabled() and pushStateToDrive() both gate on this flag now, so
+// nothing can ever sync (auto OR manual) until a real pull has succeeded at least once this
+// session. Like _autoSyncKilledThisSession, this is a plain `let` — a genuine page reload always
+// resets it to false, matching "can't even select Auto Sync until the first successful sync."
+let _driveSyncBaselineEstablished = false;
+
+// A fingerprint of `state` taken the instant resetToDefaults() finishes seeding it with
+// INITIAL_BUDGET_DATA placeholder content — before any pull or real edit has touched it. If a
+// later push ever finds `state` byte-for-byte identical to this, something upstream let a push
+// through despite _driveSyncBaselineEstablished (a bug, not a real user action), so pushStateToDrive()
+// refuses unconditionally rather than trusting the flag alone. Belt-and-suspenders for the same
+// incident described above — the literal "never push a null/0/placeholder state" fail-safe.
+let _freshResetStateSnapshot = null;
+
 // HARD LOCK — added 2026-07-27, re-affirmed then reversed 2026-08-01. Currently OFF (false): the
 // user's "disconnect everything" request earlier today has been superseded by a new explicit
 // request to reconnect and default Auto Sync back to ON (see the comment above). Left in place,
@@ -3544,17 +3582,26 @@ let _autoSyncKilledThisSession = false;
 // getAutoSyncEnabled() regardless of the session-kill-switch state above.
 const AUTO_SYNC_HARD_LOCKED_OFF = false;
 
+// Disables (not just unchecks) both checkboxes until _driveSyncBaselineEstablished is true, so the
+// user can SEE Auto Sync is unavailable rather than have clicks silently no-op — see that flag's
+// own comment for why it exists.
 function syncAutoSyncCheckboxesUI() {
     const enabled = getAutoSyncEnabled();
+    const baselineReady = _driveSyncBaselineEstablished;
     const autoSyncToggle = document.getElementById('auto-sync-toggle');
     const sidebarAutoSyncToggle = document.getElementById('sidebar-auto-sync-toggle');
-    if (autoSyncToggle) autoSyncToggle.checked = enabled;
-    if (sidebarAutoSyncToggle) sidebarAutoSyncToggle.checked = enabled;
+    [autoSyncToggle, sidebarAutoSyncToggle].forEach(el => {
+        if (!el) return;
+        el.checked = enabled;
+        el.disabled = !baselineReady;
+        el.title = baselineReady ? '' : 'Waiting for the first successful sync from Google Drive this session before Auto Sync can be turned on.';
+    });
 }
 
 function getAutoSyncEnabled() {
     if (AUTO_SYNC_HARD_LOCKED_OFF) return false;
     if (_autoSyncKilledThisSession) return false;
+    if (!_driveSyncBaselineEstablished) return false;
     return true;
 }
 
@@ -3611,6 +3658,7 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
     if (_syncPullInProgress) return false; // already running (e.g. the once-per-load auto-pull)
     if (respectAutoSyncToggle && !getAutoSyncEnabled()) return false;
     _syncPullInProgress = true;
+    showSyncStatusFlag('pending', 'Pulling from Google Drive…');
     try {
         const resp = await _fetchWithTimeout(url);
         const json = await resp.json();
@@ -3618,6 +3666,12 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         if (!json.data) {
             // The Drive file exists but is still empty — nothing has ever been pushed to it yet,
             // so there's nothing to pull in. Not an error; a brand-new deployment starts this way.
+            // Still counts as a confirmed real connection though, so it's safe to let a first-ever
+            // push seed the file — see _driveSyncBaselineEstablished's own comment.
+            _driveSyncBaselineEstablished = true;
+            syncAutoSyncCheckboxesUI();
+            logSuccess('Connected to Google Drive — the file is empty (nothing pushed yet).');
+            showSyncStatusFlag('success', 'Connected to Google Drive — the file is empty (nothing pushed yet).');
             return false;
         }
         const validationError = validateImportedDatabase(json.data);
@@ -3627,10 +3681,14 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         migrateDatabase();
         saveDatabase(true); // skipAutoSync — bringing local state in line with the Drive file is not a new edit to push back
         renderApp();
+        _driveSyncBaselineEstablished = true;
+        syncAutoSyncCheckboxesUI();
         logSuccess('Loaded latest data from Google Drive.');
+        showSyncStatusFlag('success', 'Loaded latest data from Google Drive.');
         return true;
     } catch (err) {
         logError(`Pull from Google Drive failed: ${err.message}`);
+        showSyncStatusFlag('error', `Pull from Google Drive failed: ${err.message}`);
         return false;
     } finally {
         _syncPullInProgress = false;
@@ -3644,18 +3702,37 @@ let _syncPullInProgress = false;
 async function pushStateToDrive() {
     const url = getSyncWebAppUrl();
     if (!url) return;
+    // Fail-safe: refuse outright rather than ever push a local state that hasn't been confirmed
+    // real. Applies to auto-push AND the manual Push button alike — see
+    // _driveSyncBaselineEstablished/_freshResetStateSnapshot for the incident this prevents.
+    if (!_driveSyncBaselineEstablished) {
+        const msg = 'Refused to push to Google Drive: no successful sync has completed yet this session, so local data may still be placeholder content. Pull from Google Drive (Sync Settings) first, then try again.';
+        logError(msg);
+        showSyncStatusFlag('error', 'Push blocked — pull from Google Drive first this session.');
+        return;
+    }
+    const body = JSON.stringify(state);
+    if (_freshResetStateSnapshot && body === _freshResetStateSnapshot) {
+        const msg = 'Refused to push to Google Drive: local data is still the untouched fresh-reset placeholder state, not real data — pushing this would wipe the Drive file. Pull from Google Drive first.';
+        logError(msg);
+        showSyncStatusFlag('error', 'Push blocked — local data looks like unset placeholder data.');
+        return;
+    }
     _syncPushInProgress = true;
+    showSyncStatusFlag('pending', 'Pushing to Google Drive…');
     try {
         const resp = await _fetchWithTimeout(url, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(state)
+            body
         });
         const json = await resp.json();
         if (json.error) throw new Error(json.error);
         logSuccess('Synced to Google Drive.');
+        showSyncStatusFlag('success', 'Synced to Google Drive.');
     } catch (err) {
         logError(`Push to Google Drive failed: ${err.message}`);
+        showSyncStatusFlag('error', `Push to Google Drive failed: ${err.message}`);
     } finally {
         _syncPushInProgress = false;
         // Whatever was pending (from either an auto-push or a manual push while Auto Sync was
@@ -3670,6 +3747,32 @@ async function pushStateToDrive() {
         _syncPushDirty = false;
         logSystem('Auto-syncing to Google Drive (edits made during the last sync)...');
         pushStateToDrive().catch(() => { /* errors are logged inside */ });
+    }
+}
+
+// Sync status row in the sidebar, directly under Sync Settings (see .sync-status-flag in
+// index.css) showing the outcome of the most recent Drive sync attempt. Per explicit user request
+// after a field-test data-loss incident: a sync failure buried in the Sync Settings log
+// (#logs-container, only visible on that one tab) is easy to miss entirely while using the app
+// normally — this surfaces success/failure right next to the nav item that controls sync, click to
+// expand the full message. status is 'pending' | 'success' | 'error'.
+function showSyncStatusFlag(status, message) {
+    const flag = document.getElementById('sync-status-flag');
+    const icon = document.getElementById('sync-status-flag-icon');
+    const label = document.getElementById('sync-status-flag-label');
+    if (!flag || !icon) return;
+    flag.classList.remove('hidden', 'sync-status-pending', 'sync-status-success', 'sync-status-error');
+    flag.classList.add(`sync-status-${status}`);
+    icon.textContent = status === 'pending' ? '🔄' : status === 'success' ? '👍' : '😞';
+    if (label) label.textContent = status === 'pending' ? 'Syncing…' : status === 'success' ? 'Synced' : 'Sync failed';
+    flag.dataset.message = message;
+    flag.dataset.time = _logTimestamp();
+    flag.title = message;
+    const detail = document.getElementById('sync-status-detail');
+    if (detail && !detail.classList.contains('hidden')) {
+        // Detail popover is already open — keep it live rather than making the user re-click.
+        document.getElementById('sync-status-detail-message').textContent = message;
+        document.getElementById('sync-status-detail-time').textContent = `at ${flag.dataset.time}`;
     }
 }
 
@@ -6514,6 +6617,19 @@ function setupEventListeners() {
         resetXferEditor();
     });
 
+    // Explicit Clear buttons for the two optional payment-strategy date fields — native
+    // <input type="date"> clear behavior (the small "x") is inconsistent enough across
+    // browsers/OS (especially mobile) that a user could clear the field, hit Save, and still
+    // end up with the old date, or not realize the clear didn't register at all. A guaranteed
+    // one-click clear avoids that ambiguity entirely. Confirmed as a real user-reported issue,
+    // 2026-08-02 ("I need to be able to edit and or delete both start and end payment dates").
+    document.getElementById('loan-first-payment-date-clear')?.addEventListener('click', () => {
+        document.getElementById('loan-first-payment-date').value = '';
+    });
+    document.getElementById('loan-payment-end-date-clear')?.addEventListener('click', () => {
+        document.getElementById('loan-payment-end-date').value = '';
+    });
+
     // Loan Dialog Submit (Handles Add & Edit)
     document.getElementById('loan-form').addEventListener('submit', (e) => {
         e.preventDefault();
@@ -6603,7 +6719,16 @@ function setupEventListeners() {
                 loan.customPaymentSchedule = JSON.parse(JSON.stringify(tempEditingCustomSchedule));
                 loan.paymentStrategy = paymentStrategy;
                 loan.paymentSource = paymentSource;
-                loan.paymentStrategyStartDate = firstPaymentDate || formatLocalDate(new Date());
+                // NOT `firstPaymentDate || formatLocalDate(new Date())` — that silently substituted
+                // today's date any time this field was left/cleared empty, so an existing card's
+                // First Payment Date could never actually be cleared: the user would clear it, hit
+                // Save, and see today's date come back instead of blank on the next open. Every
+                // reader of paymentStrategyStartDate already treats a falsy value as "no start-date
+                // restriction" (see ensureAutomaticCardPaymentForMonth and the withinStart checks),
+                // so there's no need to force a default here — only new-card creation below still
+                // defaults to today, which is a reasonable one-time default for a card that has no
+                // prior value at all. Confirmed as a real user-reported bug, 2026-08-02.
+                loan.paymentStrategyStartDate = firstPaymentDate;
                 loan.paymentEndDate = paymentEndDate;
                 loan.splitterCycleOverride = splitterCycleOverride;
 
@@ -6620,6 +6745,7 @@ function setupEventListeners() {
                 // navigated to yet — so without this, saving looked like it silently did nothing
                 // until they manually clicked forward to each scheduled month.
                 if (paymentStrategy === 'custom') materializeCustomScheduleMonths(loan.id, loan.customPaymentSchedule);
+                else if (type === 'credit' && (paymentStrategy === 'balance' || paymentStrategy === 'interestSaving' || paymentStrategy === 'minimum')) materializeAutomaticPaymentsForward(loan.id);
 
                 logSystem(`Updated payoff target: ${name}`);
             }
@@ -6665,6 +6791,7 @@ function setupEventListeners() {
             });
             // See the matching comment in the 'edit' branch above.
             if (paymentStrategy === 'custom') materializeCustomScheduleMonths(id, tempEditingCustomSchedule);
+            else if (type === 'credit' && (paymentStrategy === 'balance' || paymentStrategy === 'interestSaving' || paymentStrategy === 'minimum')) materializeAutomaticPaymentsForward(id);
             logSystem(`Added payoff target: ${name} (Balance: $${current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
         }
 
@@ -6714,6 +6841,15 @@ function setupEventListeners() {
     const autoSyncToggle = document.getElementById('auto-sync-toggle');
     const sidebarAutoSyncToggle = document.getElementById('sidebar-auto-sync-toggle');
     const handleAutoSyncToggleChange = (checked) => {
+        if (checked && !_driveSyncBaselineEstablished) {
+            // Belt-and-suspenders: the checkbox is also `disabled` in this state (see
+            // syncAutoSyncCheckboxesUI()) so this normally can't be reached by a real click, but
+            // keep the guard here too rather than relying solely on the DOM attribute.
+            if (autoSyncToggle) autoSyncToggle.checked = false;
+            if (sidebarAutoSyncToggle) sidebarAutoSyncToggle.checked = false;
+            logError('Auto Sync can\'t be turned on until the first successful sync with Google Drive completes this session. Click "Pull from Google Drive" in Sync Settings.');
+            return;
+        }
         if (checked && (AUTO_SYNC_HARD_LOCKED_OFF || _autoSyncKilledThisSession)) {
             // Don't let the checkbox show "on" when it can never actually take effect — that would
             // be more confusing than the lock/kill-switch this exists to enforce.
@@ -6778,8 +6914,14 @@ function setupEventListeners() {
         btnPullAll.addEventListener('click', async () => {
             if (_isSyncBusy()) { _warnSyncBusy(); return; }
             logSystem('Pulling from Google Drive...');
-            const pulled = await pullStateFromDrive();
-            if (!pulled) logSuccess('Pull complete — nothing new to pull.');
+            // pullStateFromDrive() already logs success/error (and updates the sync-status flag)
+            // for every real outcome now, including the "file is genuinely empty" case — a blanket
+            // "nothing new to pull" fallback here would misleadingly follow a just-logged error with
+            // a false success line. This is also the recovery path when the startup pull failed
+            // (see init()): a successful manual pull here sets _driveSyncBaselineEstablished, so
+            // refresh the checkboxes afterward in case Auto Sync just became available.
+            await pullStateFromDrive();
+            syncAutoSyncCheckboxesUI();
         });
     }
 
@@ -6793,6 +6935,18 @@ function setupEventListeners() {
             if (_isSyncBusy()) { _warnSyncBusy(); return; }
             logSystem('Pushing to Google Drive...');
             await pushStateToDrive();
+        });
+    }
+
+    // Sidebar sync-status row (under Sync Settings) — click to expand/collapse the full message
+    // from the most recent push/pull attempt. See showSyncStatusFlag().
+    const syncStatusFlag = document.getElementById('sync-status-flag');
+    const syncStatusDetail = document.getElementById('sync-status-detail');
+    if (syncStatusFlag && syncStatusDetail) {
+        syncStatusFlag.addEventListener('click', () => {
+            document.getElementById('sync-status-detail-message').textContent = syncStatusFlag.dataset.message || '';
+            document.getElementById('sync-status-detail-time').textContent = syncStatusFlag.dataset.time ? `at ${syncStatusFlag.dataset.time}` : '';
+            syncStatusDetail.classList.toggle('hidden');
         });
     }
 
@@ -18304,6 +18458,8 @@ function computeAllEstimatedBalancesForCard(cardId) {
     const currentDate = new Date(firstDate);
     const statementDay = Number(card.statementDay) || 1;
     let lastInterestMonthYear = '';
+    const todayForGuard = new Date();
+    const todayMonthIndexForGuard = todayForGuard.getFullYear() * 12 + todayForGuard.getMonth();
 
     while (currentDate <= lastDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -18330,10 +18486,30 @@ function computeAllEstimatedBalancesForCard(cardId) {
             // Posted fees and interest are already present in the day's ledger transactions.
             // Only estimate them inline for a future statement that has no generated charge rows.
             const alreadyPostedReal = dayTxs.some(tx => tx.isEstimatedInterest || tx.isPlanFee);
-            if (!alreadyPostedReal && card.type !== 'loan') {
+            // Mirror postCardStatementChargesForMonth's own "never fabricate interest/fee history for
+            // a month before the current real one" rule (see that function's comment for the real
+            // 2026-07-23 incident this guards against — retroactively inventing interest for an
+            // already-past, never-materialized statement double-counts on top of whatever the user's
+            // startBal/currentBal already reflects). Without this same guard here, this DISPLAY-facing
+            // estimate silently invented that past interest/fee anyway, so the ledger's shown Ending
+            // Balance disagreed with calculateCardLedgerBalance (which the automatic-payment engine
+            // reads) by exactly the invented amount — confirmed as a real bug, 2026-08-02: a card's
+            // list view showed a $0.00 June balance while the engine correctly saw an $89.38 credit
+            // from July 2026's statement never actually being posted, so the two disagreed about
+            // whether a payment was owed and by how much for every month after.
+            const isPastMonth = (currentDate.getFullYear() * 12 + currentDate.getMonth()) < todayMonthIndexForGuard;
+            if (!alreadyPostedReal && card.type !== 'loan' && !isPastMonth) {
                 estBalance += activePlansFees;
 
-                if (estBalance > 0.01 && !card.isChargeCard) {
+                // Mirror postCardStatementChargesForMonth's `card.paymentStrategy !== 'balance'`
+                // exclusion — a Full Card Balance card is paid in full every cycle by design, so it
+                // never actually carries interest, and the real posting function knows that. Without
+                // the same check here, this display-only estimate invented interest for a statement
+                // that the real function would never post any for, creating exactly the kind of
+                // invisible jump between one month's shown Ending Balance and the next month's shown
+                // Starting Balance that a Full Balance card's engine-computed payment doesn't include
+                // — confirmed as a real bug, 2026-08-02 (a $1.53 gap with no corresponding ledger row).
+                if (estBalance > 0.01 && !card.isChargeCard && card.paymentStrategy !== 'balance') {
                     const interestAccruingBalance = Math.max(0, estBalance - activePlansBalanceSum);
                     let promoInterest = 0;
                     let activePromosBalanceSum = 0;
@@ -21617,6 +21793,30 @@ function materializeCustomScheduleMonths(cardId, schedule) {
         ensureYearMonthInitialized(year, month);
         rebuildDebtMonthFinance(cardId, year, month);
     });
+}
+
+// Same problem as materializeCustomScheduleMonths above, for the other ongoing strategies (Full
+// Balance / Interest-Saving / Minimum) — those only ever regenerate whichever month/year the user
+// currently has on screen, so changing a card's settings (clearing a Payment End Date, switching
+// strategy, removing then re-adding automatic payments) silently did nothing beyond the
+// already-visited months until each future month was clicked into by hand. Confirmed as a real
+// user-reported bug, 2026-08-02: clearing a blocking Payment End Date and switching to Full
+// Balance produced no automatic payments for any month beyond whatever was already materialized,
+// even though the engine itself was computing correctly once a month was actually visited.
+// Materializes a fixed rolling window from the real current month rather than schedule-specific
+// dates (there are none for these strategies) — 24 months covers the common "how far ahead have I
+// already looked around in this app" range without eagerly computing years of ledger data no one
+// will ever look at.
+const AUTOMATIC_PAYMENT_MATERIALIZE_MONTHS_AHEAD = 24;
+function materializeAutomaticPaymentsForward(cardId, monthsAhead = AUTOMATIC_PAYMENT_MATERIALIZE_MONTHS_AHEAD) {
+    const today = new Date();
+    for (let i = 0; i <= monthsAhead; i++) {
+        const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+        const year = d.getFullYear();
+        const month = MONTH_ORDER[d.getMonth()];
+        ensureYearMonthInitialized(year, month);
+        rebuildDebtMonthFinance(cardId, year, month);
+    }
 }
 
 function rebuildDebtMonthFinance(accountId, year, month) {
