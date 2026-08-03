@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-02 21:52';
+const BUILD_VERSION = '2026-08-03 07:18';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -3691,7 +3691,17 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         Object.assign(state, json.data);
         migrateDatabase();
         saveDatabase(true); // skipAutoSync — bringing local state in line with the Drive file is not a new edit to push back
-        renderApp();
+        // renderAppImmediate() (synchronous), NOT renderApp() (which defers the actual paint to a
+        // double-rAF, with a setTimeout fallback only after RENDER_RAF_FALLBACK_MS — see its own
+        // comment on why: rAF can be suspended entirely in some embedding/backgrounding situations,
+        // this app being designed to run inside a Google Sites iframe embed being the prime example).
+        // By the time a real pull has finished, there's no "let the spinner paint first" reason left
+        // to defer — and deferring here was the actual cause of a real, confirmed bug, 2026-08-03: on
+        // startup the page would show blank/placeholder data even after the Drive pull genuinely
+        // succeeded, only fixing itself once the user switched tabs and back (which forces its own
+        // separate re-render). Applies to the automatic startup pull AND the manual Pull button,
+        // since both call this same function.
+        renderAppImmediate();
         _driveSyncBaselineEstablished = true;
         syncAutoSyncCheckboxesUI();
         logSuccess('Loaded latest data from Google Drive.');
@@ -8731,6 +8741,13 @@ function updateGlobalTogglesPlacement() {
     const host = document.getElementById('global-toggles-host');
     const hostLeft = document.getElementById('header-left-actions');
     const hostRight = document.getElementById('header-right-actions');
+    // Dedicated slot for Personal/Joint, right after Today/Threshold inside #header-left-actions —
+    // deterministic placement instead of relying on it being global-toggles-host's first child and
+    // just happening to wrap onto a line close to Today/Threshold. See its comment in Index.html.
+    const hostIdentity = document.getElementById('header-identity-toggles-host');
+    // Dedicated slot for Calendar/List, left of Expand View on the title's own top row — per
+    // explicit user request, 2026-08-03.
+    const hostViewToggle = document.getElementById('header-view-toggle-host');
     if (!host) return;
 
     const activeTab = state.activeTab || 'dashboard';
@@ -8755,10 +8772,22 @@ function updateGlobalTogglesPlacement() {
             let targetHost = host;
             
             if (activeTab === 'dashboard') {
-                if (id === 'dashboard-toggle-container') shouldBeVisible = true;
-                if (id === 'view-toggle-container') shouldBeVisible = true;
-                if (id === 'scope-toggle-container' && state.viewMode === 'list') shouldBeVisible = true;
-                if (id === 'cycle-filter-container' && state.viewMode === 'list') shouldBeVisible = true;
+                if (id === 'dashboard-toggle-container') {
+                    shouldBeVisible = true;
+                    targetHost = hostIdentity;
+                }
+                if (id === 'view-toggle-container') {
+                    shouldBeVisible = true;
+                    targetHost = hostViewToggle;
+                }
+                // Scope (Month/Full Year) and cycle filter (All Days/1st-14th/15th-End) used to only
+                // ever render at all in List view, hiding entirely in Calendar view — meaning the
+                // header's own height changed every time the user switched view modes. Per explicit
+                // user request, 2026-08-03: keep both always visible on this tab so the header height
+                // never jumps, and grey them out (see the .segmented-control-disabled class applied
+                // below, in the same forEach) instead of hiding them when they don't currently apply.
+                if (id === 'scope-toggle-container') shouldBeVisible = true;
+                if (id === 'cycle-filter-container') shouldBeVisible = true;
             } else if (activeTab === 'creditcards' || activeTab === 'loans') {
                 if (state.ccSelectedCardId) {
                     if (id === 'cc-view-toggle') shouldBeVisible = true;
@@ -8792,13 +8821,30 @@ function updateGlobalTogglesPlacement() {
                 el.classList.remove('hidden');
                 if (el.parentElement !== targetHost) {
                     if (targetHost === hostRight) {
-                        targetHost.insertBefore(el, document.getElementById('btn-toggle-main-header'));
+                        // #btn-toggle-main-header (the old collapsible-header Hide toggle) no longer
+                        // exists as of the 2026-08-03 header restructure — anchor before Expand View
+                        // instead, so a relocated toggle (e.g. Savings' Calendar/List) still lands
+                        // before the action buttons rather than after them.
+                        targetHost.insertBefore(el, document.getElementById('btn-toggle-layout-maximize'));
                     } else {
                         targetHost.appendChild(el);
                     }
                 }
             } else {
                 el.classList.add('hidden');
+            }
+
+            // Greyed-out/inactive state for the two Dashboard toggles that stay visible above even
+            // when they don't currently apply (see the shouldBeVisible logic above) — .disabled
+            // both dims them and blocks clicks (pointer-events:none in CSS), so there's no dead
+            // control that looks clickable but silently does nothing. Scope (Month/Full Year) only
+            // means anything in List view; cycle filter (All Days/1st-14th/15th-End) additionally
+            // only means anything within a single month, not across List's own Full Year scope.
+            if (id === 'scope-toggle-container') {
+                el.classList.toggle('segmented-control-disabled', state.viewMode !== 'list');
+            }
+            if (id === 'cycle-filter-container') {
+                el.classList.toggle('segmented-control-disabled', state.viewMode !== 'list' || state.listScope === 'year');
             }
         }
     });
@@ -8968,18 +9014,14 @@ function renderAppImmediate() {
     }
     updateDayJumperOptions();
 
-    // Sync the cycle filter visibility and active button states
-    const cycleFilterContainer = document.getElementById('cycle-filter-container');
-    if (cycleFilterContainer) {
-        const showCycleFilter = activeTab === 'dashboard' && state.viewMode === 'list' && state.listScope === 'month';
-        cycleFilterContainer.classList.toggle('hidden', !showCycleFilter);
-
-        if (showCycleFilter) {
-            document.querySelectorAll('#cycle-filter-container .segment-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.cycle === (state.listCycleFilter || 'all'));
-            });
-        }
-    }
+    // Sync the cycle filter's active button state — visibility (and the greyed-out/disabled state
+    // when it doesn't currently apply) is entirely updateGlobalTogglesPlacement()'s job as of
+    // 2026-08-03 (cycle-filter-container stays visible on the Dashboard tab always, not hidden/shown
+    // on a toggle basis), so this no longer touches the "hidden" class at all — it used to, and that
+    // silently fought the new always-visible behavior back to hidden on every render.
+    document.querySelectorAll('#cycle-filter-container .segment-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.cycle === (state.listCycleFilter || 'all'));
+    });
 
     if (activeTab === 'dashboard') {
         renderDashboardTab();
@@ -20704,6 +20746,7 @@ function placeCreditCardToolbar(inHeader) {
     if (!toolbar || !appHeader) return;
     if (inHeader) {
         appHeader.classList.add('cc-account-header');
+        appHeader.classList.remove('hidden');
         if (toolbar.parentElement !== appHeader) appHeader.insertBefore(toolbar, appHeader.firstChild);
         if (accountSlot && title && subtitle) {
             accountSlot.classList.remove('hidden');
@@ -20713,6 +20756,7 @@ function placeCreditCardToolbar(inHeader) {
         }
     } else {
         appHeader.classList.remove('cc-account-header');
+        appHeader.classList.add('hidden');
         if (titleHome && title && subtitle) {
             if (periodNav && periodNav.parentElement === titleHome) {
                 titleHome.insertBefore(title, periodNav);
