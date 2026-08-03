@@ -242,6 +242,38 @@ h1, h2, h3, h4, h5, h6 {
     z-index: 5;
 }
 
+/* Compact page title, sitting directly above the toolbar instead of centered in its own large
+   header block — per explicit user request, 2026-08-03, to eliminate the empty vertical space the
+   old big centered title + its collapsible wrapper used to take up. Overrides .header-title's
+   centered/large presentation without touching the shared class itself, so per-tab rules that key
+   off .header-title (the mobile Delivery tightening, the loan/credit-card "stat chip" subtitle)
+   keep working unchanged. */
+.header-title-compact {
+    text-align: left;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    /* Razor thin — per explicit user request, 2026-08-03 (was 0.5rem). */
+    margin-bottom: 0.1rem;
+}
+.header-title-compact h2 {
+    font-size: 1.15rem;
+    margin: 0;
+    letter-spacing: -0.3px;
+}
+.header-title-compact p {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+/* The loan/credit-card subtitle's "stat chip" row still needs to wrap onto its own line below the
+   title in this compact, non-centered layout rather than fighting for space on the same line. */
+.header-title-compact p.header-subtitle-highlight {
+    flex-basis: 100%;
+    justify-content: flex-start;
+}
+
 .header-right {
     display: flex;
     align-items: center;
@@ -1217,13 +1249,6 @@ label {
 .collapse-toggle-btn[data-key]:not(.arrow-toggle),
 .header-hidden-toggle-btn {
     display: none;
-}
-
-/* Exception: the top nav bar's own Hide/Show button (collapses .main-sticky-dashboard's whole
-   header, date-selection controls included) has no card "header row" to click instead — collapsing
-   it would hide the only thing you could've clicked to bring it back. Keep it visible. */
-#btn-toggle-main-header {
-    display: inline-block !important;
 }
 
 .header-click-collapsible {
@@ -2367,7 +2392,11 @@ label {
     z-index: 45;
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    /* Was 2rem — sized for the old, much taller header (big centered title + collapsible wrapper).
+       That's this container's dominant source of vertical space now that everything inside it is
+       compact, so shrinking it (rather than just the title's own small margin) is what actually
+       makes the gap below the title "razor thin" per explicit user request, 2026-08-03. */
+    gap: 0.5rem;
     padding-bottom: 1rem;
     background: rgba(7, 12, 24, 0.98);
 }
@@ -2378,17 +2407,35 @@ label {
     align-items: center;
 }
 
+/* #header-right-actions (Expand View/Hide) moved up to share a row with the page title itself, see
+   .header-top-row — no longer a child of this grid at all. Back to 3 EQUAL-width flanking columns
+   (left | period | toggles) — this is what actually makes #header-period-nav center on the row: two
+   matching 1fr columns leave symmetric leftover space on each side of the auto-width center column,
+   not just "whatever's left after left-actions" the way a 2-column left/period split would. Toggles
+   now shares this single row instead of wrapping to a row of its own underneath — its own 2-line
+   stack (Calendar/List above Month/Full Year, see below) just makes this row as tall as that stack;
+   left-actions/period-nav vertically center within it via the container's align-items: center. */
 #unified-header-layout.unified-header-dashboard {
+    /* Two explicit rows: row 1 is Personal/Joint | date-nav | Month/Full Year, row 2 is
+       Today/Threshold | (empty) | All Days/1st-14th/15th-End. Calendar/List moved out entirely to
+       #header-view-toggle-host on the title's own top row (see .header-top-row in Index.html), so
+       "toggles" is back to 2 stacked rows instead of 3, and "period" (the date-nav) moves back up to
+       row 1 to line up with Personal/Joint and Month/Full Year. "left" and "toggles" repeat across
+       both row-area slots so each still renders as one tall merged cell spanning the full height.
+       Per explicit user request, 2026-08-03. */
     grid-template-areas:
-        "left period right"
-        "toggles toggles toggles";
+        "left period toggles"
+        "left .      toggles";
     grid-template-columns: 1fr auto 1fr;
+    grid-template-rows: auto auto;
+    align-items: start;
 }
 #unified-header-layout.unified-header-dashboard #header-period-nav { grid-area: period; justify-content: center; }
 #unified-header-layout.unified-header-dashboard #header-left-actions { grid-area: left; justify-content: flex-start; }
-#unified-header-layout.unified-header-dashboard #header-right-actions { grid-area: right; justify-content: flex-end; }
-#unified-header-layout.unified-header-dashboard #global-toggles-host { grid-area: toggles; justify-content: flex-start; flex-wrap: wrap; display: flex; width: 100%; }
-#unified-header-layout.unified-header-dashboard #view-toggle-container { margin-left: auto; }
+/* Stacked as a column (was a wrapping row) per explicit user request, 2026-08-03 — Month/Full Year
+   directly above All Days/1st-14th/15th-End, right-justified to match Expand View/Starting Balance
+   above/below it, both in the row(s) sharing this same 1fr right-hand column). */
+#unified-header-layout.unified-header-dashboard #global-toggles-host { grid-area: toggles; display: flex; flex-direction: column; align-items: flex-end; justify-self: end; gap: 0.5rem; }
 
 #unified-header-layout.unified-header-cc {
     grid-template-areas:
@@ -2397,9 +2444,15 @@ label {
 }
 #unified-header-layout.unified-header-cc #header-left-actions { grid-area: left; justify-content: flex-start; }
 #unified-header-layout.unified-header-cc #header-period-nav { grid-area: period; justify-content: center; }
-#unified-header-layout.unified-header-cc #global-toggles-host { 
-    grid-row: 1; grid-column: 3; 
-    justify-content: flex-end; 
+#unified-header-layout.unified-header-cc #global-toggles-host {
+    /* display/align-items used to come from this element's own inline style attribute in
+       Index.html — removed 2026-08-03 (it was fighting the dashboard variant's column-stack rule
+       via specificity), so this variant now needs to set them explicitly instead of relying on it. */
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    grid-row: 1; grid-column: 3;
+    justify-content: flex-end;
     padding-right: 4.5rem; /* leave space for the absolute Hide button */
 }
 #unified-header-layout.unified-header-cc #header-right-actions { 
@@ -3072,6 +3125,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     padding: 2px;
     gap: 2px;
     align-items: center;
+}
+
+/* Greyed-out/inactive variant — a toggle that stays visible on screen (no layout-shifting hide/show)
+   but doesn't currently apply, e.g. Dashboard's Month/Full Year and All Days/1st-14th/15th-End when
+   Calendar view or List's Full Year scope is active. pointer-events:none blocks clicks entirely
+   rather than just dimming a control that would otherwise silently do nothing. Per explicit user
+   request, 2026-08-03. */
+.segmented-control-disabled {
+    opacity: 0.35;
+    pointer-events: none;
 }
 
 .segment-btn {
@@ -4015,37 +4078,27 @@ body.maximized-calendar .day-transaction-item {
     }
 
     /* Delivery Side Gigs page, mobile: the shared top bar (Today button, month/year date-nav
-       selectors, the header-collapse "Hide" button) and this page's own subtitle/action-button row
-       (Starting Balance, Expand View, Show/Hide All) eat a lot of vertical space before any actual
+       selectors, view toggles, Expand View/Hide) eats a lot of vertical space before any actual
        content is visible, none of which is needed on this page on a phone — per explicit user
        request, 2026-08-01, hide all of it, leaving only the "Delivery Side Gigs" title itself.
        Scoped to ONLY the Delivery tab via body[data-active-tab="delivery"] (set by switchToTab in
        app.js) so every other tab's header is unaffected — NOT :has(#view-delivery.active), which
        looked correct in every desktop browser tested but silently didn't apply at all on a real
        phone (confirmed live, 2026-08-01) since that device's browser doesn't support :has(). A
-       plain attribute selector works on every browser, however old. */
+       plain attribute selector works on every browser, however old. The title itself now lives in
+       its own .header-title-compact block, a sibling of #unified-header-layout rather than nested
+       inside it (see the 2026-08-03 header restructure), so hiding #unified-header-layout here no
+       longer risks taking the title down with it — the old "force the collapsible wrapper visible
+       regardless of its own collapsed state" workaround this used to need is gone along with that
+       wrapper. */
     body[data-active-tab="delivery"] #unified-header-layout,
-    body[data-active-tab="delivery"] #current-tab-subtitle,
-    body[data-active-tab="delivery"] .header-right {
+    body[data-active-tab="delivery"] #current-tab-subtitle {
         display: none !important;
     }
-    /* #unified-header-layout (just hidden above) is also where #btn-toggle-main-header lives — the
-       "Hide"/"Show" toggle for #main-header-collapsible, which wraps the WHOLE .app-header
-       including the title itself. If that section happened to already be collapsed
-       (state.uiCollapsedSections.mainHeader === true, e.g. from previous use on another tab) there
-       is now no way to un-collapse it, since its own toggle button just got hidden — silently
-       hiding the "Delivery Side Gigs" title with nothing left on screen to explain why or bring it
-       back. Confirmed live, 2026-08-01. Force it visible unconditionally on this tab regardless of
-       that collapsed state; the collapse toggle's own display:none above already means the user
-       has no way to re-collapse it here anyway, so this can't fight a deliberate action. */
-    body[data-active-tab="delivery"] #main-header-collapsible.hidden {
-        display: block !important;
-    }
-    /* Even with the above hidden, .app-header still reserved its usual padding/margin/gap around
-       what's now just a single title line, leaving noticeable dead space above Platform
-       Breakdown — tighten it down to a compact single line for this page specifically. */
-    body[data-active-tab="delivery"] .app-header {
-        padding: 0.5rem 1rem 0.2rem !important;
+    /* Even with the above hidden, the title block still reserved its usual margin below it, sized
+       for the full header+date-nav stack that's now gone — tighten it to a compact single line for
+       this page specifically. */
+    body[data-active-tab="delivery"] .header-title-compact {
         margin-bottom: 0.15rem !important;
         gap: 0 !important;
     }
