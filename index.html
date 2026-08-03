@@ -94,6 +94,12 @@
                         <p id="current-tab-subtitle">Personal checking calendar and cash flows</p>
                     </div>
 
+                    <!-- Today/Payment/Statement jump buttons for the loan/credit-card detail page
+                         land here (top-left, right after the Back link) instead of top-right — per
+                         explicit user request, 2026-08-03. Populated by
+                         updateHeaderPeriodNavAndToday() in app.js. Empty/hidden on every other tab. -->
+                    <div id="header-left-jump-host" style="display: flex; align-items: center; gap: 0.4rem;"></div>
+
                     <!-- View-mode toggle host (Calendar/List for Dashboard) — sits left of Expand
                          View, on the same top row as the title, per explicit user request,
                          2026-08-03. Populated by updateGlobalTogglesPlacement() in app.js. -->
@@ -107,8 +113,9 @@
                     <!-- Show/Hide-All (page-specific, hidden unless applicable), Expand View, and the
                          Dashboard Metrics Hide toggle (hidden itself on every tab except Dashboard). -->
                     <div id="header-right-actions" style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
-                        <button type="button" class="action-btn outline-btn hidden" id="btn-master-show-hide-all" title="Show or hide all collapsible sections" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Hide All</button>
                         <button type="button" class="action-btn outline-btn" id="btn-toggle-layout-maximize" title="Toggle full-screen view" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.3rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 28px;">⤢ Expand View</button>
+                        <!-- Sits to the right of Expand View — per explicit user request, 2026-08-03. -->
+                        <button type="button" class="action-btn outline-btn hidden" id="btn-master-show-hide-all" title="Show or hide all collapsible sections" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Hide All</button>
                         <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-metrics" title="Expand or collapse all Dashboard metrics" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Hide</button>
                     </div>
                 </div>
@@ -218,7 +225,7 @@
                             <button type="button" class="segment-btn" data-bills-metrics-cycle="1st">1st Cycle</button>
                             <button type="button" class="segment-btn" data-bills-metrics-cycle="15th">15th Cycle</button>
                         </div>
-                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-bills-today" title="Return to the current month">Today</button>
+                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-bills-today" title="Return to the current month">Current Month</button>
                         <div class="segmented-control hidden" id="savings-header-view-toggle"><button class="segment-btn active" data-savings-mode="calendar">Calendar</button><button class="segment-btn" data-savings-mode="list">List</button></div>
                         <div class="segmented-control hidden" id="savings-header-scope-toggle"><button class="segment-btn active" data-savings-scope="month">Month</button><button class="segment-btn" data-savings-scope="year">Full Year</button></div>
                     </div>
@@ -919,7 +926,7 @@
                         </div>
                     </div>
                     <!-- Credit Card Sub-Dashboard Layout -->
-                    <div class="cc-dashboard-layout hidden" id="cc-dashboard-layout" style="display: flex; flex-direction: column; gap: 1.5rem;">
+                    <div class="cc-dashboard-layout hidden" id="cc-dashboard-layout" style="display: flex; flex-direction: column; gap: 0.5rem;">
                         <div class="cc-sticky-dashboard" id="cc-sticky-dashboard">
                         <div class="glass-card cc-dashboard-toolbar" id="cc-dashboard-toolbar" style="padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
                             <div class="cc-toolbar-left" style="display: flex; align-items: center; gap: 1rem;">
@@ -936,7 +943,10 @@
                             </div>
 
                             <div class="cc-toolbar-actions" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                                <button type="button" class="action-btn small-btn outline-btn" id="btn-cc-toggle-all" title="Expand or collapse card metrics, the payoff planner, and payment plans">Hide All</button>
+                                <!-- The page-level Hide All button (top-right, next to Expand View) already
+                                     covers this account's collapsible sections — see getMasterCollapseControls()
+                                     — so this toolbar-local duplicate was removed rather than also relocated,
+                                     per explicit user request, 2026-08-03. -->
                                 <!-- CC Calendar/List Toggle -->
                                 <div class="segmented-control" id="cc-view-toggle">
                                     <button class="segment-btn active" data-mode="calendar" id="btn-cc-view-calendar">📅 Calendar</button>
@@ -951,20 +961,10 @@
                             </div>
                         </div>
 
-                        <section class="cc-dashboard-section" id="cc-metrics-section">
-                            <div class="cc-dashboard-section-header">
-                                <h3>Card Metrics</h3>
-                                <button type="button" class="action-btn small-btn outline-btn" id="btn-cc-metrics-toggle">Hide</button>
-                            </div>
-                            <div class="cc-dashboard-section-body" id="cc-metrics-body">
-                                <div class="card-payoff-summary" id="card-payoff-widgets">
-                                    <div class="glass-card payoff-metric"><span id="debt-metric-utilization-label">Credit Utilization</span><strong id="payoff-utilization">0%</strong></div>
-                                    <div class="glass-card payoff-metric"><span id="debt-metric-apr-label">APR</span><strong id="payoff-apr">0%</strong></div>
-                                    <div class="glass-card payoff-metric"><span id="debt-metric-payment-label">Minimum Payment</span><strong id="payoff-minimum">$0.00</strong></div>
-                                    <div class="glass-card payoff-metric"><span id="debt-metric-available-label">Available Credit</span><strong id="payoff-available">$0.00</strong></div>
-                                </div>
-                            </div>
-                        </section>
+                        <!-- Card Metrics section removed, 2026-08-03 — its APR/Monthly Payment/Original
+                             Balance now render as header stat-chip bubbles instead (see the
+                             loans/creditcards branches of updateTabTitles()), alongside Paid/Current
+                             Balance/Payoff, so this dedicated section-with-its-own-Hide-button is gone. -->
                         </div>
 
                         <!-- Shared payoff planner host: shown in both calendar and ledger views. -->
@@ -1171,7 +1171,18 @@
                                         <h3 id="cc-list-view-title" style="margin: 0;">Card Transaction Ledger</h3>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="cc-list-tools-wrapper" data-key="ccListTools" title="Collapse the transaction tools to save space">Hide</button>
                                     </div>
-                                    <div id="cc-filter-summary" class="muted-text"></div>
+                                    <!-- Search, filter-summary pill, and CSV export all grouped together
+                                         at the row's right edge — same layout/style as the Dashboard
+                                         list view's own header (#list-view-header), per explicit user
+                                         request, 2026-08-03. The search input keeps a fixed width (no
+                                         flex-grow) so this cluster stays tight and doesn't push the pill
+                                         onto its own wrapped line depending on whether the field is
+                                         empty or has text. -->
+                                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: flex-end;">
+                                        <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="🔍 Search merchant, description, owner, trip, date, amount..." style="width: 280px; flex: 0 0 auto; margin: 0;">
+                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap;"></div>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-export-cc-list-csv" title="Export the currently visible rows (respects search/filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
+                                    </div>
                                 </div>
                                 <div id="cc-list-tools-wrapper">
                                     <div id="cc-list-tools-host">
@@ -1198,7 +1209,6 @@
 
                                     <div class="cc-list-tools cc-filter-tools">
                                         <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-add-loan-payment" title="Post an additional payment to this loan">+ Extra Loan Payment</button>
-                                        <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="Search merchant, description, owner, trip, date, amount...">
                                         <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
                                             <option value="all">All merchants</option>
                                         </select>
