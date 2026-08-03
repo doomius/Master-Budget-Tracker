@@ -78,18 +78,83 @@
         <main class="app-main">
             <!-- Top Dashboard Bar -->
             <div class="main-sticky-dashboard">
-                <div id="unified-header-layout" class="unified-header-dashboard">
-                    <!-- Left Actions -->
-                    <div id="header-left-actions" style="display: flex; align-items: center; gap: 0.4rem;">
-                        <button type="button" class="action-btn small-btn solid-btn" id="btn-header-today" title="Go to Today" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Today</button>
-                        <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-payment" title="Jump to Payment" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Payment</button>
-                        <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-statement" title="Jump to Statement Closing" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Statement</button>
-                        <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-threshold" title="Jump to Below-Threshold Day" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Threshold</button>
+                <!-- Title + page-level actions share one row at the very top of the page — per
+                     explicit user request, 2026-08-03, Expand View/Hide used to sit down in the
+                     toolbar row (level with Today/date-nav) with a lot of empty space above them;
+                     moving them up here puts them at the actual top-right of the page next to the
+                     title, matching where the user pointed in their annotated screenshot. -->
+                <div class="header-top-row" style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;">
+                    <!-- Compact page title. Kept as class="header-title" (rather than a fresh class)
+                         so the existing per-tab CSS overrides (mobile Delivery tightening, the
+                         loan/credit-card "stat chip" subtitle) that target .header-title still apply
+                         unchanged; a scoped rule shrinks it for this new, non-centered spot instead of
+                         restyling the shared class itself. -->
+                    <div class="header-title header-title-compact">
+                        <h2 id="current-tab-title">Monthly Dashboard</h2>
+                        <p id="current-tab-subtitle">Personal checking calendar and cash flows</p>
                     </div>
 
-                    <!-- Date Selectors -->
-                    <div id="header-period-nav" class="month-select-wrapper" style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0; flex-shrink: 0;">
+                    <!-- View-mode toggle host (Calendar/List for Dashboard) — sits left of Expand
+                         View, on the same top row as the title, per explicit user request,
+                         2026-08-03. Populated by updateGlobalTogglesPlacement() in app.js. -->
+                    <div id="header-view-toggle-host" style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; margin-left: auto;">
+                        <div class="segmented-control" id="view-toggle-container">
+                            <button class="segment-btn active" data-mode="calendar" id="btn-view-calendar">📅 Calendar</button>
+                            <button class="segment-btn" data-mode="list" id="btn-view-list">📝 List</button>
+                        </div>
+                    </div>
+
+                    <!-- Show/Hide-All (page-specific, hidden unless applicable), Expand View, and the
+                         Dashboard Metrics Hide toggle (hidden itself on every tab except Dashboard). -->
+                    <div id="header-right-actions" style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                        <button type="button" class="action-btn outline-btn hidden" id="btn-master-show-hide-all" title="Show or hide all collapsible sections" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Hide All</button>
+                        <button type="button" class="action-btn outline-btn" id="btn-toggle-layout-maximize" title="Toggle full-screen view" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.3rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 28px;">⤢ Expand View</button>
+                        <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-metrics" title="Expand or collapse all Dashboard metrics" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Hide</button>
+                    </div>
+                </div>
+
+                <!-- Empty by default (hidden) — placeCreditCardToolbar() in app.js relocates
+                     #cc-dashboard-toolbar and the title/subtitle above into this exact element
+                     (removing "hidden", adding "cc-account-header") only while viewing one specific
+                     credit card/loan's own dashboard, giving it a dedicated top-of-page slot separate
+                     from the generic page title. Kept as a real, distinct element (not reused from the
+                     old big centered dashboard header, which this replaces) specifically so that
+                     mechanism still has somewhere valid to relocate into after the 2026-08-03 header
+                     restructure removed the header block it used to borrow. -->
+                <header class="app-header hidden" id="app-header"></header>
+
+                <div id="unified-header-layout" class="unified-header-dashboard">
+                    <!-- Left Actions — Personal/Joint on its own row above Today/Threshold, per
+                         explicit user request, 2026-08-03. -->
+                    <div id="header-left-actions" style="display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                        <!-- Identity toggle host (Personal/Joint) — a dedicated slot, populated by
+                             updateGlobalTogglesPlacement() in app.js, so it lands here
+                             deterministically instead of as a side effect of flex-wrap ordering
+                             inside #global-toggles-host. -->
+                        <div id="header-identity-toggles-host" style="display: flex; align-items: center; gap: 0.75rem;">
+                            <div class="segmented-control" id="dashboard-toggle-container">
+                                <button class="segment-btn active" data-type="personal" id="btn-dash-personal">Personal</button>
+                                <button class="segment-btn" data-type="joint" id="btn-dash-joint">Joint</button>
+                            </div>
+                        </div>
+                        <div id="header-left-buttons-row" style="display: flex; align-items: center; gap: 0.4rem;">
+                            <button type="button" class="action-btn small-btn solid-btn" id="btn-header-today" title="Go to Today" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Today</button>
+                            <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-payment" title="Jump to Payment" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Payment</button>
+                            <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-statement" title="Jump to Statement Closing" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Statement</button>
+                            <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-header-threshold" title="Jump to Below-Threshold Day" style="padding: 0.3rem 0.7rem; font-size: 0.78rem; height: 28px;">Threshold</button>
+                        </div>
+                    </div>
+
+                    <!-- Date Selectors — Year, then Month, then Day -->
+                    <div id="header-period-nav" class="month-select-wrapper" style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
                         <button type="button" class="calendar-nav-btn" id="btn-header-prev" title="Previous Month" style="height: 34px; width: 34px; flex-shrink: 0; box-sizing: border-box;">←</button>
+                        <select id="year-select" class="custom-select" style="font-weight: 600; text-align: center; width: auto; min-width: 82px; height: 34px; padding: 0 0.4rem; line-height: 34px; box-sizing: border-box; flex-shrink: 0;">
+                            <option value="2026">2026</option>
+                            <option value="2027">2027</option>
+                            <option value="2028">2028</option>
+                            <option value="2029">2029</option>
+                            <option value="2030">2030</option>
+                        </select>
                         <select id="month-select" class="custom-select" style="font-weight: 600; text-align: center; width: auto; min-width: 95px; height: 34px; padding: 0 0.4rem; line-height: 34px; box-sizing: border-box; flex-shrink: 0;">
                             <option value="Jan">Jan</option>
                             <option value="Feb">Feb</option>
@@ -129,67 +194,25 @@
                                 <option value="" selected>-</option>
                             </select>
                         </div>
-                        <select id="year-select" class="custom-select" style="font-weight: 600; text-align: center; width: auto; min-width: 82px; height: 34px; padding: 0 0.4rem; line-height: 34px; box-sizing: border-box; flex-shrink: 0;">
-                            <option value="2026">2026</option>
-                            <option value="2027">2027</option>
-                            <option value="2028">2028</option>
-                            <option value="2029">2029</option>
-                            <option value="2030">2030</option>
-                        </select>
                         <button type="button" class="calendar-nav-btn" id="btn-header-next" title="Next Month" style="height: 34px; width: 34px; flex-shrink: 0; box-sizing: border-box;">→</button>
                     </div>
 
-                    <!-- Global Toggles Host -->
-                    <div id="global-toggles-host" style="display: flex; align-items: center; gap: 0.75rem;"></div>
-
-                    <!-- Right Actions -->
-                    <div id="header-right-actions" style="display: flex; align-items: center;">
-                        <button type="button" id="btn-toggle-main-header" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="main-header-collapsible" data-key="mainHeader" title="Collapse the navigation header to save space" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; height: 24px;">Hide</button>
-                    </div>
-                </div>
-            <div id="main-header-collapsible">
-            <header class="app-header">
-                <!-- 1. LEFT SIDE: Controls & Selectors -->
-                <div class="header-controls" style="display: flex; align-items: center; gap: 0.75rem;">
-                    <!-- Segmented Dashboard Toggle -->
-                    <div class="segmented-control" id="dashboard-toggle-container">
-                        <button class="segment-btn active" data-type="personal" id="btn-dash-personal">Personal</button>
-                        <button class="segment-btn" data-type="joint" id="btn-dash-joint">Joint</button>
-                    </div>
-
-                    <!-- Segmented View Toggle -->
-                    <div class="segmented-control" id="view-toggle-container">
-                        <button class="segment-btn active" data-mode="calendar" id="btn-view-calendar">📅 Calendar</button>
-                        <button class="segment-btn" data-mode="list" id="btn-view-list">📝 List</button>
-                    </div>
-
-                    <!-- Segmented List Scope Toggle (Hidden by default, shown in List View) -->
-                    <div class="segmented-control hidden" id="scope-toggle-container">
-                        <button class="segment-btn active" data-scope="month" id="btn-scope-month">Month</button>
-                        <button class="segment-btn" data-scope="year" id="btn-scope-year">Full Year</button>
-                    </div>
-
-                    <!-- Segmented Cycle Filter (Shown in List View) -->
-                    <div class="segmented-control hidden" id="cycle-filter-container">
-                        <button class="segment-btn active" data-cycle="all" id="btn-cycle-all">All Days</button>
-                        <button class="segment-btn" data-cycle="1st" id="btn-cycle-1st">1st - 14th</button>
-                        <button class="segment-btn" data-cycle="2nd" id="btn-cycle-2nd">15th - End</button>
-                    </div>
-
-                </div>
-
-                <!-- 2. CENTERED: Title & Subtitle -->
-                <div class="header-title" style="text-align: center;">
-                    <h2 id="current-tab-title">Monthly Dashboard</h2>
-                    <p id="current-tab-subtitle">Personal checking calendar and cash flows</p>
-                </div>
-
-                <!-- 3. RIGHT SIDE: Action Buttons — stacked into rows so page-specific controls can sit
-                     above/below the Expand View button instead of only ever lining up beside it. -->
-                <div class="header-right" style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; margin-left: auto;">
-                    <!-- Row 0: sits ABOVE the main row (Bills Splitter's Month/Cycle filter, or Savings'
-                         Calendar/List + Month/Full Year toggles — only one is ever visible per tab). -->
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <!-- View-mode toggles host: Month/Full Year, cycle filter, and every other tab's
+                         equivalent controls — updateGlobalTogglesPlacement() relocates the right
+                         subset here per active tab. Calendar/List moved out to
+                         #header-view-toggle-host (see .header-top-row above), so this host is now
+                         just 2 rows tall on the Dashboard tab instead of 3. Right-aligned on its own
+                         row under the main toolbar row. -->
+                    <div id="global-toggles-host">
+                        <div class="segmented-control hidden" id="scope-toggle-container">
+                            <button class="segment-btn active" data-scope="month" id="btn-scope-month">Month</button>
+                            <button class="segment-btn" data-scope="year" id="btn-scope-year">Full Year</button>
+                        </div>
+                        <div class="segmented-control hidden" id="cycle-filter-container">
+                            <button class="segment-btn active" data-cycle="all" id="btn-cycle-all">All Days</button>
+                            <button class="segment-btn" data-cycle="1st" id="btn-cycle-1st">1st - 14th</button>
+                            <button class="segment-btn" data-cycle="2nd" id="btn-cycle-2nd">15th - End</button>
+                        </div>
                         <div class="segmented-control hidden" id="bills-metrics-cycle-toggle">
                             <button type="button" class="segment-btn active" data-bills-metrics-cycle="month">Month</button>
                             <button type="button" class="segment-btn" data-bills-metrics-cycle="1st">1st Cycle</button>
@@ -199,33 +222,17 @@
                         <div class="segmented-control hidden" id="savings-header-view-toggle"><button class="segment-btn active" data-savings-mode="calendar">Calendar</button><button class="segment-btn" data-savings-mode="list">List</button></div>
                         <div class="segmented-control hidden" id="savings-header-scope-toggle"><button class="segment-btn active" data-savings-scope="month">Month</button><button class="segment-btn" data-savings-scope="year">Full Year</button></div>
                     </div>
-
-                    <!-- Row 1: main controls row -->
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <button type="button" class="action-btn outline-btn" id="btn-open-starting-balance" title="Reset a checking account's balance as of a specific date" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⚙️ Starting Balance</button>
-                        <button type="button" class="action-btn outline-btn hidden" id="btn-configure-payroll" title="Configure Payroll Tracker" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⚙️ Payroll</button>
-                        <button type="button" class="action-btn outline-btn" id="btn-toggle-layout-maximize" title="Toggle full-screen view" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">⤢ Expand View</button>
-                    </div>
-
-                    <!-- Row 2: Show/Hide-All slot — sits below Expand View for every tab that has one -->
-                    <button type="button" class="action-btn outline-btn hidden" id="btn-master-show-hide-all" title="Show or hide all collapsible sections" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.4rem 0.8rem; font-weight: 500; font-size: 0.82rem; height: 34px;">Hide All</button>
                 </div>
-            </header>
-            </div>
             </div>
 
             <!-- Dashboard Summary Widgets -->
             <section class="dashboard-metrics-section" id="dashboard-metrics-section">
                 <div class="dashboard-metrics-section-header" style="display: flex; align-items: center; justify-content: space-between;">
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <h3 style="margin:0;">Dashboard Metrics</h3>
-                        <div id="dashboard-filtered-items-pill" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.65rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.78rem; font-weight: 600; color: #90caf9;">
-                            <span>🔍 <span id="filtered-items-label">View Items</span>: <span id="filtered-items-count">0</span></span>
-                            <span style="opacity: 0.5;">|</span>
-                            <span>Total: <span id="filtered-items-amount">$0.00</span></span>
-                        </div>
+                    <h3 style="margin:0;">Dashboard Metrics</h3>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <button type="button" class="action-btn outline-btn" id="btn-open-starting-balance" title="Reset a checking account's balance as of a specific date" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Starting Balance</button>
+                        <button type="button" class="action-btn outline-btn hidden" id="btn-configure-payroll" title="Configure Payroll Tracker" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Payroll</button>
                     </div>
-                    <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-metrics" title="Expand or collapse all Dashboard metrics">Hide</button>
                 </div>
                 <div class="summary-cards" id="summary-cards">
                 <div class="glass-card summary-card">
