@@ -56,7 +56,17 @@
                 <button class="nav-btn" data-tab="sync" id="btn-tab-sync">
                     <span class="icon">🔄</span> Sync Settings
                 </button>
+                <!-- Google Drive sync status — see showSyncStatusFlag() in app.js. Hidden until
+                     the first sync attempt of the session. -->
+                <button type="button" id="sync-status-flag" class="sync-status-flag hidden" aria-label="Google Drive sync status">
+                    <span id="sync-status-flag-icon" class="sync-status-flag-icon">🔄</span>
+                    <span id="sync-status-flag-label">Sync status</span>
+                </button>
             </nav>
+            <div id="sync-status-detail" class="sync-status-detail hidden">
+                <div id="sync-status-detail-message" class="sync-status-detail-message"></div>
+                <div id="sync-status-detail-time" class="sync-status-detail-time"></div>
+            </div>
 
             <div class="sidebar-footer">
                 <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-view-settings" style="width:100%;" title="Resets every view/filter/sort/collapsed-panel preference back to its default — does not touch your bills, transactions, or other data">↺ Reset to Default View</button>
@@ -1677,8 +1687,20 @@
             <div class="form-row" id="loan-payment-settings-row">
                 <div class="form-group" id="loan-payment-strategy-group"><label for="loan-payment-strategy">Automatic Monthly Payment</label><select id="loan-payment-strategy" class="custom-select"><option value="none">Do not schedule automatically</option><option value="balance">Full Card Balance</option><option value="interestSaving">Interest-Saving Balance</option><option value="minimum">Minimum Payment</option><option value="custom">Custom Schedule (multiple amounts)</option></select></div>
                 <div class="form-group"><label for="loan-payment-source">Pay From</label><select id="loan-payment-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option><optgroup label="Credit Cards" id="loan-source-cc-optgroup"></optgroup></select></div>
-                <div class="form-group"><label for="loan-first-payment-date">First Payment Date (optional)</label><input type="date" id="loan-first-payment-date" class="custom-input"></div>
-                <div class="form-group"><label for="loan-payment-end-date">Payment End Date (optional)</label><input type="date" id="loan-payment-end-date" class="custom-input"></div>
+                <div class="form-group">
+                    <label for="loan-first-payment-date">First Payment Date (optional)</label>
+                    <div style="display:flex; align-items:center; gap:.4rem;">
+                        <input type="date" id="loan-first-payment-date" class="custom-input">
+                        <button type="button" id="loan-first-payment-date-clear" class="btn-secondary" style="padding:.35rem .6rem; font-size:.8rem; white-space:nowrap;">Clear</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="loan-payment-end-date">Payment End Date (optional)</label>
+                    <div style="display:flex; align-items:center; gap:.4rem;">
+                        <input type="date" id="loan-payment-end-date" class="custom-input">
+                        <button type="button" id="loan-payment-end-date-clear" class="btn-secondary" style="padding:.35rem .6rem; font-size:.8rem; white-space:nowrap;">Clear</button>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label for="loan-manual-payoff-date">Manual Payoff Override (optional)</label>
                     <div style="display:flex; align-items:center; gap:.4rem;">
