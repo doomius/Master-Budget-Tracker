@@ -214,6 +214,33 @@ h1, h2, h3, h4, h5, h6 {
     box-sizing: border-box;
 }
 
+/* Loan/Card detail pages only — razor-thin gap between the sticky header and the page content
+   below it, instead of the standard 2rem every other tab uses, since the collapsed account
+   header (see applyCreditCardSectionState() in app.js) already leaves the title/date-nav box
+   short; the full 2rem on top of that read as a large dead zone. Scoped via body[data-active-tab]
+   (set in switchToTab()) rather than touching .app-main itself, so Dashboard/Savings/etc. keep
+   their normal spacing. Per explicit user request, 2026-08-03. */
+body[data-active-tab="creditcards"] .app-main,
+body[data-active-tab="loans"] .app-main {
+    gap: 0.5rem;
+}
+/* #unified-header-layout carries the date-nav/Personal-Joint-toggle/scope-toggle row on every
+   other tab, but on Loans/Credit Cards every one of those either doesn't apply (no Personal/Joint
+   toggle here) or has already relocated elsewhere via JS (date-nav and the Calendar/List +
+   Month/Year toggles move into/above the toolbar and the top-right action cluster — see
+   placeCreditCardToolbar() and updateGlobalTogglesPlacement() in app.js) — so it's always empty
+   here, just reserving its own height + the sticky bar's trailing gap/padding around it for
+   nothing. Confirmed real contributor to the "dead space before Card Transaction Ledger" reports,
+   2026-08-03, alongside the .app-header.cc-account-header padding fix above. */
+body[data-active-tab="creditcards"] #unified-header-layout,
+body[data-active-tab="loans"] #unified-header-layout {
+    display: none;
+}
+body[data-active-tab="creditcards"] .main-sticky-dashboard,
+body[data-active-tab="loans"] .main-sticky-dashboard {
+    padding-bottom: 0;
+}
+
 /* HEADER */
 .app-header {
     display: grid;
@@ -234,7 +261,10 @@ h1, h2, h3, h4, h5, h6 {
     background: rgba(8, 12, 22, 0.97);
     overflow: hidden;
     padding: 1.25rem 1.5rem;
-    margin-bottom: 1.5rem;
+    /* Trimmed from 1.5rem, 2026-08-03 — see the body[data-active-tab] .app-main gap rule above for
+       the fuller reasoning; this is the other big contributor to the dead space between the
+       collapsed account header and the page content below it. */
+    margin-bottom: 0.5rem;
 }
 
 .header-title {
@@ -274,6 +304,15 @@ h1, h2, h3, h4, h5, h6 {
     justify-content: flex-start;
 }
 
+/* Forces the loan/credit-card account-nav row and stat-bubble row hidden when Hide All collapses
+   this account's header — see applyCreditCardSectionState() in app.js. !important because
+   #cc-account-nav's own nav-count-based .hidden toggle (updateCCAccountNavControls()) must not be
+   able to fight this back open, and because the title/subtitle live inside a CSS Grid area with
+   its own display rules. */
+.header-card-force-hidden {
+    display: none !important;
+}
+
 .header-right {
     display: flex;
     align-items: center;
@@ -300,23 +339,26 @@ h1, h2, h3, h4, h5, h6 {
     align-items: center;
     justify-content: center;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.4rem;
     color: var(--text-primary);
 }
 .header-stat-chip {
     display: inline-flex;
     align-items: baseline;
-    gap: 0.35rem;
-    padding: 0.3rem 0.75rem;
+    gap: 0.25rem;
+    /* Trimmed from 0.3rem 0.75rem, 2026-08-03 — the loan/credit-card header now carries 6 chips
+       (was 3), and this is the difference between fitting on one row at laptop/desktop widths vs.
+       wrapping to two, per explicit user request. */
+    padding: 0.22rem 0.5rem;
     border-radius: 999px;
     background: var(--color-primary-glow);
     border: 1px solid rgba(99, 102, 241, 0.35);
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     color: var(--text-secondary);
     white-space: nowrap;
 }
 .header-stat-chip strong {
-    font-size: 1.1rem;
+    font-size: 0.95rem;
     font-weight: 700;
     color: var(--text-primary);
 }
@@ -2578,8 +2620,17 @@ label {
     justify-content: flex-end;
 }
 .app-header.cc-account-header {
-    grid-template-rows: auto auto;
-    row-gap: 0.75rem;
+    /* Row 2 (header-controls/header-title/header-right) is dead weight now — title/subtitle
+       physically relocate INTO .cc-dashboard-toolbar's own account slot while a card is selected
+       (see placeCreditCardToolbar() in app.js), so #app-header only ever has that one child here.
+       The base .app-header padding (1.25rem top/bottom) plus this row-gap were both still reserving
+       space for content that no longer exists, stacking on top of .cc-dashboard-toolbar's own
+       padding just below — confirmed real bug, 2026-08-03, this was the actual source of the "dead
+       space before Card Transaction Ledger" reports, not the account-nav/bubbles collapse. Dropping
+       both to 0 here since the nested toolbar already pads itself appropriately. */
+    grid-template-rows: auto;
+    row-gap: 0;
+    padding: 0;
 }
 .app-header.cc-account-header .cc-dashboard-toolbar {
     grid-column: 1 / -1;
@@ -2588,7 +2639,13 @@ label {
     margin-bottom: 0;
     padding: 0.75rem 1.5rem !important;
     display: grid !important;
-    grid-template-columns: minmax(220px, 1fr) minmax(0, auto) minmax(220px, 1fr);
+    /* The Back link and the Calendar/List + Month/Year toggles that used to share this row with
+       the account slot both relocated up into the top-right header cluster, 2026-08-03 — leaving
+       .cc-toolbar-left/.cc-toolbar-actions functionally empty (just a hidden placeholder h3 on the
+       left). Side columns now shrink to their (near-zero) content instead of reserving a fixed
+       minmax(220px, 1fr) each, so the account slot's stat-chip row gets the room it actually needs
+       to fit on one line at laptop/desktop widths. */
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
     align-items: center;
 }
 .cc-toolbar-left { justify-self: start; }
@@ -2599,7 +2656,7 @@ label {
     align-items: center;
     gap: 0.4rem;
     min-width: 0;
-    max-width: min(48vw, 760px);
+    max-width: 100%;
     padding: 0 1rem;
     text-align: center;
 }
