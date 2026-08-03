@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-02 21:02';
+const BUILD_VERSION = '2026-08-02 21:10';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
