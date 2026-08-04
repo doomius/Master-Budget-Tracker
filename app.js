@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-03 16:04';
+const BUILD_VERSION = '2026-08-04 14:43';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -3690,6 +3690,16 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         Object.keys(state).forEach(k => delete state[k]);
         Object.assign(state, json.data);
         migrateDatabase();
+        // enforceMobileListView() only applies its one-time mobile defaults (metrics collapsed,
+        // quick-add tools collapsed, etc.) once per page load, guarded by
+        // _mobileMetricsDefaultApplied — that guard already tripped during init()'s pre-pull render,
+        // so without resetting it here this wholesale state replacement silently overwrites those
+        // defaults with whatever was last pushed from a desktop session, and — since the guard is
+        // now permanently true — nothing ever re-applies them for the rest of the mobile session.
+        // Confirmed real bug, 2026-08-03: opening the app fresh on a phone showed the full
+        // desktop-sized dashboard (metrics expanded, quick-add form expanded) despite the mobile
+        // defaults being set correctly moments earlier, pre-pull.
+        _mobileMetricsDefaultApplied = false;
         saveDatabase(true); // skipAutoSync — bringing local state in line with the Drive file is not a new edit to push back
         // renderAppImmediate() (synchronous), NOT renderApp() (which defers the actual paint to a
         // double-rAF, with a setTimeout fallback only after RENDER_RAF_FALLBACK_MS — see its own
@@ -4494,6 +4504,14 @@ function setupEventListeners() {
     // Covers every way the dialog can close (Close button, Escape key, backdrop) — <dialog> fires
     // 'close' regardless of which one triggered it, unlike hooking the button click alone.
     document.getElementById('day-highlights-dialog').addEventListener('close', restoreQuickAddFormFromModal);
+    // Undoes the title/content changes openMobileQuickAddModal() makes so this dialog looks right
+    // again the next time the Calendar view's own day-click flow opens it.
+    document.getElementById('day-highlights-dialog').addEventListener('close', () => {
+        document.getElementById('day-highlights-modal-title').textContent = 'Day Details';
+        document.getElementById('day-highlights-dialog-content').classList.remove('hidden');
+        document.getElementById('modal-quick-add-title').classList.remove('hidden');
+    });
+    document.getElementById('btn-mobile-fab-add-transaction')?.addEventListener('click', openMobileQuickAddModal);
 
     // Tab switching
     document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -4731,6 +4749,10 @@ function setupEventListeners() {
         const listMasterSearchEl = document.getElementById('list-view-master-search');
         if (listMasterSearchEl) listMasterSearchEl.value = '';
     });
+    // Opens the real #quick-add-form in a popup — see the button's own comment in Index.html.
+    document.getElementById('btn-open-listview-add-modal')?.addEventListener('click', () => {
+        openMobileQuickAddModal();
+    });
     // Shared by Personal and Joint list views (same host element, only one rendered at a time) —
     // re-render whichever one is currently active, same live-filter behavior as the Card Ledger's
     // search box.
@@ -4746,14 +4768,19 @@ function setupEventListeners() {
     document.getElementById('btn-export-savingslist-csv')?.addEventListener('click', exportSavingsListToCSV);
 
     const updateSavingsEntryForm = () => {
-        const isInterest = document.getElementById('savings-entry-type').value === 'interest';
-        document.getElementById('savings-entry-amount-label').textContent = isInterest ? 'Interest Amount' : 'Savings Amount';
+        const entryType = document.getElementById('savings-entry-type').value; // deposit | withdrawal | interest
+        const isInterest = entryType === 'interest';
+        const sourceLabel = document.getElementById('savings-transfer-source').value === 'joint' ? 'Joint' : 'Personal';
+        document.getElementById('savings-entry-amount-label').textContent = 'Amount';
+        document.getElementById('savings-transfer-source-group').classList.toggle('hidden', isInterest);
         document.getElementById('savings-entry-hint').textContent = isInterest
-            ? 'Interest affects only Savings and never changes the Personal balance.'
-            : 'Positive adds to Savings and subtracts from Personal. Negative does the reverse.';
-        document.getElementById('btn-add-savings-entry').textContent = isInterest ? 'Add Monthly Interest' : 'Add Savings Transfer';
+            ? 'One-time manual addition to Savings only — never tied to or moves money from a checking account.'
+            : (entryType === 'withdrawal'
+                ? `Moves this amount from Savings into ${sourceLabel}.`
+                : `Moves this amount from ${sourceLabel} into Savings.`);
+        document.getElementById('btn-add-savings-entry').textContent = isInterest ? 'Add Interest' : (entryType === 'withdrawal' ? 'Add Withdrawal' : 'Add Deposit');
         const description = document.getElementById('savings-transfer-description');
-        if (isInterest && !description.value.trim()) description.value = 'Monthly Interest';
+        if (isInterest && !description.value.trim()) description.value = 'Interest';
         if (isInterest) {
             const monthIndex = MONTH_ORDER.indexOf(state.currentMonth);
             const lastDay = String(new Date(state.currentYear, monthIndex + 1, 0).getDate()).padStart(2, '0');
@@ -4761,7 +4788,15 @@ function setupEventListeners() {
         }
     };
     document.getElementById('savings-entry-type').addEventListener('change', updateSavingsEntryForm);
+    document.getElementById('savings-transfer-source').addEventListener('change', updateSavingsEntryForm);
 
+    // Reachable in both Calendar and List view, on any device — openMobileQuickAddModal() has no
+    // viewport gating of its own (only the FAB button's own visibility is mobile-only), so it works
+    // identically here. Fixes the real reported gap, 2026-08-04: List view (desktop included) had no
+    // way to add a savings transaction at all, since the inline form only ever lived in Calendar view.
+    document.getElementById('btn-open-savings-add-modal').addEventListener('click', () => {
+        openMobileQuickAddModal();
+    });
     document.getElementById('btn-open-savings-balance').addEventListener('click', () => {
         document.getElementById('savings-current-amount').value = getSavingsStartingBalance().toFixed(2);
         document.getElementById('savings-balance-dialog').showModal();
@@ -4992,24 +5027,33 @@ function setupEventListeners() {
     });
     document.getElementById('savings-transfer-form').addEventListener('submit', event => {
         event.preventDefault();
-        const kind = document.getElementById('savings-entry-type').value;
+        const entryType = document.getElementById('savings-entry-type').value; // deposit | withdrawal | interest
+        const source = document.getElementById('savings-transfer-source').value === 'joint' ? 'joint' : 'personal';
         const date = document.getElementById('savings-transfer-date').value;
         const description = document.getElementById('savings-transfer-description').value.trim();
-        const amount = Number(document.getElementById('savings-transfer-amount').value);
-        const added = kind === 'interest'
-            ? addSavingsInterest(date, description, amount)
-            : addLinkedSavingsTransfer(date, description, amount);
+        // The field always takes a plain positive amount now — direction comes from Entry Type, not
+        // a +/- sign the user has to remember to apply themselves. Per explicit user request,
+        // 2026-08-04: Deposit/Withdrawal/Interest as three distinct named options instead of one
+        // "Transfer" with a "positive in, negative out" convention.
+        const rawAmount = Math.abs(Number(document.getElementById('savings-transfer-amount').value));
+        const signedAmount = entryType === 'withdrawal' ? -rawAmount : rawAmount;
+        const added = entryType === 'interest'
+            ? addSavingsInterest(date, description, rawAmount)
+            : addLinkedSavingsTransfer(date, description, signedAmount, source);
         if (!added) return;
         saveDatabase();
         event.currentTarget.reset();
         document.getElementById('savings-transfer-date').value = date;
         updateSavingsEntryForm();
         renderApp();
-        logSuccess(kind === 'interest'
-            ? `Monthly savings interest added on ${formatDateDisplay(date)} without changing Personal.`
-            : `Savings transfer added to Savings and Personal on ${formatDateDisplay(date)}.`);
+        logSuccess(entryType === 'interest'
+            ? `Interest of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added to Savings on ${formatDateDisplay(date)}.`
+            : `${entryType === 'withdrawal' ? 'Withdrawal' : 'Deposit'} of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added between Savings and ${source === 'joint' ? 'Joint' : 'Personal'} on ${formatDateDisplay(date)}.`);
     });
 
+    document.getElementById('savings-edit-type').addEventListener('change', (e) => {
+        document.getElementById('savings-edit-source-group').classList.toggle('hidden', e.target.value === 'interest');
+    });
     document.getElementById('btn-cancel-savings-edit').addEventListener('click', () => document.getElementById('savings-edit-dialog').close());
     document.getElementById('btn-close-savings-day').addEventListener('click', () => document.getElementById('savings-day-dialog').close());
     document.getElementById('savings-edit-form').addEventListener('submit', event => {
@@ -5017,13 +5061,19 @@ function setupEventListeners() {
         const tx = (state.savingsTransactions || []).find(item => item.id === document.getElementById('savings-edit-id').value);
         if (!tx) return;
         const oldKind = tx.kind || 'transfer';
-        const newKind = document.getElementById('savings-edit-type').value;
-        const amount = Number(document.getElementById('savings-edit-amount').value);
+        // Entry Type is 3 UI options (deposit/withdrawal/interest) but only 2 stored kinds
+        // ('transfer'/'interest') — deposit and withdrawal are the same kind, just opposite signs.
+        // Per explicit user request, 2026-08-04.
+        const newEntryType = document.getElementById('savings-edit-type').value;
+        const newKind = newEntryType === 'interest' ? 'interest' : 'transfer';
+        const newSource = document.getElementById('savings-edit-source').value === 'joint' ? 'joint' : 'personal';
+        const rawAmount = Math.abs(Number(document.getElementById('savings-edit-amount').value));
+        const amount = newEntryType === 'withdrawal' ? -rawAmount : rawAmount;
         const date = document.getElementById('savings-edit-date').value;
         const description = document.getElementById('savings-edit-description').value.trim();
-        if (!date || !description || !Number.isFinite(amount) || amount === 0) return;
+        if (!date || !description || !Number.isFinite(rawAmount) || rawAmount === 0) return;
         if (oldKind === 'transfer' && newKind === 'interest') {
-            const mirror = findPersonalSavingsMirror(tx.transferId);
+            const mirror = findSavingsCheckingMirror(tx.transferId);
             if (mirror) mirror.list.splice(mirror.list.indexOf(mirror.tx), 1);
             tx.personalMirrorDetached = true;
         }
@@ -5033,14 +5083,15 @@ function setupEventListeners() {
         }
         tx.kind = newKind;
         tx.savingsTransfer = newKind === 'transfer';
+        tx.transferSource = newSource;
         tx.date = date;
         tx.description = description;
         tx.amount = amount;
-        if (newKind === 'transfer') syncSavingsPersonalMirror(tx, oldKind === 'interest');
+        if (newKind === 'transfer') syncSavingsCheckingMirror(tx, oldKind === 'interest');
         saveDatabase();
         document.getElementById('savings-edit-dialog').close();
         renderApp();
-        logSuccess(`Updated savings ${newKind}: ${description}.`);
+        logSuccess(`Updated savings ${newEntryType}: ${description}.`);
     });
     document.getElementById('btn-delete-savings-edit').addEventListener('click', () => {
         const id = document.getElementById('savings-edit-id').value;
@@ -5950,6 +6001,12 @@ function setupEventListeners() {
     document.getElementById('btn-cancel-bill').addEventListener('click', () => {
         document.getElementById('joint-bill-dialog').close();
     });
+    document.getElementById('btn-delete-bill').addEventListener('click', () => {
+        if (!_billSplitterEditorContext) return;
+        const { bill, cycleKey } = _billSplitterEditorContext;
+        document.getElementById('joint-bill-dialog').close();
+        deleteBillSplitterItemInteractive(bill, cycleKey);
+    });
     document.getElementById('btn-add-manual-transfer').addEventListener('click', () => {
         document.getElementById('manual-transfer-form').reset();
         const monthNumber = String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0');
@@ -5984,8 +6041,20 @@ function setupEventListeners() {
     document.getElementById('btn-cancel-alloc').addEventListener('click', () => {
         document.getElementById('allocation-dialog').close();
     });
+    document.getElementById('btn-delete-alloc').addEventListener('click', () => {
+        if (!_allocationEditorContext) return;
+        const { allocation } = _allocationEditorContext;
+        document.getElementById('allocation-dialog').close();
+        deleteAllocationInteractive(allocation);
+    });
     document.getElementById('btn-cancel-loan').addEventListener('click', () => {
         document.getElementById('loan-dialog').close();
+    });
+    document.getElementById('btn-delete-loan-account').addEventListener('click', () => {
+        const loanId = document.getElementById('loan-edit-id').value;
+        const account = state.loans.find(l => l.id === loanId);
+        if (!account) return;
+        if (deleteLoanAccount(account)) document.getElementById('loan-dialog').close();
     });
 
     // Bill Splitter item form
@@ -6461,6 +6530,10 @@ function setupEventListeners() {
         document.getElementById('loan-xfer-section').classList.toggle('hidden', !isCredit);
         document.getElementById('loan-statement-day-group').classList.remove('hidden');
         document.getElementById('loan-mortgage-section').classList.toggle('hidden', isCredit);
+        // Debt Consolidation only makes sense when adding a brand-new loan — never while editing an
+        // existing one (see openEditLoanModal(), which always force-hides this section).
+        const isAdding = document.getElementById('loan-action').value !== 'edit';
+        document.getElementById('loan-consolidation-section').classList.toggle('hidden', isCredit || !isAdding);
         updateStoreCardFields();
     });
 
@@ -6483,6 +6556,13 @@ function setupEventListeners() {
     ['loan-mortgage-escrow', 'loan-mortgage-pi', 'loan-mortgage-extra'].forEach(id => {
         document.getElementById(id).addEventListener('input', updateMortgageMinimumPayment);
     });
+
+    document.getElementById('loan-is-consolidation').addEventListener('change', (e) => {
+        document.getElementById('loan-consolidation-fields').classList.toggle('hidden', !e.target.checked);
+        if (e.target.checked) refreshLoanConsolidationTotal();
+    });
+    document.getElementById('loan-consolidation-transfer-date').addEventListener('change', refreshLoanConsolidationTotal);
+    document.getElementById('loan-consolidation-cashout').addEventListener('input', refreshLoanConsolidationTotal);
 
     // Toggle active promo purchase rate inputs
     document.getElementById('loan-purchase-promo-active').addEventListener('change', (e) => {
@@ -6520,6 +6600,9 @@ function setupEventListeners() {
 
     document.getElementById('edit-tx-kind').addEventListener('change', (e) => {
         const isCharge = e.target.value === 'charge';
+        // Keep the Charge/Deposit toggle in sync with this dropdown too — see the toggle's own click
+        // handler for why these two controls need to agree (only one of them drives what saves).
+        setDirectionToggleValue('edit-trans-direction-group', 'edit-trans-direction', isCharge ? 'charge' : 'deposit');
         document.getElementById('edit-recurring-group').classList.toggle('hidden', !isCharge);
         document.getElementById('edit-payment-plan-group').classList.toggle('hidden', !isCharge);
         if (!isCharge) {
@@ -6831,6 +6914,23 @@ function setupEventListeners() {
             if (paymentStrategy === 'custom') materializeCustomScheduleMonths(id, tempEditingCustomSchedule);
             else if (type === 'credit' && (paymentStrategy === 'balance' || paymentStrategy === 'interestSaving' || paymentStrategy === 'minimum')) materializeAutomaticPaymentsForward(id);
             logSystem(`Added payoff target: ${name} (Balance: $${current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
+
+            // Debt Consolidation — only ever reachable when adding a brand-new loan (see
+            // #loan-consolidation-section's visibility rules above), so this only needs handling
+            // here in the 'add' branch, never in 'edit'. start/current already reflect the
+            // consolidation total (see refreshLoanConsolidationTotal(), which drives those same
+            // fields live as accounts/date/cash-out change) — this just posts the actual payoff/
+            // cash-out transactions to match.
+            if (type === 'loan' && document.getElementById('loan-is-consolidation').checked) {
+                const transferDate = document.getElementById('loan-consolidation-transfer-date').value;
+                const accounts = getSelectedLoanConsolidationAccounts();
+                const cashOutAmount = Math.max(0, Number(document.getElementById('loan-consolidation-cashout').value) || 0);
+                const cashOutDest = document.getElementById('loan-consolidation-cashout-dest').value;
+                if (transferDate && (accounts.length || cashOutAmount > 0)) {
+                    applyDebtConsolidation(id, accounts, transferDate, cashOutAmount, cashOutDest);
+                    logSystem(`Debt consolidation: ${accounts.map(a => a.name).join(', ') || 'no accounts'}${cashOutAmount > 0 ? ` + $${cashOutAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} cash out` : ''} → ${name}`);
+                }
+            }
         }
 
         syncMortgageLoansToAllMonths();
@@ -7285,6 +7385,8 @@ function setupEventListeners() {
         document.getElementById('alloc-start-date').value = state.currentYear + '-' + String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0') + '-01';
         document.getElementById('alloc-frequency-preview').textContent = '1 monthly occurrence in ' + MONTH_NAMES[state.currentMonth] + '; entered amounts are applied once.';
         document.getElementById('allocation-modal-title').textContent = "Add Personal Allocation";
+        _allocationEditorContext = null;
+        document.getElementById('btn-delete-alloc').classList.add('hidden');
         document.getElementById('allocation-dialog').showModal();
     });
 
@@ -7377,6 +7479,7 @@ function setupEventListeners() {
         document.getElementById('loan-modal-title').textContent = type === 'credit' ? "Add Credit Card" : "Add Installment Loan";
         document.getElementById('loan-action').value = 'add';
         document.getElementById('loan-edit-id').value = '';
+        document.getElementById('btn-delete-loan-account').classList.add('hidden');
 
         document.getElementById('loan-type-field').value = type;
 
@@ -7428,6 +7531,17 @@ function setupEventListeners() {
         document.getElementById('loan-mortgage-extra').value = 0;
         document.getElementById('loan-mortgage-section').classList.toggle('hidden', isCredit);
         document.getElementById('loan-mortgage-fields').classList.add('hidden');
+
+        // Reset Debt Consolidation fields — only offered for a brand-new loan (isCredit false here
+        // means type === 'loan'), never for a new credit card.
+        document.getElementById('loan-consolidation-section').classList.toggle('hidden', isCredit);
+        document.getElementById('loan-is-consolidation').checked = false;
+        document.getElementById('loan-consolidation-fields').classList.add('hidden');
+        document.getElementById('loan-consolidation-transfer-date').value = formatLocalDate(new Date());
+        document.getElementById('loan-consolidation-cashout').value = '0';
+        document.getElementById('loan-consolidation-cashout-dest').value = 'personal';
+        document.getElementById('loan-consolidation-cashout-dest-group').classList.add('hidden');
+        populateLoanConsolidationAccountList();
 
         applyLoanDialogCollapseDefaults();
         updateLoanDialogIndicators();
@@ -8104,7 +8218,18 @@ function setupEventListeners() {
                 if (tx.linkedBillId) { tx.billOccurrenceDate = tx.billOccurrenceDate || tx.date; tx.billOccurrenceOverridden = true; }
                 // Adjust currentBal for amount delta
                 const oldAmt = tx.amount;
-                const newAmtSigned = isLoanInterest ? -Math.abs(newAmt) : (newKind === 'charge' ? -Math.abs(newAmt) : Math.abs(newAmt));
+                const editDir = document.getElementById('edit-trans-direction')?.value || (newKind === 'charge' ? 'charge' : 'deposit');
+                // isAutomaticCardPayment used to hardcode tx.amount = Math.abs(newAmt) here (always a
+                // positive payment) no matter what the user picked in either direction control —
+                // confirmed real bug, 2026-08-04: flipping the visible Charge/Deposit toggle (which
+                // DOES get initialized correctly from the entry's current sign when this modal opens,
+                // see openEditTransactionModal()) and hitting Save silently left the amount positive
+                // regardless. Respecting editDir here means a corrected/reversed automatic payment can
+                // actually save as a charge, same as any other entry.
+                const newAmtSigned = isLoanInterest
+                    ? -Math.abs(newAmt)
+                    : (tx.isAutomaticCardPayment ? (editDir === 'charge' ? -Math.abs(newAmt) : Math.abs(newAmt))
+                        : (newKind === 'charge' ? -Math.abs(newAmt) : Math.abs(newAmt)));
                 const cardObj = state.loans.find(l => l.id === cardId);
                 if (cardObj) {
                     // Reverse old amount effect, apply new
@@ -8118,14 +8243,12 @@ function setupEventListeners() {
                 tx.date = newDate;
                 tx.description = newDesc;
                 tx.merchant = newMerchant;
-                tx.transactionKind = isLoanInterest ? 'interest' : newKind;
+                tx.transactionKind = isLoanInterest ? 'interest' : (tx.isAutomaticCardPayment ? (editDir === 'charge' ? 'charge' : 'payment') : newKind);
                 tx.owner = newOwner;
                 tx.trip = newTrip;
                 tx.amount = newAmtSigned;
                 if (tx.isAutomaticCardPayment) {
                     tx.automaticPaymentOverridden = true;
-                    tx.transactionKind = 'payment';
-                    tx.amount = Math.abs(newAmt);
                     syncAutomaticCardPaymentOverride(tx, cardId);
                 }
                 // A user-edited estimated interest/plan-fee charge must survive
@@ -8372,6 +8495,17 @@ function setupEventListeners() {
         state.metricsCollapsed = !state.metricsCollapsed;
         saveDatabase();
         renderApp();
+    });
+    // The header row (not just the Hide/Show button itself) should also toggle collapse — confirmed
+    // real bug, both desktop and mobile, 2026-08-04: clicking directly on "Dashboard Metrics" or its
+    // empty header space did nothing, which reads as broken since every other collapsible section in
+    // the app (Bill Splitter, Savings, etc.) already lets you click the header, not just its button.
+    // Excludes clicks on the Starting Balance/Payroll gear buttons (and the Hide/Show button itself,
+    // which has its own listener above) so those keep opening their own dialogs instead of also
+    // toggling collapse.
+    document.querySelector('.dashboard-metrics-section-header').addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        document.getElementById('btn-toggle-metrics').click();
     });
 
     // Master show/hide-all listener — collapses or expands every collapsible section on the
@@ -8705,6 +8839,141 @@ function enforceMobileListView() {
         // not what you opened the app for on a phone; default it collapsed once, then leave the
         // user's own Hide/Show toggle in charge.
         state.platformBreakdownCollapsed = true;
+        // The inline Quick-Add/Add-Charge form (date/type/description/amount fields + button) that
+        // sits directly above every list view's actual table is full desktop-width and easily the
+        // single biggest scroll-past-before-you-see-your-data offender on a phone — confirmed live,
+        // 2026-08-03: on the Dashboard list it pushed the real transaction rows several screens down.
+        // Collapsed by default the first time a mobile render happens (via each view's own existing
+        // "Hide"/collapse-toggle-btn — see list-view-tools-wrapper/cc-list-tools-wrapper in
+        // Index.html), same one-time-then-hands-off pattern as metrics above.
+        if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
+        state.uiCollapsedSections.listViewTools = true;
+        state.uiCollapsedSections.ccListTools = true;
+        // Savings Tracker and Bill Splitter's own collapsible sections — per explicit user request,
+        // 2026-08-04, everything defaults collapsed on mobile across every page, the user opens each
+        // one individually via its own header/toggle from here.
+        state.savingsMetricsCollapsed = true;
+        state.savingsYearSummaryCollapsed = true;
+        state.uiCollapsedSections.metrics = true;
+        state.uiCollapsedSections.transfers = true;
+        state.uiCollapsedSections.jointBills = true;
+        state.uiCollapsedSections.personalAllocations = true;
+    }
+}
+
+// Per explicit user request, 2026-08-04: keep the Dashboard title and date-nav (year/month/day)
+// pinned to the top while scrolling on mobile, but let Personal/Joint, Today/Threshold, Month/Full
+// Year, and the cycle filter scroll away normally instead of staying pinned with them.
+// position:sticky only has "room" to stick for as long as its own DIRECT PARENT box is still
+// scrolling through the viewport — giving #header-period-nav its own independent position:sticky
+// while leaving it nested inside .main-sticky-dashboard didn't work (confirmed live) because that
+// block is only as tall as its own content (~370px): the sticky child ran out of parent to stick
+// within almost immediately, long before the rest of the page had scrolled past.
+// Fixed the same way relocateQuickAddFormIntoModal() (elsewhere in this file) solves an analogous
+// problem — physically move the real DOM nodes rather than duplicate them: #header-period-nav moves
+// next to .header-top-row inside .main-sticky-dashboard (leaving that block containing ONLY
+// title+date-nav, so re-enabling its own already-proven sticky behavior in CSS sticks it for the
+// full height of .app-main, not just its own short box), and the rest of #unified-header-layout
+// (#header-left-actions, #global-toggles-host) moves OUT to a plain sibling section right after it,
+// so it scrolls away like normal page content. Mobile+(Dashboard/Savings/Bill Splitter) only —
+// restores original DOM order the moment none of those conditions hold, so every other tab and
+// desktop are unaffected. Savings and Bill Splitter ("bills") share this exact same
+// .main-sticky-dashboard/#unified-header-layout structure and .unified-header-dashboard grid class
+// as Dashboard (see updateGlobalTogglesPlacement() — only creditcards/loans get the different
+// .unified-header-cc variant), just with different buttons populated into #header-left-actions/
+// #global-toggles-host, so the same relocation mechanics apply unchanged. Per explicit user request,
+// 2026-08-04.
+const MOBILE_STICKY_HEADER_TABS = ['dashboard', 'savings', 'bills', 'creditcards', 'loans'];
+function relocateMobileStickyHeader() {
+    const mainSticky = document.querySelector('.main-sticky-dashboard');
+    const headerTopRow = document.querySelector('.header-top-row');
+    const periodNav = document.getElementById('header-period-nav');
+    const unifiedLayout = document.getElementById('unified-header-layout');
+    // Dashboard's own Today/Threshold live in #header-left-actions (already part of
+    // #unified-header-layout, relocated below) — but Savings and Bill Splitter's single "Today"
+    // button is placed inside #header-right-actions instead (see updateGlobalTogglesPlacement()),
+    // which normally stays inside .header-top-row. Confirmed real bug, 2026-08-04: Savings' Today
+    // button stayed visibly pinned at the top after this shipped for #unified-header-layout alone,
+    // since #header-right-actions was never part of that move. Relocated the same way.
+    const headerRightActions = document.getElementById('header-right-actions');
+    if (!mainSticky || !headerTopRow || !periodNav || !unifiedLayout || !headerRightActions) return;
+
+    // Must match the body[data-active-tab] values used by every mobile rule this relocation
+    // supports — NOT state.activeTab. Confirmed real bug, 2026-08-04: right after a fresh page load,
+    // state.activeTab (a persisted preference, restored before the app has actually switched the
+    // visible tab to match) can briefly disagree with which .tab-view is really on screen.
+    const shouldRelocate = isMobileViewport() && MOBILE_STICKY_HEADER_TABS.includes(document.body.dataset.activeTab);
+
+    // Idempotent and state-free by design — no "already relocated" flag, no captured old-position
+    // references. Confirmed real bug, 2026-08-04: an earlier version tracked original position via
+    // each element's captured parent + next-sibling (often a whitespace TEXT node from the HTML
+    // source, not #header-left-actions itself) and only a one-time boolean guard. Cycling through
+    // several tabs in one render pass — some inside MOBILE_STICKY_HEADER_TABS, some not — left that
+    // captured text-node reference detached in some sequences, so restoring fell through to
+    // appendChild() and silently reordered the header instead of restoring it, corrupting every
+    // relocation after. Recomputing the correct position from these four LIVE, ALWAYS-VALID anchor
+    // elements on every call (not a diff from whatever the previous call happened to leave behind)
+    // means the exact call sequence can never matter — each call just re-asserts the right state.
+    // insertAdjacentElement/prepend are no-ops when the element is already exactly where it belongs.
+    if (shouldRelocate) {
+        headerTopRow.insertAdjacentElement('afterend', periodNav);
+        mainSticky.insertAdjacentElement('afterend', unifiedLayout);
+        unifiedLayout.appendChild(headerRightActions);
+    } else {
+        headerTopRow.appendChild(headerRightActions);
+        headerTopRow.insertAdjacentElement('afterend', unifiedLayout);
+        unifiedLayout.prepend(periodNav);
+    }
+}
+
+// Per explicit user request, 2026-08-04: on the mobile loan/card detail page, pin just the title
+// and date-nav at the top while scrolling, with the account dropdown, Payment/Statement, Month/Year
+// scope toggle, and stat-chip bubbles scrolling away normally below instead of also being pinned.
+// This page's title/date-nav normally get borrowed OUT of .main-sticky-dashboard into #app-header's
+// #cc-toolbar-account-slot while a card is open (see placeCreditCardToolbar()) — that borrow is
+// skipped on mobile specifically so they stay put in .header-top-row, letting
+// relocateMobileStickyHeader() (called just before this, and already extended to cover
+// creditcards/loans — see MOBILE_STICKY_HEADER_TABS) pin them the exact same proven way it does for
+// Dashboard/Savings/Bill Splitter. This function's own job is everything relocateMobileStickyHeader()
+// doesn't already handle for this page: moving #app-header itself (left holding just the account
+// dropdown/bubbles/back-button on mobile, not title/date-nav) out from its nested spot inside
+// .main-sticky-dashboard to be a plain sibling so it scrolls normally instead of getting dragged
+// along as part of the sticky box, and pulling the Payment/Statement jump buttons + Month/Year scope
+// toggle down into that same "below the pinned header" area too — both would otherwise stay stuck in
+// .header-top-row (Payment/Statement) or get placed back there by updateGlobalTogglesPlacement()
+// (Month/Year), each still inside the sticky box. Idempotent/state-free, same reasoning as
+// relocateMobileStickyHeader() itself — always recomputed from live DOM, never a captured reference.
+// Must run AFTER updateGlobalTogglesPlacement()/updateHeaderPeriodNavAndToday() in the same render
+// pass, since both of those unconditionally place Month/Year and Payment/Statement into their
+// desktop-default spots first.
+function relocateMobileCCDetailHeader() {
+    const mainSticky = document.querySelector('.main-sticky-dashboard');
+    const appHeader = document.getElementById('app-header');
+    const headerTopRow = document.querySelector('.header-top-row');
+    const leftJumpHost = document.getElementById('header-left-jump-host');
+    const viewToggleHost = document.getElementById('header-view-toggle-host');
+    const accountSlot = document.getElementById('cc-toolbar-account-slot');
+    const scopeToggle = document.getElementById('cc-scope-toggle');
+    if (!mainSticky || !appHeader || !headerTopRow || !leftJumpHost || !accountSlot) return;
+
+    const shouldRelocate = isMobileViewport() && appHeader.classList.contains('cc-account-header');
+
+    if (shouldRelocate) {
+        mainSticky.insertAdjacentElement('afterend', appHeader);
+        accountSlot.prepend(leftJumpHost);
+        if (scopeToggle) accountSlot.append(scopeToggle);
+    } else {
+        if (viewToggleHost && leftJumpHost.parentElement !== headerTopRow) {
+            headerTopRow.insertBefore(leftJumpHost, viewToggleHost);
+        }
+        const hostRight = document.getElementById('header-right-actions');
+        const maximizeBtn = document.getElementById('btn-toggle-layout-maximize');
+        if (scopeToggle && hostRight && scopeToggle.parentElement !== hostRight) {
+            hostRight.insertBefore(scopeToggle, maximizeBtn);
+        }
+        if (appHeader.parentElement !== mainSticky) {
+            mainSticky.appendChild(appHeader);
+        }
     }
 }
 
@@ -9001,6 +9270,7 @@ function renderAppImmediate() {
     updateTabTitles();
     populateYearSelect();
     enforceMobileListView();
+    relocateMobileStickyHeader();
     populateCheckingAutocomplete();
     populateCCDropdowns();
     renderSummaryCards();
@@ -9010,6 +9280,12 @@ function renderAppImmediate() {
     updateGlobalTogglesPlacement();
 
     const activeTab = state.activeTab || document.querySelector('.nav-btn.active')?.dataset?.tab || 'dashboard';
+    // Personal vs Joint share the exact same #list-view-table-container, but with different column
+    // sets — this lets mobile CSS (@media 900px) target each one's own redundant columns to hide
+    // instead of a single nth-child rule that's only correct for one of the two. Mirrors the
+    // existing document.body.dataset.activeTab pattern (set in switchToTab()).
+    document.body.dataset.dashboardType = state.dashboardType || 'personal';
+    updateMobileFabVisibility(activeTab);
     const appHeader = document.querySelector('.app-header');
     if (appHeader) appHeader.classList.toggle('dashboard-account-header', activeTab === 'dashboard');
     const metricsCollapsed = !!state.metricsCollapsed;
@@ -9064,6 +9340,7 @@ function renderAppImmediate() {
     }
 
     updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans);
+    relocateMobileCCDetailHeader();
 
     // Jump-to-Below-Threshold only makes sense on the Personal/Joint dashboard, where the dynamic
     // 1st/15th joint transfer chips/rows can carry the belowThreshold flag — Calendar and List view
@@ -9187,43 +9464,76 @@ function getSavingsProjectedBalanceAtDate(date, inclusive = true) {
         .reduce((balance, tx) => balance + Number(tx.amount || 0), getSavingsStartingBalance());
 }
 
-function findPersonalSavingsMirror(transferId) {
+// Searches BOTH checking ledgers for a savings transfer's mirror — a savings transfer used to only
+// ever mirror into Personal, but per explicit user request, 2026-08-04, the source can now be either
+// Personal or Joint (tx.transferSource), so finding/syncing it has to check both instead of assuming
+// Personal.
+function findSavingsCheckingMirror(transferId) {
     let match = null;
     Object.entries(state.personalCalendar || {}).some(([key, list]) => {
         const tx = list.find(item => item.transferId === transferId && item.savingsTransfer);
         if (!tx) return false;
-        match = { key, list, tx };
+        match = { source: 'personal', key, list, tx };
         return true;
     });
+    if (match) return match;
+    const jointIndex = state.jointRegister.findIndex(item => item.transferId === transferId && item.savingsTransfer);
+    if (jointIndex > -1) match = { source: 'joint', key: null, list: state.jointRegister, tx: state.jointRegister[jointIndex] };
     return match;
 }
 
-function syncSavingsPersonalMirror(tx, createIfMissing = false) {
+function syncSavingsCheckingMirror(tx, createIfMissing = false) {
     if (!tx?.transferId) return;
-    const existing = findPersonalSavingsMirror(tx.transferId);
+    const existing = findSavingsCheckingMirror(tx.transferId);
     if ((tx.kind || 'transfer') === 'interest') {
         if (existing) existing.list.splice(existing.list.indexOf(existing.tx), 1);
         return;
     }
+    // personalMirrorDetached — kept its original field name for backward compatibility with already-
+    // saved data (predates the Joint option), but now means "mirror detached" generically regardless
+    // of which side it was ever on.
     if (!existing && (tx.personalMirrorDetached || !createIfMissing)) return;
-    const dateObj = new Date(tx.date + 'T00:00:00');
-    const month = MONTH_ORDER[dateObj.getMonth()];
-    const targetKey = `${dateObj.getFullYear()}-${month}`;
-    ensureYearMonthInitialized(dateObj.getFullYear(), month);
-    const mirror = existing?.tx || {
-        id: 'p-' + Math.random().toString(36).substr(2, 9),
-        transferId: tx.transferId,
-        savingsTransfer: true
-    };
-    mirror.date = tx.date;
-    mirror.description = tx.description;
-    mirror.amount = -Number(tx.amount || 0);
-    mirror.savingsTransfer = true;
-    if (existing && existing.key !== targetKey) existing.list.splice(existing.list.indexOf(existing.tx), 1);
-    if (!existing || existing.key !== targetKey) state.personalCalendar[targetKey].push(mirror);
+    const targetSource = tx.transferSource === 'joint' ? 'joint' : 'personal';
+    const mirrorAmount = -Number(tx.amount || 0);
+
+    // The mirror's source was changed via an edit — remove it from the old side, a fresh one gets
+    // created below on the correct side instead of leaving an orphaned entry behind.
+    if (existing && existing.source !== targetSource) existing.list.splice(existing.list.indexOf(existing.tx), 1);
+    const stillExisting = existing && existing.source === targetSource ? existing : null;
+
+    if (targetSource === 'joint') {
+        const mirror = stillExisting?.tx || {
+            id: 'j-' + Math.random().toString(36).substr(2, 9),
+            transferId: tx.transferId,
+            savingsTransfer: true
+        };
+        mirror.date = tx.date;
+        mirror.description = tx.description;
+        mirror.name = tx.description;
+        mirror.amount = mirrorAmount;
+        mirror.type = mirrorAmount < 0 ? 'expense' : 'income';
+        mirror.savingsTransfer = true;
+        if (!stillExisting) state.jointRegister.push(mirror);
+    } else {
+        const dateObj = new Date(tx.date + 'T00:00:00');
+        const month = MONTH_ORDER[dateObj.getMonth()];
+        const targetKey = `${dateObj.getFullYear()}-${month}`;
+        ensureYearMonthInitialized(dateObj.getFullYear(), month);
+        const mirror = stillExisting?.tx || {
+            id: 'p-' + Math.random().toString(36).substr(2, 9),
+            transferId: tx.transferId,
+            savingsTransfer: true
+        };
+        mirror.date = tx.date;
+        mirror.description = tx.description;
+        mirror.amount = mirrorAmount;
+        mirror.savingsTransfer = true;
+        if (stillExisting && stillExisting.key !== targetKey) stillExisting.list.splice(stillExisting.list.indexOf(stillExisting.tx), 1);
+        if (!stillExisting || stillExisting.key !== targetKey) state.personalCalendar[targetKey].push(mirror);
+    }
 }
 
-function addLinkedSavingsTransfer(date, description, savingsAmount) {
+function addLinkedSavingsTransfer(date, description, savingsAmount, source = 'personal') {
     const amount = Number(savingsAmount);
     if (!date || !description || !Number.isFinite(amount) || amount === 0) return false;
     state.savingsTransactions = state.savingsTransactions || [];
@@ -9235,11 +9545,12 @@ function addLinkedSavingsTransfer(date, description, savingsAmount) {
         kind: 'transfer',
         transferId: 'savings-xfer-' + Math.random().toString(36).substr(2, 9),
         savingsTransfer: true,
+        transferSource: source === 'joint' ? 'joint' : 'personal',
         personalMirrorDetached: false,
         createdAt: Date.now()
     };
     state.savingsTransactions.push(tx);
-    syncSavingsPersonalMirror(tx, true);
+    syncSavingsCheckingMirror(tx, true);
     return true;
 }
 
@@ -9383,7 +9694,7 @@ function moveSavingsTransaction(id, targetDate) {
     const tx = (state.savingsTransactions || []).find(item => item.id === id);
     if (!tx || tx.date === targetDate) return;
     tx.date = targetDate;
-    syncSavingsPersonalMirror(tx, false);
+    syncSavingsCheckingMirror(tx, false);
     saveDatabase();
     renderApp();
     logSuccess(`Moved savings entry to ${targetDate}: ${tx.description}`);
@@ -9392,11 +9703,18 @@ function moveSavingsTransaction(id, targetDate) {
 function openSavingsEditDialog(id) {
     const tx = (state.savingsTransactions || []).find(item => item.id === id);
     if (!tx) return;
+    const kind = tx.kind || 'transfer';
+    // Stored kind is only 'transfer'/'interest' — the UI's 3 Entry Type options split 'transfer'
+    // into 'deposit'/'withdrawal' by the transaction's own sign, so switching an existing entry's
+    // direction shows correctly instead of always defaulting to "Deposit".
+    const entryType = kind === 'interest' ? 'interest' : (Number(tx.amount) < 0 ? 'withdrawal' : 'deposit');
     document.getElementById('savings-edit-id').value = tx.id;
-    document.getElementById('savings-edit-type').value = tx.kind || 'transfer';
+    document.getElementById('savings-edit-type').value = entryType;
+    document.getElementById('savings-edit-source').value = tx.transferSource === 'joint' ? 'joint' : 'personal';
+    document.getElementById('savings-edit-source-group').classList.toggle('hidden', entryType === 'interest');
     document.getElementById('savings-edit-date').value = tx.date;
     document.getElementById('savings-edit-description').value = tx.description;
-    document.getElementById('savings-edit-amount').value = Number(tx.amount || 0);
+    document.getElementById('savings-edit-amount').value = Math.abs(Number(tx.amount || 0));
     document.getElementById('savings-edit-dialog').showModal();
 }
 
@@ -9489,7 +9807,7 @@ function renderSavingsList(transactions, periodStart) {
         prevSavingsDate = tx.date;
         const isTodayRow = tx.date === today;
         const todayMarkerId = i === savingsTodayMarkerIdx ? ' id="savings-today-marker"' : '';
-        return `<tr class="savings-editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}" data-id="${tx.id}" style="cursor:pointer;"${todayMarkerId}><td>${formatDateDisplay(tx.date)}</td><td>${escapeHTML(tx.description)}</td><td><span class="day-transaction-item ${kind === 'interest' ? 'income' : 'transfer'}" style="display:inline-block;">${kind.toUpperCase()}${status}</span></td><td>${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${tx.amount >= 0 ? 'positive' : 'negative'}">${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${runningBalance >= 0 ? 'positive' : 'negative'}">${runningBalance < 0 ? '-' : ''}$${Math.abs(runningBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td><button class="action-btn small-btn danger-btn delete-savings-entry" data-id="${tx.id}">Delete</button></td></tr>`;
+        return `<tr class="savings-editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}" data-id="${tx.id}" style="cursor:pointer;"${todayMarkerId}><td>${formatDateDisplay(tx.date)}</td><td>${escapeHTML(tx.description)}</td><td><span class="day-transaction-item ${kind === 'interest' ? 'income' : 'transfer'}" style="display:inline-block;">${kind === 'interest' ? 'INTEREST' : (Number(tx.amount) < 0 ? 'WITHDRAWAL' : 'DEPOSIT')}${status}</span></td><td>${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${tx.amount >= 0 ? 'positive' : 'negative'}">${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${runningBalance >= 0 ? 'positive' : 'negative'}">${runningBalance < 0 ? '-' : ''}$${Math.abs(runningBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td><button class="action-btn small-btn danger-btn delete-savings-entry" data-id="${tx.id}">Delete</button></td></tr>`;
     }).join('');
     body.querySelectorAll('.savings-editable-row').forEach(row => row.addEventListener('dblclick', () => openSavingsEditDialog(row.dataset.id)));
     body.querySelectorAll('.delete-savings-entry').forEach(button => button.addEventListener('click', event => {
@@ -10806,6 +11124,20 @@ function renderSummaryCards() {
                 document.getElementById('remaining-balance-sub').innerHTML = `1st Cycle: $${bal1stCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>2nd Cycle: $${bal2ndCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             }
         }
+
+        // Card 5: Today's Balance — always the real balance as of today (not scoped to whatever
+        // month/cycle the dashboard is currently viewing), per explicit user request, 2026-08-04.
+        const todayBalCard = document.getElementById('today-balance-val');
+        if (todayBalCard) {
+            document.getElementById('today-balance-title').textContent = "Personal Today's Balance";
+            const todayIso = formatLocalDate(new Date());
+            const tomorrowD = new Date(todayIso + 'T00:00:00');
+            tomorrowD.setDate(tomorrowD.getDate() + 1);
+            const todayBal = getPersonalAdjustedRunningBalanceAtDate(formatLocalDate(tomorrowD));
+            todayBalCard.textContent = `$${todayBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            todayBalCard.className = `card-value ${todayBal >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('today-balance-sub').textContent = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+        }
     } else {
         // --- JOINT DASHBOARD SUMMARY ---
         let periodStart = `${state.currentYear}-${String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0')}-01`;
@@ -10992,6 +11324,19 @@ function renderSummaryCards() {
                 valBal.className = `card-value ${bal2ndCycle >= 0 ? 'positive' : 'negative'}`;
                 document.getElementById('remaining-balance-sub').innerHTML = `1st Cycle: $${bal1stCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>2nd Cycle: $${bal2ndCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             }
+        }
+
+        // Card 5: Today's Balance — see the matching Personal branch above for the full comment.
+        const todayBalCardJoint = document.getElementById('today-balance-val');
+        if (todayBalCardJoint) {
+            document.getElementById('today-balance-title').textContent = "Joint Today's Balance";
+            const todayIso = formatLocalDate(new Date());
+            const tomorrowD = new Date(todayIso + 'T00:00:00');
+            tomorrowD.setDate(tomorrowD.getDate() + 1);
+            const todayBal = getJointAdjustedRunningBalanceAtDate(formatLocalDate(tomorrowD));
+            todayBalCardJoint.textContent = `$${todayBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            todayBalCardJoint.className = `card-value ${todayBal >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('today-balance-sub').textContent = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
         }
     }
 }
@@ -12845,7 +13190,7 @@ function renderCardList() {
     }
 
     container.innerHTML = `
-        <table class="data-table">
+        <table class="data-table" id="dashboard-card-list-table">
             <thead>
                 <tr>
                     <th>Date</th>
@@ -12880,9 +13225,11 @@ function renderCardList() {
     });
 
     container.querySelectorAll('.editable-row').forEach(row => {
-        row.addEventListener('dblclick', () => {
-            openEditTransactionModal(row.dataset.id, row.dataset.date);
-        });
+        const openEditor = () => openEditTransactionModal(row.dataset.id, row.dataset.date);
+        row.addEventListener('dblclick', openEditor);
+        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+        // desktop reaches via double-click, and that modal has its own Delete button.
+        if (isMobileViewport()) row.addEventListener('click', openEditor);
     });
 }
 
@@ -13138,6 +13485,21 @@ function renderPersonalList() {
         const startingBalance = getPersonalAdjustedRunningBalanceAtDate(pStartIso);
         const startLabel = new Date(pStartIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         personalStartingBalanceEl.textContent = `Starting Balance (${startLabel}): ${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    // Always today's real balance regardless of which month/year/cycle this list is currently
+    // scoped to — matches what a user checking "where do I stand right now" actually wants,
+    // per explicit user request, 2026-08-04. Same "day after" cutoff convention as Ending Balance
+    // below, so today's own transactions are included.
+    const personalTodayBalanceEl = document.getElementById('list-view-today-balance');
+    if (personalTodayBalanceEl) {
+        const todayIso = formatLocalDate(new Date());
+        const tomorrowD = new Date(todayIso + 'T00:00:00');
+        tomorrowD.setDate(tomorrowD.getDate() + 1);
+        const tomorrowIso = formatLocalDate(tomorrowD);
+        const todayBalance = getPersonalAdjustedRunningBalanceAtDate(tomorrowIso);
+        const todayLabel = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        personalTodayBalanceEl.textContent = `Today's Balance (${todayLabel}): ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
     if (personalEndingBalanceEl) {
@@ -13457,7 +13819,7 @@ function renderPersonalList() {
     });
 
     container.querySelectorAll('.editable-row').forEach(row => {
-        row.addEventListener('dblclick', () => {
+        const openEditor = () => {
             if (row.dataset.isgig === 'true') return;
             if (row.dataset.id && row.dataset.id.startsWith('dynamic-delivery-')) {
                 switchToTab('delivery');
@@ -13468,7 +13830,11 @@ function renderPersonalList() {
                 return;
             }
             openEditTransactionModal(row.dataset.id, row.dataset.date);
-        });
+        };
+        row.addEventListener('dblclick', openEditor);
+        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+        // desktop reaches via double-click, and that modal has its own Delete button.
+        if (isMobileViewport()) row.addEventListener('click', openEditor);
     });
     _updateListViewStickyOffset();
 }
@@ -13487,7 +13853,10 @@ function removeOrphanedManualTransferRecord(tx) {
 function removeCheckingTransferMirror(tx, origin) {
     removeOrphanedManualTransferRecord(tx);
     if (!tx?.transferId) return;
-    if (origin === 'personal' && tx.savingsTransfer) {
+    // Was origin === 'personal' only — a savings transfer's checking-side mirror can now live in
+    // Joint too (see transferSource, per explicit user request, 2026-08-04), so this needs to catch
+    // it regardless of which calendar it's actually being deleted from.
+    if (tx.savingsTransfer) {
         const savingsMirror = (state.savingsTransactions || []).find(item => item.transferId === tx.transferId);
         if (savingsMirror) savingsMirror.personalMirrorDetached = true;
         return;
@@ -13505,7 +13874,8 @@ function removeCheckingTransferMirror(tx, origin) {
 
 function syncCheckingTransferMirror(tx, origin) {
     if (!tx?.transferId) return;
-    if (origin === 'personal' && tx.savingsTransfer) {
+    // Same broadening as removeCheckingTransferMirror() above.
+    if (tx.savingsTransfer) {
         const savingsMirror = (state.savingsTransactions || []).find(item => item.transferId === tx.transferId);
         if (savingsMirror) {
             savingsMirror.date = tx.date;
@@ -13576,6 +13946,18 @@ function renderJointList() {
         const startingBalance = getJointAdjustedRunningBalanceAtDate(jStartIso);
         const startLabel = new Date(jStartIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         startingBalanceEl.textContent = `Starting Balance (${startLabel}): ${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    // Same "always today's real balance" addition as renderPersonalList() — see its own comment.
+    const jointTodayBalanceEl = document.getElementById('list-view-today-balance');
+    if (jointTodayBalanceEl) {
+        const todayIso = formatLocalDate(new Date());
+        const tomorrowD = new Date(todayIso + 'T00:00:00');
+        tomorrowD.setDate(tomorrowD.getDate() + 1);
+        const tomorrowIso = formatLocalDate(tomorrowD);
+        const todayBalance = getJointAdjustedRunningBalanceAtDate(tomorrowIso);
+        const todayLabel = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        jointTodayBalanceEl.textContent = `Today's Balance (${todayLabel}): ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
     if (endingBalanceEl) {
@@ -13920,13 +14302,19 @@ function renderJointList() {
         logSystem(`Hidden dynamic joint contribution ${id} on ${formatDateDisplay(date)}`);
     }));
 
-    container.querySelectorAll('.editable-row').forEach(row => row.addEventListener('dblclick', () => {
-        if (row.dataset.dynamic === 'true') {
-            openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0);
-            return;
-        }
-        openEditTransactionModal(row.dataset.id, row.dataset.date);
-    }));
+    container.querySelectorAll('.editable-row').forEach(row => {
+        const openEditor = () => {
+            if (row.dataset.dynamic === 'true') {
+                openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0);
+                return;
+            }
+            openEditTransactionModal(row.dataset.id, row.dataset.date);
+        };
+        row.addEventListener('dblclick', openEditor);
+        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+        // desktop reaches via double-click, and that modal has its own Delete button.
+        if (isMobileViewport()) row.addEventListener('click', openEditor);
+    });
 }
 function showDayHighlightsDialog(sourceId) {
     const source = document.getElementById(sourceId);
@@ -13951,11 +14339,20 @@ function showDayHighlightsDialog(sourceId) {
 function relocateQuickAddFormIntoModal(kind, dateStr) {
     const host = document.getElementById('modal-quick-add-host');
     if (!host) return;
-    const formId = kind === 'cc' ? 'cc-quick-add-form' : 'quick-add-form';
+    const formId = kind === 'cc' ? 'cc-quick-add-form' : (kind === 'savings' ? 'savings-transfer-form' : 'quick-add-form');
     const form = document.getElementById(formId);
     if (!form) return;
 
-    document.getElementById('modal-quick-add-title').textContent = kind === 'cc' ? 'Add Charge for this Day' : 'Add Transaction for this Day';
+    // The form can arrive here still carrying quick-add-list-row (left over from being relocated
+    // above a List view — see relocateQuickAddFormIntoListView()). That class's per-field width
+    // flex-basis rules (140px/145px/280px) were written for a row-direction layout; inside this
+    // modal, .glass-modal form forces column direction, so those same flex-basis values get applied
+    // to HEIGHT instead of width — producing huge dead space under every field. Confirmed real bug,
+    // 2026-08-04. restoreQuickAddFormFromModal() already strips this class on the way out; strip it
+    // on the way in too so the modal never inherits list-row sizing regardless of prior state.
+    form.classList.remove('quick-add-list-row');
+
+    document.getElementById('modal-quick-add-title').textContent = kind === 'cc' ? 'Add Charge for this Day' : (kind === 'savings' ? 'Add Savings Entry' : 'Add Transaction for this Day');
 
     if (!form._modalHomeParent) {
         form._modalHomeParent = form.parentElement;
@@ -13965,6 +14362,10 @@ function relocateQuickAddFormIntoModal(kind, dateStr) {
 
     if (kind === 'cc') {
         document.getElementById('cc-trans-date').value = dateStr || '';
+    } else if (kind === 'savings') {
+        // No specific day context the way the Calendar day-click flow has one (this only ever opens
+        // via the mobile FAB here) — default to today, same as the form's own untouched default.
+        document.getElementById('savings-transfer-date').value = dateStr || formatLocalDate(new Date());
     } else {
         let d = dateStr || '';
         if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
@@ -13975,7 +14376,7 @@ function relocateQuickAddFormIntoModal(kind, dateStr) {
 }
 
 function restoreQuickAddFormFromModal() {
-    ['quick-add-form', 'cc-quick-add-form'].forEach(formId => {
+    ['quick-add-form', 'cc-quick-add-form', 'savings-transfer-form'].forEach(formId => {
         const form = document.getElementById(formId);
         if (form && form._modalHomeParent) {
             form.classList.remove('quick-add-list-row');
@@ -13986,6 +14387,47 @@ function restoreQuickAddFormFromModal() {
             }
         }
     });
+}
+
+// Mobile-only floating "+" button (see .mobile-fab-add-transaction in index.css and
+// #btn-mobile-fab-add-transaction in Index.html), per explicit user request 2026-08-03: the inline
+// quick-add form was taking up the whole first screen of the Dashboard/CC list views on a phone,
+// pushing the actual transaction table below the fold. Reuses the existing day-highlights-dialog +
+// relocateQuickAddFormIntoModal() plumbing (already proven for the Calendar view's day-click "Add
+// Transaction for this Day" flow) instead of building a second, parallel add-transaction UI — see
+// relocateQuickAddFormIntoModal()'s own comment for why moving the real form beats duplicating it.
+// Only shown when there's an actual ledger on screen to add to: the Dashboard's Personal/Joint list,
+// a specific card's ledger within Credit Cards/Loans (not their account-overview grids, where
+// there's no single ledger for "Add Transaction" to mean anything), or the Savings tab — the latter's
+// own "Add Savings Entry" form only ever lived inside its Calendar sub-view (#savings-calendar-layout,
+// hidden whenever state.savingsViewMode isn't 'calendar'), which mobile forces to 'list' with no way
+// back to Calendar (see enforceMobileListView()/#savings-header-view-toggle's mobile hide rule) —
+// confirmed real bug, 2026-08-04: there was no way at all to add a savings transaction on a phone.
+function updateMobileFabVisibility(activeTab) {
+    const fab = document.getElementById('btn-mobile-fab-add-transaction');
+    if (!fab) return;
+    const tab = activeTab || state.activeTab || 'dashboard';
+    const onDashboardList = tab === 'dashboard' && (state.dashboardType === 'personal' || state.dashboardType === 'joint');
+    const onCardLedger = (tab === 'creditcards' || tab === 'loans') && !!state.ccSelectedCardId;
+    const onSavings = tab === 'savings';
+    fab.classList.toggle('hidden', !isMobileViewport() || !(onDashboardList || onCardLedger || onSavings));
+}
+
+function openMobileQuickAddModal() {
+    const tab = state.activeTab || 'dashboard';
+    const isCC = (tab === 'creditcards' || tab === 'loans') && !!state.ccSelectedCardId;
+    const isSavings = tab === 'savings';
+    const kind = isCC ? 'cc' : (isSavings ? 'savings' : 'personal-joint');
+    relocateQuickAddFormIntoModal(kind, '');
+    document.getElementById('day-highlights-modal-title').textContent = isCC ? 'Add Charge' : (isSavings ? 'Add Savings Entry' : 'Add Transaction');
+    // relocateQuickAddFormIntoModal() already sets #modal-quick-add-title to "Add Charge/Transaction
+    // for this Day" — redundant with the outer dialog title above when there's no specific day
+    // involved (unlike the Calendar day-click flow this dialog was built for), so hide it here.
+    document.getElementById('modal-quick-add-title').classList.add('hidden');
+    // Likewise no specific day's highlights to show — hide the empty section rather than leave a
+    // blank gap above the form.
+    document.getElementById('day-highlights-dialog-content').classList.add('hidden');
+    document.getElementById('day-highlights-dialog').showModal();
 }
 
 // Same DOM-relocation technique as relocateQuickAddFormIntoModal() — moves the real #quick-add-form
@@ -13999,6 +14441,11 @@ function relocateQuickAddFormIntoListView() {
     const host = document.getElementById('list-view-quick-add-host');
     const form = document.getElementById('quick-add-form');
     if (!host || !form) return;
+    // Don't yank the form out of an open day-highlights-dialog (Calendar day-click, or the mobile
+    // FAB's openMobileQuickAddModal()) — this function runs on every Dashboard List render, including
+    // the renderApp() the form's own submit handler triggers, which would otherwise rip the form out
+    // from under the dialog immediately after adding a transaction from within it.
+    if (document.getElementById('day-highlights-dialog')?.open) return;
     if (!form._modalHomeParent) {
         form._modalHomeParent = form.parentElement;
         form._modalHomeNextSibling = form.nextSibling;
@@ -14199,11 +14646,18 @@ function renderDayHighlights(day) {
 }
 
 // 3. RENDER BILLS SPLITTER TAB (1st & 15th split calculator)
+// Set by openBillSplitterEditor() so #btn-delete-bill (mobile's tap-to-edit modal Delete action —
+// see relocateMobileStickyHeader-style reasoning: reuse the real edit modal instead of duplicating
+// the row's own delete logic a second time) knows which bill/cycle to act on without needing an
+// ID-based re-lookup. Cleared whenever the modal resets back to "Add" mode.
+let _billSplitterEditorContext = null;
 function resetBillSplitterForm() {
     document.getElementById('joint-bill-form').reset();
     document.getElementById('bill-edit-id').value = '';
     document.getElementById('bill-edit-cycle').value = '';
     document.getElementById('bill-modal-title').textContent = 'Add Bill Splitter Item';
+    _billSplitterEditorContext = null;
+    document.getElementById('btn-delete-bill').classList.add('hidden');
     document.getElementById('btn-save-bill').textContent = 'Save Item';
     document.getElementById('bill-same-payment').checked = true;
     document.getElementById('bill-entry-type').value = 'actual';
@@ -14233,12 +14687,63 @@ function resetBillSplitterForm() {
     }
 }
 
+// Extracted from the row Delete button's own handler so both that button (desktop) and
+// #btn-delete-bill (the edit modal's own Delete — mobile's tap-to-edit flow reaches it since rows
+// have no Actions column there, see the .editable-row-style click listener above) share one
+// implementation instead of two copies drifting apart.
+function deleteBillSplitterItemInteractive(bill, cycleKey) {
+    if (bill.linkedCardPaymentId) {
+        const linkedAccount = bill.payoffTargetId ? state.loans.find(l => l.id === bill.payoffTargetId) : null;
+        const isLoanLinked = linkedAccount && linkedAccount.type === 'loan';
+        const accountLabel = isLoanLinked ? 'loan' : 'credit card';
+        const sectionLabel = isLoanLinked ? 'Installment Loans' : 'Credit Cards';
+        if (confirm(`This entry is synchronized from a ${accountLabel} payment and cannot be deleted here. Manage the payment under ${sectionLabel} instead.\n\nGo there now?`)) {
+            goToCardPaymentInCreditCards(bill.payoffTargetId, bill.linkedPaymentDate);
+        }
+        return;
+    }
+    if (bill.billTrackerSettingId) {
+        const dialog = document.getElementById('delete-billtracker-warning-dialog');
+        if (dialog) {
+            const goBtn = document.getElementById('link-to-delete-master-setting');
+            if (goBtn) {
+                goBtn.onclick = () => {
+                    dialog.close();
+                    switchToTab('billtracker');
+                    renderBillTrackerTab();
+                    openEditBillSettingModal(bill.billTrackerSettingId);
+                };
+            }
+            dialog.showModal();
+        }
+        return;
+    }
+    if (!confirm(`Delete ${bill.account} from ${MONTH_NAMES[state.currentMonth]} ${state.currentYear}?`)) return;
+
+    let deleteFutureText = `Also delete ${bill.account} from every future month?\n\nOK = this month and all future months\nCancel = this month only`;
+    const targetId = bill.recurringSeriesId || bill.id;
+    const count = countFutureTransactionsTiedToSetting(targetId, 'splitterTemplate');
+    if (count > 0) {
+        deleteFutureText = `Also delete ${bill.account} from every future month?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nOK = this month and all future months\nCancel = this month only`;
+    }
+
+    const deleteFuture = confirm(deleteFutureText);
+    const removedCount = deleteBillSplitterItem(bill, state.currentYear, state.currentMonth, deleteFuture);
+    if (deleteFuture) deleteAllFutureTransactionsForSetting(targetId, 'splitterTemplate');
+
+    saveDatabase();
+    renderApp();
+    logSystem(`Deleted Bill Splitter item: ${bill.account}${deleteFuture ? ` (${removedCount} current/future entries)` : ' (this month only)'}`);
+}
+
 function openBillSplitterEditor(bill, cycleKey) {
     populateCCDropdowns();
     document.getElementById('bill-edit-id').value = bill.id;
     document.getElementById('bill-edit-cycle').value = cycleKey;
     document.getElementById('bill-modal-title').textContent = 'Edit Bill Splitter Item';
     document.getElementById('btn-save-bill').textContent = 'Update Item';
+    _billSplitterEditorContext = { bill, cycleKey };
+    document.getElementById('btn-delete-bill').classList.remove('hidden');
     document.getElementById('bill-name').value = bill.account;
     document.getElementById('bill-entry-type').value = bill.entryType;
     document.getElementById('bill-category').value = bill.category || 'bill';
@@ -14426,7 +14931,20 @@ function getAllocationOccurrenceCount(frequency, startDate, year, month, endDate
         applyAllocationTemplatesForMonth(Number(keyYear), keyMonth);
         recalculateBillCycleTotals(monthData);
     });
-}function deleteAllocationOccurrence(allocation, year, month, deleteFuture) {
+}
+// Extracted from the row Delete button's own handler so both that button (desktop) and
+// #btn-delete-alloc (the edit modal's own Delete — mobile's tap-to-edit flow) share one
+// implementation instead of two copies drifting apart.
+function deleteAllocationInteractive(alloc) {
+    if (!confirm(`Delete ${alloc.name} from ${state.currentMonth} ${state.currentYear}?`)) return;
+    const deleteFuture = confirm(`Also delete this allocation from all future months?\n\nOK = current and future\nCancel = current month only`);
+    deleteAllocationOccurrence(alloc, state.currentYear, state.currentMonth, deleteFuture);
+    _selectedAllocationIds.delete(alloc.id);
+    saveDatabase();
+    renderApp();
+    logSystem(`Deleted personal allocation: ${alloc.name}${deleteFuture ? ' (current and future)' : ' (current month only)'}`);
+}
+function deleteAllocationOccurrence(allocation, year, month, deleteFuture) {
     const seriesId = allocation.seriesId || '';
     const role = allocation.role || 'base';
     const currentIndex = year * 12 + MONTH_ORDER.indexOf(month);
@@ -14480,11 +14998,16 @@ function applyAllocationTemplatesForMonth(year, month) {
         if (occurrenceCount > 0 && template.offsetEnabled && !hasRole('offset') && canGenerate('offset')) mBills[offsetCycleKey].contributions.push({ id: `alloc-${template.seriesId}-${year}-${month}-offset`, seriesId: template.seriesId, role: 'offset', name: template.name, jason: templateAmount(template.offsetJason), asia: templateAmount(template.offsetAsia), sourceJason: template.offsetJason, sourceAsia: template.offsetAsia, cycle: template.cycle === '15th' ? '1st' : '15th', frequency: template.frequency || 'monthly', startDate: template.startDate || '', occurrenceCount });
     });
 }
+// Set by openAllocationEditor() so #btn-delete-alloc (mobile's tap-to-edit modal Delete action)
+// knows which allocation/cycle to act on — mirrors _billSplitterEditorContext above.
+let _allocationEditorContext = null;
 function openAllocationEditor(allocation, cycleKey) {
     document.getElementById('allocation-form').reset();
     document.getElementById('allocation-modal-title').textContent = 'Edit Personal Allocation';
     document.getElementById('alloc-edit-id').value = allocation.id;
     document.getElementById('alloc-edit-cycle').value = cycleKey;
+    _allocationEditorContext = { allocation, cycleKey };
+    document.getElementById('btn-delete-alloc').classList.remove('hidden');
     document.getElementById('alloc-name').value = allocation.name;
     document.getElementById('alloc-cycle').value = allocation.cycle === 'both' ? 'both' : (cycleKey === 'cycle15th' ? '15th' : '1st');
     const jasonAmount = allocation.sourceJason ?? allocation.jason;
@@ -15558,50 +16081,10 @@ function renderBillsTab() {
             <td>${recurringRange}</td>
             <td class="table-actions-cell"><button class="action-btn small-btn edit-bill-btn"${isSplit ? ' title="Editing here updates both the 1st and 15th amounts together"' : ''}>Edit</button><button class="action-btn small-btn danger-btn delete-bill-btn"${isSplit ? ' title="Deleting here removes both the 1st and 15th rows together"' : ''}>Delete</button></td>`;
         row.querySelector('.edit-bill-btn').addEventListener('click', () => openBillSplitterEditor(bill, cycleKey));
-        row.querySelector('.delete-bill-btn').addEventListener('click', () => {
-            if (bill.linkedCardPaymentId) {
-                const linkedAccount = bill.payoffTargetId ? state.loans.find(l => l.id === bill.payoffTargetId) : null;
-                const isLoanLinked = linkedAccount && linkedAccount.type === 'loan';
-                const accountLabel = isLoanLinked ? 'loan' : 'credit card';
-                const sectionLabel = isLoanLinked ? 'Installment Loans' : 'Credit Cards';
-                if (confirm(`This entry is synchronized from a ${accountLabel} payment and cannot be deleted here. Manage the payment under ${sectionLabel} instead.\n\nGo there now?`)) {
-                    goToCardPaymentInCreditCards(bill.payoffTargetId, bill.linkedPaymentDate);
-                }
-                return;
-            }
-            if (bill.billTrackerSettingId) {
-                const dialog = document.getElementById('delete-billtracker-warning-dialog');
-                if (dialog) {
-                    const goBtn = document.getElementById('link-to-delete-master-setting');
-                    if (goBtn) {
-                        goBtn.onclick = () => {
-                            dialog.close();
-                            switchToTab('billtracker');
-                            renderBillTrackerTab();
-                            openEditBillSettingModal(bill.billTrackerSettingId);
-                        };
-                    }
-                    dialog.showModal();
-                }
-                return;
-            }
-            if (!confirm(`Delete ${bill.account} from ${MONTH_NAMES[state.currentMonth]} ${state.currentYear}?`)) return;
-            
-            let deleteFutureText = `Also delete ${bill.account} from every future month?\n\nOK = this month and all future months\nCancel = this month only`;
-            const targetId = bill.recurringSeriesId || bill.id;
-            const count = countFutureTransactionsTiedToSetting(targetId, 'splitterTemplate');
-            if (count > 0) {
-                deleteFutureText = `Also delete ${bill.account} from every future month?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nOK = this month and all future months\nCancel = this month only`;
-            }
-            
-            const deleteFuture = confirm(deleteFutureText);
-            const removedCount = deleteBillSplitterItem(bill, state.currentYear, state.currentMonth, deleteFuture);
-            if (deleteFuture) deleteAllFutureTransactionsForSetting(targetId, 'splitterTemplate');
-            
-            saveDatabase();
-            renderApp();
-            logSystem(`Deleted Bill Splitter item: ${bill.account}${deleteFuture ? ` (${removedCount} current/future entries)` : ' (this month only)'}`);
-        });
+        row.querySelector('.delete-bill-btn').addEventListener('click', () => deleteBillSplitterItemInteractive(bill, cycleKey));
+        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+        // desktop reaches via its own Edit button, and that modal has its own Delete button.
+        if (isMobileViewport()) row.addEventListener('click', () => openBillSplitterEditor(bill, cycleKey));
         jointBody.appendChild(row);
     });
     if (!displayBills.length) jointBody.innerHTML = `<tr><td colspan="12" class="muted-text" style="text-align:center;">${categoryFilter === 'all' ? 'No Bill Splitter items logged for this period.' : 'No items match this category filter.'}</td></tr>`;
@@ -15744,15 +16227,17 @@ function renderBillsTab() {
                     });
                 });
             });
-            row.querySelector('.delete-alloc-btn').addEventListener('click', () => {
-                if (!confirm(`Delete ${alloc.name} from ${state.currentMonth} ${state.currentYear}?`)) return;
-                const deleteFuture = confirm(`Also delete this allocation from all future months?\n\nOK = current and future\nCancel = current month only`);
-                deleteAllocationOccurrence(alloc, state.currentYear, state.currentMonth, deleteFuture);
-                _selectedAllocationIds.delete(alloc.id);
-                saveDatabase();
-                renderApp();
-                logSystem(`Deleted personal allocation: ${alloc.name}${deleteFuture ? ' (current and future)' : ' (current month only)'}`);
-            });
+            row.querySelector('.delete-alloc-btn').addEventListener('click', () => deleteAllocationInteractive(alloc));
+            // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+            // desktop reaches via its own Edit button, and that modal has its own Delete button.
+            // Excludes the checkbox (still needed for multi-select) and the Jason/Asia cells (which
+            // keep their own existing double-click-to-inline-edit behavior).
+            if (isMobileViewport()) {
+                row.addEventListener('click', (e) => {
+                    if (e.target.closest('input, .alloc-amt-cell')) return;
+                    openAllocationEditor(alloc, cycleKey);
+                });
+            }
             personalBody.appendChild(row);
     });
     if (!displayAllocations.length) personalBody.innerHTML = '<tr><td colspan="7" class="muted-text" style="text-align:center;">No personal allocations logged for this period.</td></tr>';
@@ -16920,22 +17405,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
         });
         row.querySelector('.delete-loan-btn').addEventListener('click', event => {
             event.stopPropagation();
-            const index = state.loans.findIndex(item => item.id === account.id);
-            if (index < 0) return;
-            const accountToDel = state.loans[index];
-            
-            const count = countFutureTransactionsTiedToSetting(accountToDel.id, 'card');
-            if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${accountToDel.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.`)) {
-                return;
-            }
-
-            const removed = state.loans.splice(index, 1)[0];
-            deleteAllFutureTransactionsForSetting(removed.id, 'card');
-            
-            if (isLoanType) syncMortgageLoansToAllMonths();
-            saveDatabase();
-            renderApp();
-            logSystem(`Deleted ${isLoanType ? 'installment loan' : 'credit card'}: ${removed.name}`);
+            deleteLoanAccount(account);
         });
         tableBody.appendChild(row);
     });
@@ -17180,6 +17650,18 @@ document.addEventListener('click', (e) => {
         const dir = btn.getAttribute('data-direction');
         const hiddenId = container.id === 'trans-direction-group' ? 'trans-direction' : 'edit-trans-direction';
         setDirectionToggleValue(container.id, hiddenId, dir);
+        // The Credit Card/Loan edit form ALSO shows a separate "Transaction Type" dropdown
+        // (#edit-tx-kind: Charge/Credit-Reversal/Payment) alongside this toggle — the save handler
+        // reads #edit-tx-kind for regular (non-automatic-payment) card transactions, not this toggle,
+        // so without this sync clicking Charge/Deposit here visibly changes the toggle but silently
+        // has no effect on what actually saves. Confirmed real bug, 2026-08-04 (found investigating a
+        // related report that editing a card transaction's direction "doesn't update"). Only touches
+        // #edit-tx-kind, not #trans-direction-group's quick-add counterpart (which has no such
+        // dropdown alongside it).
+        const kindSelect = container.id === 'edit-trans-direction-group' ? document.getElementById('edit-tx-kind') : null;
+        if (kindSelect && !kindSelect.closest('.hidden')) {
+            kindSelect.value = dir === 'charge' ? 'charge' : 'payment';
+        }
     }
 });
 
@@ -20858,8 +21340,14 @@ function placeCreditCardToolbar(inHeader) {
         }
         if (accountSlot && title && subtitle) {
             accountSlot.classList.remove('hidden');
-            accountSlot.append(title);
-            if (periodNav) accountSlot.append(periodNav);
+            // On mobile, title/date-nav are pinned instead (see relocateMobileCCDetailHeader()) —
+            // that reuses relocateMobileStickyHeader()'s proven sticky mechanism, which requires
+            // them to stay in their normal .header-top-row/.main-sticky-dashboard home rather than
+            // being borrowed into this toolbar. Desktop is unchanged.
+            if (!isMobileViewport()) {
+                accountSlot.append(title);
+                if (periodNav) accountSlot.append(periodNav);
+            }
             if (accountNav) accountSlot.append(accountNav);
             accountSlot.append(subtitle);
         }
@@ -20977,8 +21465,6 @@ function setupCCDashboardListeners() {
 
     setupInlineAutocomplete('cc-trans-merchant', 'cc-merchant-suggestions');
     setupInlineAutocomplete('cc-trans-desc', 'cc-description-suggestions');
-    setupInlineAutocomplete('cc-list-add-merchant', 'cc-merchant-suggestions');
-    setupInlineAutocomplete('cc-list-add-desc', 'cc-description-suggestions');
 
     const sectionKeys = () => {
         const isLoan = state.loans.find(item => item.id === state.ccSelectedCardId)?.type === 'loan';
@@ -21193,157 +21679,17 @@ function setupCCDashboardListeners() {
         document.getElementById('cc-trans-recurring-day').value = '';
     });
 
-    // Add charges directly from the card list view.
-    document.getElementById('cc-list-add-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const cardId = state.ccSelectedCardId;
-        let date = document.getElementById('cc-list-add-date').value;
-        if (date && date.includes('/')) {
-            const p = date.split('/');
-            if (p.length === 3) date = `${p[2]}-${p[1]}-${p[0]}`;
-        }
-        const merchant = document.getElementById('cc-list-add-merchant').value.trim();
-        const description = document.getElementById('cc-list-add-desc').value.trim();
-        const amount = parseFloat(document.getElementById('cc-list-add-amount').value);
-        const kind = document.getElementById('cc-list-add-kind').value;
-        const owner = document.getElementById('cc-list-add-owner').value;
-        const trip = document.getElementById('cc-list-add-trip').value.trim();
-        
-        if (!cardId) {
-            alert('No card selected. Please select a credit card or loan first.');
-            return;
-        }
-        if (!date || !description || !Number.isFinite(amount) || amount <= 0) {
-            alert('Please enter a valid date, description, and an amount greater than $0.');
-            return;
-        }
-
-        const dateObj = new Date(date + 'T00:00:00');
-        const y = dateObj.getFullYear();
-        const mShort = MONTH_ORDER[dateObj.getMonth()];
-        const key = `${y}-${mShort}`;
-        if (!state.cardCalendars) state.cardCalendars = {};
-        if (!state.cardCalendars[cardId]) state.cardCalendars[cardId] = {};
-        if (!state.cardCalendars[cardId][key]) state.cardCalendars[cardId][key] = [];
-
-        const prevCcYear = state.ccYear;
-        const prevCcMonth = state.ccMonth;
-        const scopeChanged = (prevCcYear !== y || prevCcMonth !== mShort);
-
-        // Auto-sync viewed year/month so the newly added transaction is guaranteed to be in view
-        state.ccYear = y;
-        state.ccMonth = mShort;
-        state.currentYear = y;
-        state.currentMonth = mShort;
-
-        // Clear active list filters so they don't hide the newly added item
-        const filterText = document.getElementById('cc-list-filter-text');
-        if (filterText) filterText.value = '';
-        const filterOwner = document.getElementById('cc-list-filter-owner');
-        if (filterOwner) filterOwner.value = 'all';
-
-        const activeCard = state.loans.find(l => l.id === cardId);
-        const effectiveMerchant = kind === 'charge' && activeCard?.isStoreCard && String(activeCard.storeName || '').trim()
-            ? String(activeCard.storeName).trim()
-            : merchant;
-
-        let newTxId = '';
-
-        if (kind === 'payment') {
-            const source = owner;
-            const linkId = 'manual-pmt-' + Math.random().toString(36).substr(2, 9);
-            ensureYearMonthInitialized(y, mShort);
-            const checkingTxId = (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9);
-            const pmtDesc = `Pmt: ${activeCard ? activeCard.name : 'Card'}`;
-            const nowStamp = Date.now();
-            newTxId = 'c-' + Math.random().toString(36).substr(2, 9);
-
-            if (source === 'personal') {
-                state.personalCalendar[key].push({
-                    id: checkingTxId, date, description: pmtDesc,
-                    amount: -Math.abs(amount), linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
-                });
-            } else {
-                state.jointRegister.push({
-                    id: checkingTxId, date, name: pmtDesc, description: pmtDesc,
-                    amount: -Math.abs(amount), linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
-                });
-            }
-            state.cardCalendars[cardId][key].push({
-                id: newTxId, date,
-                description: `Payment from ${source === 'joint' ? 'Joint' : 'Personal'} Checking`,
-                amount: Math.abs(amount), transactionKind: 'payment', owner: source,
-                linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
-            });
-            if (activeCard) activeCard.currentBal = Math.max(0, activeCard.currentBal - amount);
-            refreshMaterializedCardStatementCharges(cardId);
-            saveDatabase();
-            e.target.reset();
-            let d = date;
-            if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
-            document.getElementById('cc-list-add-date').value = d;
-            document.getElementById('cc-list-add-date').dataset.isoDate = date;
-            const scrollPos = window.scrollY;
-            renderCardDashboard(cardId);
-            if (!scopeChanged) {
-                void document.body.offsetHeight;
-                window.scrollTo(0, scrollPos);
-            }
-            logSuccess(`Payment of $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} to ${activeCard ? activeCard.name : 'Card'} recorded from ${source === 'joint' ? 'Joint' : 'Personal'} Checking.`);
-        } else {
-            const signedAmount = kind === 'credit' ? Math.abs(amount) : -Math.abs(amount);
-            newTxId = 'c-' + Math.random().toString(36).substr(2, 9);
-
-            state.cardCalendars[cardId][key].push({
-                id: newTxId,
-                date, merchant: effectiveMerchant, description, amount: signedAmount,
-                transactionKind: kind, owner, trip,
-                isRecurring: false, recurringDay: 0, recurringSeriesId: '',
-                createdAt: Date.now()
-            });
-            adjustCardCurrentBalance(cardId, signedAmount);
-            refreshMaterializedCardStatementCharges(cardId);
-            saveDatabase();
-            e.target.reset();
-            let d = date;
-            if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
-            document.getElementById('cc-list-add-date').value = d;
-            document.getElementById('cc-list-add-date').dataset.isoDate = date;
-            const scrollPos = window.scrollY;
-            renderCardDashboard(cardId);
-            if (!scopeChanged) {
-                void document.body.offsetHeight;
-                window.scrollTo(0, scrollPos);
-            }
-            logSuccess(`Added ${owner} card ${kind}: ${description} ($${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})${trip ? ` for ${trip}` : ''}.`);
-        }
-
-        // Smoothly scroll to and highlight the newly added transaction row
-        if (newTxId) {
-            setTimeout(() => {
-                if (!scopeChanged) window.scrollTo(0, scrollPos);
-
-                const newRow = document.querySelector(`[data-id="${newTxId}"]`);
-                if (newRow) {
-                    if (scopeChanged) {
-                        newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    } else {
-                        newRow.scrollIntoView({ behavior: 'auto', block: 'nearest' });
-                    }
-                    newRow.classList.remove('just-added-highlight');
-                    void newRow.offsetWidth; // Force CSS reflow to restart animation
-                    newRow.classList.add('just-added-highlight');
-                }
-            }, 100);
-        }
-    });
 
     ['cc-list-filter-text', 'cc-list-filter-merchant', 'cc-list-filter-owner', 'cc-list-filter-trip'].forEach(id => {
         document.getElementById(id).addEventListener('input', () => {
             if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
         });
     });
-    document.getElementById('btn-clear-cc-filters').addEventListener('click', () => {
+    // Shared by both "Clear Filters" (row 3, the merchant/ownership/trip dropdowns) and "Reset
+    // Filters/Sort" (row 1, matching the Dashboard list view's own button of the same name) — the
+    // two ended up meaning the same full reset once "Reset Filters/Sort" was added here, so both
+    // just call this instead of keeping two near-identical handlers in sync by hand.
+    const resetCCListFiltersAndSort = () => {
         document.getElementById('cc-list-filter-text').value = '';
         document.getElementById('cc-list-filter-merchant').value = 'all';
         document.getElementById('cc-list-filter-owner').value = 'all';
@@ -21351,6 +21697,12 @@ function setupCCDashboardListeners() {
         state.ccListSort = { key: 'date', direction: 'asc' };
         Object.keys(columnFilterState).forEach(k => { if (k.startsWith('ccList:')) delete columnFilterState[k]; });
         if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
+    };
+    document.getElementById('btn-clear-cc-filters').addEventListener('click', resetCCListFiltersAndSort);
+    document.getElementById('btn-reset-cclist-filters').addEventListener('click', resetCCListFiltersAndSort);
+    // Opens the real #cc-quick-add-form in a popup — see the button's own comment in Index.html.
+    document.getElementById('btn-open-cclist-add-modal').addEventListener('click', () => {
+        openMobileQuickAddModal();
     });
     document.getElementById('btn-export-cc-list-csv')?.addEventListener('click', exportCCListToCSV);
 
@@ -21592,7 +21944,13 @@ function syncAutomaticCardPaymentOverride(cardTx, cardId) {
         name: `Pmt: ${card?.name || 'Credit Card'}`,
         description: `Pmt: ${card?.name || 'Credit Card'}`,
         date: cardTx.date,
-        amount: -Math.abs(cardTx.amount),
+        // Was hardcoded -Math.abs(...) (always an outflow from checking) — now mirrors the card
+        // side's own sign instead: a normal payment (positive on the card, balance decreasing)
+        // still debits checking as before, but a reversed/corrected automatic payment (now saved as
+        // a charge, i.e. negative, via the direction-toggle fix in the edit-tx-form submit handler
+        // above) credits checking back instead of incorrectly debiting it a second time. Confirmed
+        // related bug, 2026-08-04.
+        amount: cardTx.amount < 0 ? Math.abs(cardTx.amount) : -Math.abs(cardTx.amount),
         automaticPaymentId: linkId,
         isAutomaticCardPayment: true,
         automaticPaymentOverridden: true,
@@ -22294,6 +22652,7 @@ function renderCardDashboard(cardId) {
     // applyCreditCardSectionState().
     updateGlobalTogglesPlacement();
     updateHeaderPeriodNavAndToday(isLoan ? 'loans' : 'creditcards', !isLoan, isLoan);
+    relocateMobileCCDetailHeader();
 
     // Keep one planner instance shared by calendar and ledger views, directly below the metrics.
     const payoffHost = document.getElementById('cc-payoff-planner-host');
@@ -22315,7 +22674,7 @@ function renderCardDashboard(cardId) {
     }
     populateChargeAutocomplete(cardId);
     const storeMerchant = !isLoan && card.isStoreCard ? String(card.storeName || '').trim() : '';
-    ['cc-trans-merchant', 'cc-list-add-merchant'].forEach(id => {
+    ['cc-trans-merchant'].forEach(id => {
         const input = document.getElementById(id);
         if (!input) return;
         input.readOnly = !!storeMerchant;
@@ -23078,9 +23437,142 @@ function renderCCCardList(cardId) {
         });
     });
     container.querySelectorAll('.editable-row').forEach(row => {
-        row.addEventListener('dblclick', () => openEditTransactionModal(row.dataset.id, row.dataset.date));
+        const openEditor = () => openEditTransactionModal(row.dataset.id, row.dataset.date);
+        row.addEventListener('dblclick', openEditor);
+        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
+        // desktop reaches via double-click, and that modal has its own Delete button.
+        if (isMobileViewport()) row.addEventListener('click', openEditor);
     });
     _updateListViewStickyOffset();
+}
+
+// Extracted from the summary list row's own Delete button so the loan/card edit modal's new Delete
+// button (see #btn-delete-loan-account, wired below) can share the exact same logic instead of
+// duplicating it — per explicit user request, 2026-08-04: mobile's summary list drops its own
+// Delete button (see index.css), moving deletion under the gear/settings icon instead.
+function deleteLoanAccount(account) {
+    const isLoanType = account.type === 'loan';
+    const index = state.loans.findIndex(item => item.id === account.id);
+    if (index < 0) return false;
+
+    const count = countFutureTransactionsTiedToSetting(account.id, 'card');
+    if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${account.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.`)) {
+        return false;
+    }
+
+    const removed = state.loans.splice(index, 1)[0];
+    deleteAllFutureTransactionsForSetting(removed.id, 'card');
+
+    if (isLoanType) syncMortgageLoansToAllMonths();
+    saveDatabase();
+    renderApp();
+    logSystem(`Deleted ${isLoanType ? 'installment loan' : 'credit card'}: ${removed.name}`);
+    return true;
+}
+
+// Debt Consolidation (Add Installment Loan only — see #loan-consolidation-section in Index.html and
+// its wiring below/in the loan-form submit handler). Per explicit user request, 2026-08-04.
+
+function populateLoanConsolidationAccountList() {
+    const list = document.getElementById('loan-consolidation-account-list');
+    list.innerHTML = '';
+    if (!state.loans.length) {
+        list.innerHTML = '<span class="muted-text">No existing credit cards or loans to consolidate.</span>';
+        return;
+    }
+    state.loans.forEach(account => {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-weight:normal;';
+        row.innerHTML = `<input type="checkbox" class="loan-consolidation-account-checkbox" data-account-id="${account.id}"> <span>${escapeHTML(account.name)} <span class="muted-text">(Bal: $${(Number(account.currentBal) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})</span></span>`;
+        row.querySelector('input').addEventListener('change', refreshLoanConsolidationTotal);
+        list.appendChild(row);
+    });
+}
+
+// The statement balance "as of the previous statement" relative to a given transfer date — the
+// closing date getStatementClosingDateForPayment() would use if a payment were due ON that date,
+// which is exactly the boundary the user described: "the balance as of the previous statement."
+// Works for both credit cards and installment loans — both carry their own statementDay.
+function getConsolidationPayoffAmount(account, transferDate) {
+    if (!account || !transferDate) return 0;
+    const closingDate = getStatementClosingDateForPayment(account, transferDate);
+    return Math.max(0, calculateCardLedgerBalance(account.id, closingDate));
+}
+
+function getSelectedLoanConsolidationAccounts() {
+    return Array.from(document.querySelectorAll('.loan-consolidation-account-checkbox:checked'))
+        .map(cb => state.loans.find(l => l.id === cb.dataset.accountId))
+        .filter(Boolean);
+}
+
+function refreshLoanConsolidationTotal() {
+    const transferDate = document.getElementById('loan-consolidation-transfer-date').value;
+    const accounts = getSelectedLoanConsolidationAccounts();
+    const payoffTotal = accounts.reduce((sum, a) => sum + getConsolidationPayoffAmount(a, transferDate), 0);
+    const cashOut = Math.max(0, Number(document.getElementById('loan-consolidation-cashout').value) || 0);
+    const total = Math.round((payoffTotal + cashOut) * 100) / 100;
+    document.getElementById('loan-consolidation-cashout-dest-group').classList.toggle('hidden', cashOut <= 0);
+    const summary = document.getElementById('loan-consolidation-total-summary');
+    summary.textContent = accounts.length
+        ? `Payoff total: $${payoffTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} + Cash out: $${cashOut.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} = Loan Amount: $${total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+        : 'Select at least one account to pay off, or just enter a cash-out amount.';
+    // Drive the loan's own Starting/Current Balance fields from this total — same fields the form
+    // already saves from normally, so no separate "consolidation amount" field is needed downstream.
+    document.getElementById('loan-start-bal').value = total.toFixed(2);
+    document.getElementById('loan-current-bal').value = total.toFixed(2);
+}
+
+// Posts one payoff payment (funded by the new consolidation loan, not checking — see the PR
+// description in the loan-form submit handler) to each selected account, dated on the transfer
+// date, equal to that account's statement balance as of the closing date just before it. Existing
+// automatic-payment logic (ensureAutomaticCardPaymentForMonth) already skips generating a payment
+// once an account's computed balance is $0, and already only ever pays whatever the current running
+// statement balance is — so a paid-off account's future automatic payments simply stop appearing on
+// their own, and one with ongoing recurring charges keeps getting paid for just that new balance,
+// with no extra logic needed here beyond inserting this one real transaction per account.
+function applyDebtConsolidation(newLoanId, accounts, transferDate, cashOutAmount, cashOutDest) {
+    const newLoan = state.loans.find(l => l.id === newLoanId);
+    const dateObj = new Date(transferDate + 'T00:00:00');
+    const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+    ensureYearMonthInitialized(dateObj.getFullYear(), MONTH_ORDER[dateObj.getMonth()]);
+
+    accounts.forEach(account => {
+        const payoffAmount = getConsolidationPayoffAmount(account, transferDate);
+        if (payoffAmount <= 0.005) return;
+        if (!state.cardCalendars[account.id]) state.cardCalendars[account.id] = {};
+        if (!state.cardCalendars[account.id][key]) state.cardCalendars[account.id][key] = [];
+        state.cardCalendars[account.id][key].push({
+            id: 'c-' + Math.random().toString(36).substr(2, 9),
+            date: transferDate,
+            description: `Debt Consolidation Payoff (${newLoan ? newLoan.name : 'New Loan'})`,
+            merchant: account.name,
+            amount: payoffAmount,
+            transactionKind: 'payment',
+            owner: account.paymentSource === 'joint' ? 'joint' : 'personal',
+            isDebtConsolidationPayment: true,
+            consolidationLoanId: newLoanId
+        });
+        account.currentBal = Math.max(0, (Number(account.currentBal) || 0) - payoffAmount);
+        // This month's automatic payment (if any) was computed before the payoff posted — clear it
+        // so ensureAutomaticCardPaymentForMonth recomputes against the now-$0 (or reduced) balance
+        // instead of leaving a stale duplicate payment sitting alongside this one.
+        clearFutureAutomaticCardPayments(account.id, transferDate);
+    });
+
+    if (cashOutAmount > 0.005) {
+        const cashOutTx = {
+            id: (cashOutDest === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9),
+            type: cashOutDest === 'joint' ? 'income' : undefined,
+            name: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
+            description: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
+            date: transferDate,
+            amount: Math.abs(cashOutAmount),
+            isDebtConsolidationCashOut: true,
+            consolidationLoanId: newLoanId
+        };
+        if (cashOutDest === 'joint') state.jointRegister.push(cashOutTx);
+        else state.personalCalendar[key].push(cashOutTx);
+    }
 }
 
 function openEditLoanModal(loanId) {
@@ -23091,6 +23583,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-modal-title').textContent = "Edit Credit Card / Loan Details";
     document.getElementById('loan-action').value = 'edit';
     document.getElementById('loan-edit-id').value = loanId;
+    document.getElementById('btn-delete-loan-account').classList.remove('hidden');
 
     document.getElementById('loan-name-field').value = loan.name;
     document.getElementById('loan-type-field').value = loan.type || 'loan';
@@ -23183,6 +23676,12 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-mortgage-extra').value = loan.extraPayment || 0;
     document.getElementById('loan-mortgage-section').classList.toggle('hidden', isCredit);
     document.getElementById('loan-mortgage-fields').classList.toggle('hidden', !isMortgage);
+
+    // Debt Consolidation is a one-time, creation-only action (see the loan-form submit handler) —
+    // never shown while editing an existing loan.
+    document.getElementById('loan-consolidation-section').classList.add('hidden');
+    document.getElementById('loan-is-consolidation').checked = false;
+    document.getElementById('loan-consolidation-fields').classList.add('hidden');
 
     dialog.showModal();
 }
@@ -23410,6 +23909,21 @@ function describeBillTrackerSetting(bill) {
     return { sourceName, recurDesc, paymentDateText, closingDateText, icon };
 }
 
+// Extracted from renderBillTrackerTab()'s own local closure so both the row's Delete button
+// (desktop/Cards view) and #btn-delete-bill-settings (the edit modal's own Delete — mobile's
+// tap-to-edit flow, see openEditBillSettingModal()) share one implementation.
+function deleteBillTrackerSetting(bill) {
+    const count = countFutureTransactionsTiedToSetting(`bill-settings-${bill.id}`);
+    if (confirm(`Delete recurring bill setting for "${bill.name}"?\n\nThis will permanently delete ${count} future projected payments/charges across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.`)) {
+        state.billTrackerSettings = state.billTrackerSettings.filter(b => b.id !== bill.id);
+        deleteAllFutureTransactionsForSetting(`bill-settings-${bill.id}`);
+        syncBillTrackerBillsToAllMonths();
+        saveDatabase();
+        renderApp();
+        logSystem(`Deleted bill setting: ${bill.name}`);
+    }
+}
+
 function renderBillTrackerTab() {
     const viewMode = state.billTrackerViewMode || 'cards';
     const isCalendar = viewMode === 'calendar';
@@ -23491,17 +24005,7 @@ function renderBillTrackerTab() {
         return sortDirection === 'asc' ? cmp : -cmp;
     });
 
-    const deleteSetting = bill => {
-        const count = countFutureTransactionsTiedToSetting(`bill-settings-${bill.id}`);
-        if (confirm(`Delete recurring bill setting for "${bill.name}"?\n\nThis will permanently delete ${count} future projected payments/charges across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.`)) {
-            state.billTrackerSettings = state.billTrackerSettings.filter(b => b.id !== bill.id);
-            deleteAllFutureTransactionsForSetting(`bill-settings-${bill.id}`);
-            syncBillTrackerBillsToAllMonths();
-            saveDatabase();
-            renderApp();
-            logSystem(`Deleted bill setting: ${bill.name}`);
-        }
-    };
+    const deleteSetting = deleteBillTrackerSetting;
 
     if (isList) {
         const tbody = document.getElementById('billtracker-table-body');
@@ -23541,6 +24045,9 @@ function renderBillTrackerTab() {
                     </td>`;
                 row.querySelector('.edit-bill-setting-btn').addEventListener('click', () => openEditBillSettingModal(bill.id));
                 row.querySelector('.delete-bill-setting-btn').addEventListener('click', () => deleteSetting(bill));
+                // Mobile has no Actions column (see index.css) — tapping the row opens the same
+                // editor desktop reaches via its own Edit button, and that modal has its own Delete.
+                if (isMobileViewport()) row.addEventListener('click', () => openEditBillSettingModal(bill.id));
                 tbody.appendChild(row);
             });
         }
@@ -23610,6 +24117,9 @@ function renderBillTrackerTab() {
     });
 }
 
+// Set by openEditBillSettingModal() so #btn-delete-bill-settings (mobile's tap-to-edit modal Delete
+// action) knows which setting to act on — mirrors _billSplitterEditorContext/_allocationEditorContext.
+let _billSettingsEditorContext = null;
 function openEditBillSettingModal(id) {
     populateCCDropdowns();
     const form = document.getElementById('bill-settings-form');
@@ -23660,6 +24170,8 @@ function openEditBillSettingModal(id) {
         document.getElementById('bill-settings-frequency').value = 'monthly';
         document.getElementById('bill-settings-login-url').value = '';
         recurringFields.classList.remove('hidden');
+        _billSettingsEditorContext = null;
+        document.getElementById('btn-delete-bill-settings').classList.add('hidden');
     } else {
         const setting = state.billTrackerSettings.find(b => b.id === id);
         if (!setting) return;
@@ -23667,6 +24179,8 @@ function openEditBillSettingModal(id) {
         document.getElementById('bill-settings-modal-title').textContent = "Edit Bill Setting";
         document.getElementById('bill-settings-action').value = 'edit';
         document.getElementById('bill-settings-id').value = setting.id;
+        _billSettingsEditorContext = setting;
+        document.getElementById('btn-delete-bill-settings').classList.remove('hidden');
 
         document.getElementById('bill-settings-name').value = setting.name;
         // A category not among the built-in options is a previously-entered custom one — select the
@@ -23946,6 +24460,16 @@ function setupBillTrackerListeners() {
     if (btnCancel) {
         btnCancel.addEventListener('click', () => {
             document.getElementById('bill-settings-dialog').close();
+        });
+    }
+
+    const btnDeleteBillSettings = document.getElementById('btn-delete-bill-settings');
+    if (btnDeleteBillSettings) {
+        btnDeleteBillSettings.addEventListener('click', () => {
+            if (!_billSettingsEditorContext) return;
+            const setting = _billSettingsEditorContext;
+            document.getElementById('bill-settings-dialog').close();
+            deleteBillTrackerSetting(setting);
         });
     }
 
@@ -24596,8 +25120,133 @@ function showIntegrityAuditModal() {
     dialog.showModal();
 }
 
+// Long-press (soft touch and hold) any transaction row on mobile to see its full desktop-equivalent
+// details as a read-only overlay — per explicit user request, 2026-08-04, distinct from the existing
+// single-tap-to-edit interaction added across every list view this session. Deliberately generic and
+// delegated on `document` (not wired per-table) so it works everywhere a data-table row already got
+// the tap-to-edit treatment, without a second per-page implementation to keep in sync: every mobile
+// column-hiding rule this session only ever set `display:none` on the <td>/<th>, never removed them
+// from the DOM, so the full desktop row content (including columns hidden on mobile) is still sitting
+// right there to read back out — this just pairs each visible-or-not <td> with its <th> label and
+// shows all of them, mirroring what desktop already sees in the full table.
+function initLongPressDetailOverlay() {
+    const LONG_PRESS_MS = 550;
+    const MOVE_TOLERANCE_PX = 10;
+    let pressTimer = null;
+    let pressFired = false;
+    let startPoint = null;
+
+    function eligibleRow(target) {
+        if (!isMobileViewport()) return null;
+        if (target.closest('input, select, textarea, button, a, [contenteditable]')) return null;
+        const row = target.closest('tr');
+        if (!row || row.closest('.hidden')) return null;
+        const table = row.closest('table');
+        if (!table) return null;
+        // Divider/section rows (— Today —, — Statement Closed —, etc.) use a single colspan <td> —
+        // requiring 2+ real cells naturally excludes those along with header rows (which have no
+        // <td> at all).
+        const cells = Array.from(row.children).filter(c => c.tagName === 'TD');
+        if (cells.length < 2) return null;
+        return row;
+    }
+
+    function buildDetailPairs(row) {
+        const table = row.closest('table');
+        const headerCells = Array.from(table.querySelectorAll('thead th'));
+        const cells = Array.from(row.children).filter(c => c.tagName === 'TD');
+        return cells.map((td, i) => {
+            if (td.classList.contains('table-actions-cell')) return null;
+            const th = headerCells[i];
+            let label = (th ? th.textContent : '').replace(/🔍/g, '').replace(/[▲▼]/g, '').trim();
+            if (!label || /^actions$/i.test(label)) return null;
+            const value = td.textContent.replace(/\s+/g, ' ').trim();
+            if (!value) return null;
+            return { label, value };
+        }).filter(Boolean);
+    }
+
+    function getOverlay() {
+        let overlay = document.getElementById('mobile-row-detail-overlay');
+        if (overlay) return overlay;
+        overlay = document.createElement('div');
+        overlay.id = 'mobile-row-detail-overlay';
+        overlay.className = 'mobile-row-detail-overlay hidden';
+        overlay.innerHTML = `
+            <div class="mobile-row-detail-card">
+                <div class="mobile-row-detail-header">
+                    <h4>Transaction Details</h4>
+                    <button type="button" class="mobile-row-detail-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="mobile-row-detail-list"></div>
+            </div>`;
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', e => {
+            if (e.target === overlay || e.target.closest('.mobile-row-detail-close')) {
+                overlay.classList.add('hidden');
+            }
+        });
+        return overlay;
+    }
+
+    function showOverlay(row) {
+        const pairs = buildDetailPairs(row);
+        if (!pairs.length) return;
+        const overlay = getOverlay();
+        overlay.querySelector('.mobile-row-detail-list').innerHTML = pairs.map(p =>
+            `<div class="mobile-row-detail-item"><span class="mobile-row-detail-label">${escapeHTML(p.label)}</span><span class="mobile-row-detail-value">${escapeHTML(p.value)}</span></div>`
+        ).join('');
+        overlay.classList.remove('hidden');
+    }
+
+    function clearPress() {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        startPoint = null;
+    }
+
+    function onStart(e) {
+        const row = eligibleRow(e.target);
+        if (!row) return;
+        pressFired = false;
+        const point = e.touches ? e.touches[0] : e;
+        startPoint = { x: point.clientX, y: point.clientY };
+        pressTimer = setTimeout(() => {
+            pressFired = true;
+            pressTimer = null;
+            if (navigator.vibrate) navigator.vibrate(15);
+            showOverlay(row);
+        }, LONG_PRESS_MS);
+    }
+    function onMove(e) {
+        if (!pressTimer || !startPoint) return;
+        const point = e.touches ? e.touches[0] : e;
+        if (Math.abs(point.clientX - startPoint.x) > MOVE_TOLERANCE_PX || Math.abs(point.clientY - startPoint.y) > MOVE_TOLERANCE_PX) {
+            clearPress();
+        }
+    }
+    function onEnd(e) {
+        clearPress();
+        if (pressFired) {
+            // A long-press already showed the overlay — swallow the click/dblclick that would
+            // otherwise follow this same touch/mouse-up and open the edit modal instead.
+            e.preventDefault();
+            e.stopPropagation();
+            pressFired = false;
+        }
+    }
+
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('touchend', onEnd);
+    document.addEventListener('touchcancel', clearPress);
+    document.addEventListener('mousedown', onStart);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+}
+
 // --- TRIGGER INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', init);
+window.addEventListener('DOMContentLoaded', initLongPressDetailOverlay);
 
 // Enable clicking anywhere on a date input to open its native picker,
 // since the calendar icon indicator was hidden via CSS to fix layout and tab order issues.
