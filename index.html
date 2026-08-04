@@ -18,6 +18,10 @@
     </button>
     <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <button type="button" class="scroll-top-btn scroll-top-faded" id="btn-scroll-top" title="Scroll to top" aria-label="Scroll to top">&#8593;</button>
+    <!-- Mobile-only floating "Add Transaction" button — see mobile-fab-add-transaction CSS
+         (index.css) for the tab/view scoping that decides when this is actually visible, and
+         openMobileQuickAddModal() (app.js) for what it opens. -->
+    <button type="button" class="mobile-fab-add-transaction hidden" id="btn-mobile-fab-add-transaction" title="Add Transaction" aria-label="Add Transaction">&#43;</button>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="app-sidebar">
@@ -274,6 +278,17 @@
                     <div class="card-value" id="remaining-balance-val">$0.00</div>
                     <div class="card-sub" id="remaining-balance-sub">Cycle-end balance projection</div>
                 </div>
+                <!-- Today's real balance (Personal or Joint, matching whichever is selected) — same
+                     contextual single-card pattern as Remaining Balance above (title/value/sub swap
+                     per-context in renderSummaryCards()). Per explicit user request, 2026-08-04. -->
+                <div class="glass-card summary-card" id="card-today-balance">
+                    <div class="card-header">
+                        <span id="today-balance-title">Today's Balance</span>
+                        <span class="card-icon positive" id="today-balance-icon">📅</span>
+                    </div>
+                    <div class="card-value" id="today-balance-val">$0.00</div>
+                    <div class="card-sub" id="today-balance-sub">Balance as of today</div>
+                </div>
                 </div>
             </section>
 
@@ -401,30 +416,41 @@
                              scrolling WITHIN the table's own bounded tbody (see that block's comment) —
                              just not while scrolling the outer page past it. -->
                         <div class="list-view-sticky-header">
-                            <div class="list-view-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 1rem; flex-wrap: wrap;">
+                            <div class="list-view-header" style="display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
                                 <div>
                                     <h3 id="list-view-title" style="margin-bottom: 0.15rem;">Personal Ledger</h3>
                                     <span id="list-view-starting-balance" class="muted-text" style="font-size: 0.85rem; display: block; margin-top: 0.2rem;"></span>
+                                    <span id="list-view-today-balance" class="muted-text" style="font-size: 0.85rem; display: block; margin-top: 0.1rem; font-weight: 600;"></span>
                                     <span id="list-view-ending-balance" class="muted-text" style="font-size: 0.85rem; display: block; margin-top: 0.1rem;"></span>
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; flex: 1; justify-content: flex-end;">
-                                    <input type="search" id="list-view-master-search" class="custom-input" placeholder="🔍 Search description, owner, trip, date, amount..." style="min-width: 220px; max-width: 360px; flex: 1; margin: 0; padding: 0.4rem 0.75rem; font-size: 0.85rem; box-sizing: border-box;">
-                                    <div id="list-view-filtered-items-pill" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap;">
+                                <!-- Search and the filter-summary pill stacked together so the pill sits
+                                     directly under the search box specifically, not spanning the full
+                                     header width under the title. Per explicit user request, 2026-08-04. -->
+                                <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 220px; max-width: 360px;">
+                                    <input type="search" id="list-view-master-search" class="custom-input" placeholder="🔍 Search description, owner, trip, date, amount..." style="margin: 0; padding: 0.4rem 0.75rem; font-size: 0.85rem; box-sizing: border-box; width: 100%;">
+                                    <div id="list-view-filtered-items-pill" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap; align-self: flex-start;">
                                         <span>🔍 <span id="list-filtered-items-label">View Items</span>: <span id="list-filtered-items-count">0</span></span>
                                         <span style="opacity: 0.5;">|</span>
                                         <span>Total: <span id="list-filtered-items-amount">$0.00</span></span>
                                     </div>
+                                </div>
+                                <!-- Opens the same real #quick-add-form in a popup instead of it sitting
+                                     inline above the table full-time — same pattern the Savings Tracker's
+                                     own "+ Add Transaction" button already uses (openMobileQuickAddModal(),
+                                     not mobile-gated). Right-justified as a group (margin-left: auto). Per
+                                     explicit user request, 2026-08-04. -->
+                                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-left: auto;">
+                                    <button type="button" class="action-btn small-btn solid-btn" id="btn-open-listview-add-modal">+ Add Transaction</button>
                                     <button type="button" class="action-btn small-btn outline-btn" id="btn-export-listview-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
                                     <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-listview-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
-                                    <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="list-view-tools-wrapper" data-key="listViewTools" title="Collapse the transaction tools to save space">Hide</button>
                                 </div>
                             </div>
                             <div id="list-view-tools-wrapper">
-                                <!-- The real #quick-add-form gets relocated in here (same DOM-move technique as
-                                     relocateQuickAddFormIntoModal) whenever this List view is showing, restyled
-                                     compact via .quick-add-list-row to sit inline above the table like the
-                                     Credit Card Ledger's own add-row. -->
-                                <div id="list-view-quick-add-host"></div>
+                                <!-- #list-view-quick-add-host removed, 2026-08-04 — the real #quick-add-form
+                                     only ever relocates into the Add Transaction modal now (see
+                                     btn-open-listview-add-modal above), never sits inline here full-time.
+                                     #list-view-summary-host stays (Joint's Jason/Asia contribution totals
+                                     still render there — unrelated to the add form). -->
                                 <div id="list-view-summary-host"></div>
                             </div>
                         </div>
@@ -810,6 +836,15 @@
                     <div class="table-card-header savings-view-header">
                         <h3 id="savings-ledger-title">Savings Calendar</h3>
                         <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <!-- Reachable regardless of Calendar/List view or device — the inline
+                                 "Add Savings Entry" form below only ever shows in Calendar view, and
+                                 mobile forces List with no way back to Calendar (see
+                                 enforceMobileListView()), so List view (any device) previously had no
+                                 way to add a transaction at all. Confirmed real bug, 2026-08-04. Opens
+                                 the same real #savings-transfer-form in a modal, same mechanism as the
+                                 mobile FAB (see openMobileQuickAddModal()/relocateQuickAddFormIntoModal()
+                                 in app.js) but not gated to mobile-only. -->
+                            <button type="button" class="action-btn small-btn solid-btn" id="btn-open-savings-add-modal">+ Add Transaction</button>
                             <button type="button" class="action-btn small-btn outline-btn" id="btn-export-savingslist-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
                             <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
                         </div>
@@ -823,11 +858,12 @@
                         <div class="sidebar-details-card glass-card" id="savings-entry-sidebar">
                             <h3>Add Savings Entry</h3>
                             <form id="savings-transfer-form" class="detail-form">
-                                <div class="form-group"><label for="savings-entry-type">Entry Type</label><select id="savings-entry-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
-                                <div class="form-group"><label for="savings-transfer-date">Date</label><input type="date" id="savings-transfer-date" required class="custom-input"></div>
+                                <div class="form-group"><label for="savings-entry-type">Entry Type</label><select id="savings-entry-type" class="custom-select"><option value="deposit">Deposit (Checking &rarr; Savings)</option><option value="withdrawal">Withdrawal (Savings &rarr; Checking)</option><option value="interest">Interest (Savings only)</option></select></div>
+                                <div class="form-group" id="savings-transfer-source-group"><label for="savings-transfer-source">Checking Account</label><select id="savings-transfer-source" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select></div>
+                                <div class="form-group"><label for="savings-transfer-date">Date</label><div style="position: relative; display: flex; align-items: center;"><input type="date" id="savings-transfer-date" required class="custom-input"></div></div>
                                 <div class="form-group"><label for="savings-transfer-description">Description</label><input type="text" id="savings-transfer-description" required class="custom-input" placeholder="e.g. Emergency fund transfer"></div>
-                                <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="Positive in, negative out"></div><small id="savings-entry-hint">Positive adds to Savings and subtracts from Personal. Negative does the reverse.</small></div>
-                                <button type="submit" class="action-btn solid-btn full-width" id="btn-add-savings-entry">Add Savings Transfer</button>
+                                <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="0.00"></div><small id="savings-entry-hint">Moves this amount from the selected checking account into Savings.</small></div>
+                                <button type="submit" class="action-btn solid-btn full-width" id="btn-add-savings-entry">Add Deposit</button>
                             </form>
                         </div>
                     </div>
@@ -1016,7 +1052,9 @@
                                 <form id="cc-quick-add-form" class="detail-form">
                                     <div class="form-group">
                                         <label for="cc-trans-date">Date</label>
-                                        <input type="date" id="cc-trans-date" required class="custom-input">
+                                        <div style="position: relative; display: flex; align-items: center;">
+                                            <input type="date" id="cc-trans-date" required class="custom-input">
+                                        </div>
                                     </div>
                                     <div class="form-group">
                                         <label for="cc-trans-merchant">Merchant</label>
@@ -1170,62 +1208,44 @@
                             </div>
 
                             <div class="list-view-sticky-header">
-                                <div class="list-view-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap;">
-                                    <div style="display: flex; align-items: center; gap: 1rem;">
-                                        <h3 id="cc-list-view-title" style="margin: 0;">Card Transaction Ledger</h3>
-                                        <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="cc-list-tools-wrapper" data-key="ccListTools" title="Collapse the transaction tools to save space">Hide</button>
+                                <div class="list-view-header" style="display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
+                                    <h3 id="cc-list-view-title" style="margin: 0;">Card Transaction Ledger</h3>
+                                    <!-- Search and the filter-summary pill stacked together so the pill
+                                         sits directly under the search box specifically, not spanning the
+                                         full header width. Per explicit user request, 2026-08-04. -->
+                                    <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 220px; max-width: 360px;">
+                                        <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="🔍 Search merchant, description, owner, trip, date, amount..." style="margin: 0; width: 100%;">
+                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap; align-self: flex-start;"></div>
                                     </div>
-                                    <!-- Search, filter-summary pill, and CSV export all grouped together
-                                         at the row's right edge — same layout/style as the Dashboard
-                                         list view's own header (#list-view-header), per explicit user
-                                         request, 2026-08-03. The search input keeps a fixed width (no
-                                         flex-grow) so this cluster stays tight and doesn't push the pill
-                                         onto its own wrapped line depending on whether the field is
-                                         empty or has text. -->
-                                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: flex-end;">
-                                        <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="🔍 Search merchant, description, owner, trip, date, amount..." style="width: 280px; flex: 0 0 auto; margin: 0;">
-                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap;"></div>
+                                    <!-- Opens the real #cc-quick-add-form in a popup instead of a second,
+                                         separate inline add-charge form sitting here full-time — same
+                                         pattern the Savings Tracker's own "+ Add Transaction" button uses
+                                         (openMobileQuickAddModal(), not mobile-gated). The old
+                                         #cc-list-add-form this replaces was a near-duplicate of
+                                         #cc-quick-add-form missing that form's recurring-charge and
+                                         promo-rate-tracking fields — this is a strict functionality
+                                         upgrade, not just a relocation. Right-justified as a group
+                                         (margin-left: auto). Per explicit user request, 2026-08-04. -->
+                                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-left: auto;">
+                                        <button type="button" class="action-btn small-btn solid-btn" id="btn-open-cclist-add-modal">+ Add Transaction</button>
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-export-cc-list-csv" title="Export the currently visible rows (respects search/filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-cclist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
                                     </div>
                                 </div>
-                                <div id="cc-list-tools-wrapper">
-                                    <div id="cc-list-tools-host">
-                                        <form id="cc-list-add-form" class="cc-list-tools">
-                                            <div style="position: relative; flex: 0 0 150px; min-width: 150px; max-width: 150px; display: flex; align-items: center;">
-                                                <input type="date" id="cc-list-add-date" required class="custom-input" aria-label="Transaction date">
-                                            </div>
-                                            <input type="text" id="cc-list-add-merchant" autocomplete="off" class="custom-input" placeholder="Merchant" aria-label="Merchant">
-                                            <input type="text" id="cc-list-add-desc" autocomplete="off" required class="custom-input" placeholder="Description" aria-label="Description">
-                                            <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0.01" id="cc-list-add-amount" required class="custom-input" placeholder="Amount" aria-label="Transaction amount">
-                                            <select id="cc-list-add-kind" class="custom-select" aria-label="Transaction type">
-                                                <option value="charge">Charge</option>
-                                                <option value="payment">Payment</option>
-                                                <option value="credit">Credit / Reversal</option>
-                                            </select>
-                                            <select id="cc-list-add-owner" class="custom-select" aria-label="Transaction owner">
-                                                <option value="personal">Personal</option>
-                                                <option value="joint">Joint</option>
-                                            </select>
-                                            <input type="text" id="cc-list-add-trip" class="custom-input" placeholder="Trip (optional)" aria-label="Trip name">
-                                            <button type="submit" class="action-btn solid-btn">Add Charge</button>
-                                        </form>
-                                    </div>
-
-                                    <div class="cc-list-tools cc-filter-tools">
-                                        <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-add-loan-payment" title="Post an additional payment to this loan">+ Extra Loan Payment</button>
-                                        <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
-                                            <option value="all">All merchants</option>
-                                        </select>
-                                        <select id="cc-list-filter-owner" class="custom-select">
-                                            <option value="all">All ownership</option>
-                                            <option value="personal">Personal</option>
-                                            <option value="joint">Joint</option>
-                                        </select>
-                                        <select id="cc-list-filter-trip" class="custom-select" aria-label="Filter by trip">
-                                            <option value="all">All trips</option>
-                                        </select>
-                                        <button type="button" id="btn-clear-cc-filters" class="action-btn outline-btn">Clear Filters</button>
-                                    </div>
+                                <div class="cc-list-tools cc-filter-tools">
+                                    <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-add-loan-payment" title="Post an additional payment to this loan">+ Extra Loan Payment</button>
+                                    <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
+                                        <option value="all">All merchants</option>
+                                    </select>
+                                    <select id="cc-list-filter-owner" class="custom-select">
+                                        <option value="all">All ownership</option>
+                                        <option value="personal">Personal</option>
+                                        <option value="joint">Joint</option>
+                                    </select>
+                                    <select id="cc-list-filter-trip" class="custom-select" aria-label="Filter by trip">
+                                        <option value="all">All trips</option>
+                                    </select>
+                                    <button type="button" id="btn-clear-cc-filters" class="action-btn outline-btn">Clear Filters</button>
                                 </div>
                             </div>
 
@@ -1491,7 +1511,7 @@
                 <div class="form-group hidden" id="bill-payment-amount-group"><label for="bill-payment-amount" id="bill-payment-amount-label">Actual Payment Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="bill-payment-amount" class="custom-input"></div></div>
             </div>
             <p class="muted-text" id="bill-routing-help">Actual bills post to the selected account calendar. Transfer-only items affect the split calculation but do not post to a ledger.</p>
-            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-bill">Cancel</button><button type="submit" class="action-btn solid-btn" id="btn-save-bill">Save Item</button></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-bill">Cancel</button><button type="button" class="action-btn danger-btn hidden" id="btn-delete-bill">Delete</button><button type="submit" class="action-btn solid-btn" id="btn-save-bill">Save Item</button></div>
         </form>
     </dialog>
 
@@ -1561,6 +1581,7 @@
             </div>
             <div class="modal-buttons">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-alloc">Cancel</button>
+                <button type="button" class="action-btn danger-btn hidden" id="btn-delete-alloc">Delete</button>
                 <button type="submit" class="action-btn solid-btn">Save Allocation</button>
             </div>
         </form>
@@ -1796,6 +1817,46 @@
                 </div>
             </div>
 
+            <!-- Debt Consolidation (new Installment Loans only — not available when editing an
+                 existing loan, since the payoff transactions this creates only make sense at
+                 creation time). Pays off selected existing cards/loans as of their statement
+                 balance the moment this new loan is created — see the loan-form submit handler in
+                 app.js for the actual transaction creation. Per explicit user request, 2026-08-04. -->
+            <div id="loan-consolidation-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <input type="checkbox" id="loan-is-consolidation" style="cursor:pointer;">
+                    <label for="loan-is-consolidation" style="font-family:var(--font-heading); font-weight:600; color:#a5b4fc; font-size:0.95rem; margin:0; cursor:pointer;">Debt Consolidation — pay off existing cards/loans with this loan?</label>
+                </div>
+                <div class="hidden" id="loan-consolidation-fields">
+                    <p class="muted-text" style="margin: 0 0 0.6rem;">Each selected account gets paid down to $0 as of the transfer date, using its statement balance as of the closing date just before that date — funded by this new loan, not your checking accounts. Future automatic payments on a paid-off account stop on their own once its balance reaches $0; if it still has new recurring charges after the transfer date, its automatic payment keeps posting for just that ongoing balance.</p>
+                    <div class="form-group">
+                        <label>Accounts to Pay Off</label>
+                        <div id="loan-consolidation-account-list" style="display:flex; flex-direction:column; gap:0.4rem; max-height:220px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; padding:0.6rem;"></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="loan-consolidation-transfer-date">Transfer / Payoff Date</label>
+                            <input type="date" id="loan-consolidation-transfer-date" class="custom-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="loan-consolidation-cashout">Cash Out Amount</label>
+                            <div class="input-prefix-wrapper">
+                                <span class="input-prefix">$</span>
+                                <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-consolidation-cashout" class="custom-input" value="0">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group hidden" id="loan-consolidation-cashout-dest-group">
+                        <label for="loan-consolidation-cashout-dest">Deposit Cash-Out Into</label>
+                        <select id="loan-consolidation-cashout-dest" class="custom-select">
+                            <option value="personal">Personal Checking</option>
+                            <option value="joint">Joint Checking</option>
+                        </select>
+                    </div>
+                    <div id="loan-consolidation-total-summary" class="muted-text" style="font-weight:600;"></div>
+                </div>
+            </div>
+
             <!-- Active Promo Purchase Rate (Credit Cards only) -->
             <div id="loan-purchase-promo-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
                 <div class="table-card-header" style="margin-top:0;">
@@ -1952,6 +2013,7 @@
 
             <div class="modal-buttons" style="margin-top: 1.5rem;">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-loan">Cancel</button>
+                <button type="button" class="action-btn danger-btn hidden" id="btn-delete-loan-account">Delete</button>
                 <button type="submit" class="action-btn solid-btn">Save Target</button>
             </div>
         </form>
@@ -2119,7 +2181,7 @@
 
     <dialog id="day-highlights-dialog" class="glass-modal day-highlights-modal">
         <div class="day-highlights-modal-header">
-            <h3>Day Details</h3>
+            <h3 id="day-highlights-modal-title">Day Details</h3>
             <button type="button" id="btn-close-day-highlights" class="action-btn outline-btn">Close</button>
         </div>
         <div id="day-highlights-dialog-content" class="highlights-list"></div>
@@ -2240,10 +2302,11 @@
         <form id="savings-edit-form" class="detail-form">
             <h3>Edit Savings Entry</h3>
             <input type="hidden" id="savings-edit-id">
-            <div class="form-group"><label for="savings-edit-type">Entry Type</label><select id="savings-edit-type" class="custom-select"><option value="transfer">Transfer</option><option value="interest">Monthly Interest</option></select></div>
-            <div class="form-group"><label for="savings-edit-date">Date</label><input type="date" id="savings-edit-date" required class="custom-input"></div>
+            <div class="form-group"><label for="savings-edit-type">Entry Type</label><select id="savings-edit-type" class="custom-select"><option value="deposit">Deposit (Checking &rarr; Savings)</option><option value="withdrawal">Withdrawal (Savings &rarr; Checking)</option><option value="interest">Interest (Savings only)</option></select></div>
+            <div class="form-group" id="savings-edit-source-group"><label for="savings-edit-source">Checking Account</label><select id="savings-edit-source" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select></div>
+            <div class="form-group"><label for="savings-edit-date">Date</label><div style="position: relative; display: flex; align-items: center;"><input type="date" id="savings-edit-date" required class="custom-input"></div></div>
             <div class="form-group"><label for="savings-edit-description">Description</label><input type="text" id="savings-edit-description" required class="custom-input"></div>
-            <div class="form-group"><label for="savings-edit-amount">Savings Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small>Interest stays in Savings only. Transfer edits update the Personal mirror when it still exists.</small></div>
+            <div class="form-group"><label for="savings-edit-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small id="savings-edit-hint">Interest stays in Savings only. Deposit/Withdrawal edits update the checking mirror when it still exists.</small></div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-edit">Cancel</button><button type="button" class="action-btn danger-btn" id="btn-delete-savings-edit" style="margin-right:auto;">Delete</button><button type="submit" class="action-btn solid-btn">Save Changes</button></div>
         </form>
     </dialog>
@@ -2473,6 +2536,7 @@
 
             <div class="modal-buttons" style="margin-top: 1.5rem;">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-bill-settings">Cancel</button>
+                <button type="button" class="action-btn danger-btn hidden" id="btn-delete-bill-settings">Delete</button>
                 <button type="submit" class="action-btn solid-btn">Save Setting</button>
             </div>
         </form>
