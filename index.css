@@ -447,28 +447,45 @@ body[data-active-tab="loans"] .main-sticky-dashboard {
     line-height: 1.5;
 }
 
-/* Shrink the metric cards (padding, value font size, min column width) on smaller laptop screens
-   so all 4 dashboard metrics keep fitting on one row instead of wrapping — text stays legible at
-   this size; below 900px (the mobile breakpoint) they still stack via auto-fit as before. */
+/* Shrink the metric cards (padding, value font size, min column width) once the sidebar's fixed
+   260px starts cutting into the available width, so every metric card — 4 on Personal, 5 on
+   Joint — keeps fitting on one row instead of wrapping into an uneven grid. minmax(100px, 1fr)
+   means the row only ever wraps if it can't fit that many 100px-min columns at all; otherwise
+   auto-fit collapses down to exactly as many tracks as there are cards and stretches them (1fr)
+   to fill the row, so cards actually get wider again near the top of this range, not smaller.
+   Below 900px (the mobile breakpoint) the sidebar itself collapses to a slide-in drawer, phones
+   get the full viewport back, and the base auto-fit rule above (223px+ min) takes over — that's
+   the tier that's meant to actually stack cards, not this one. */
 @media (max-width: 1440px) and (min-width: 901px) {
     .summary-cards {
-        grid-template-columns: repeat(auto-fit, minmax(200px, 220px));
+        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
         justify-content: center;
-        gap: 1rem;
+        gap: 0.5rem;
     }
     .summary-card {
-        padding: 1rem;
-        gap: 0.35rem;
+        padding: 0.6rem 0.5rem;
+        gap: 0.2rem;
     }
     .summary-card .card-value {
-        font-size: 1.6rem;
-        letter-spacing: -0.5px;
+        font-size: 1.05rem;
+        letter-spacing: -0.3px;
     }
     .summary-card .card-header {
-        font-size: 0.8rem;
+        font-size: 0.62rem;
+        flex-wrap: wrap;
+        row-gap: 0.15rem;
+    }
+    .summary-card .card-header span:first-child {
+        min-width: 0;
+        overflow-wrap: break-word;
+    }
+    .summary-card .card-icon {
+        padding: 0.1rem 0.3rem;
+        font-size: 0.75rem;
     }
     .summary-card .card-sub {
-        font-size: 0.75rem;
+        font-size: 0.58rem;
+        line-height: 1.3;
     }
 }
 
