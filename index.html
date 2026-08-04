@@ -246,6 +246,18 @@
                     </div>
                 </div>
                 <div class="summary-cards" id="summary-cards">
+                <!-- Today's real balance (Personal or Joint, matching whichever is selected) — same
+                     contextual single-card pattern as Remaining Balance below (title/value/sub swap
+                     per-context in renderSummaryCards()). Per explicit user request, 2026-08-04;
+                     moved to lead position per explicit user request, same day. -->
+                <div class="glass-card summary-card" id="card-today-balance">
+                    <div class="card-header">
+                        <span id="today-balance-title">Today's Balance</span>
+                        <span class="card-icon positive" id="today-balance-icon">📅</span>
+                    </div>
+                    <div class="card-value" id="today-balance-val">$0.00</div>
+                    <div class="card-sub" id="today-balance-sub">Balance as of today</div>
+                </div>
                 <div class="glass-card summary-card">
                     <div class="card-header">
                         <span>Personal Net Cash Flow</span>
@@ -277,17 +289,6 @@
                     </div>
                     <div class="card-value" id="remaining-balance-val">$0.00</div>
                     <div class="card-sub" id="remaining-balance-sub">Cycle-end balance projection</div>
-                </div>
-                <!-- Today's real balance (Personal or Joint, matching whichever is selected) — same
-                     contextual single-card pattern as Remaining Balance above (title/value/sub swap
-                     per-context in renderSummaryCards()). Per explicit user request, 2026-08-04. -->
-                <div class="glass-card summary-card" id="card-today-balance">
-                    <div class="card-header">
-                        <span id="today-balance-title">Today's Balance</span>
-                        <span class="card-icon positive" id="today-balance-icon">📅</span>
-                    </div>
-                    <div class="card-value" id="today-balance-val">$0.00</div>
-                    <div class="card-sub" id="today-balance-sub">Balance as of today</div>
                 </div>
                 </div>
             </section>
