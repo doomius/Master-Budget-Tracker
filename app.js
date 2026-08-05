@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-04 17:59';
+const BUILD_VERSION = '2026-08-04 22:27';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -7183,11 +7183,6 @@ function setupEventListeners() {
         document.getElementById('bill-ownership').dispatchEvent(new Event('change'));
         document.getElementById('joint-bill-dialog').showModal();
     });
-    document.querySelectorAll('#bill-ownership-toggle [data-bill-ownership]').forEach(button => button.addEventListener('click', () => {
-        state.billTrackerOwnership = button.dataset.billOwnership;
-        saveDatabase();
-        renderBillsTab();
-    }));
     document.querySelectorAll('#expense-calendar-view-toggle .segment-btn').forEach(button => button.addEventListener('click', () => {
         state.expenseCalendarViewMode = button.dataset.expenseViewMode;
         saveDatabase();
@@ -8859,6 +8854,15 @@ function enforceMobileListView() {
         state.uiCollapsedSections.jointBills = true;
         state.uiCollapsedSections.personalAllocations = true;
     }
+    // Bill Splitter's Joint Expenses card has its own List/Calendar toggle
+    // (#expense-calendar-view-toggle) — removed from the header on mobile per explicit user request,
+    // 2026-08-04 (matches every other page's "no Calendar sub-view on mobile" precedent). Forced here
+    // every mobile render, not just once like the collapse defaults above, since the toggle button
+    // itself is gone on mobile with no way for the user to switch back — state must never end up
+    // stuck on 'calendar' if it was last set that way on desktop. (Its ownership toggle,
+    // Joint/Personal, is handled separately — removed on every screen size, forced to 'joint'
+    // unconditionally in migrateDatabase(), not just on mobile.)
+    state.expenseCalendarViewMode = 'list';
 }
 
 // Per explicit user request, 2026-08-04: keep the Dashboard title and date-nav (year/month/day)
@@ -8883,7 +8887,7 @@ function enforceMobileListView() {
 // .unified-header-cc variant), just with different buttons populated into #header-left-actions/
 // #global-toggles-host, so the same relocation mechanics apply unchanged. Per explicit user request,
 // 2026-08-04.
-const MOBILE_STICKY_HEADER_TABS = ['dashboard', 'savings', 'bills', 'creditcards', 'loans'];
+const MOBILE_STICKY_HEADER_TABS = ['dashboard', 'savings', 'bills', 'creditcards', 'loans', 'delivery', 'billtracker'];
 function relocateMobileStickyHeader() {
     const mainSticky = document.querySelector('.main-sticky-dashboard');
     const headerTopRow = document.querySelector('.header-top-row');
@@ -14403,14 +14407,16 @@ function restoreQuickAddFormFromModal() {
 // hidden whenever state.savingsViewMode isn't 'calendar'), which mobile forces to 'list' with no way
 // back to Calendar (see enforceMobileListView()/#savings-header-view-toggle's mobile hide rule) —
 // confirmed real bug, 2026-08-04: there was no way at all to add a savings transaction on a phone.
+// Reversed 2026-08-04 per explicit user request: the FAB used to be the only mobile
+// add-transaction affordance for the Dashboard/Savings/Card ledgers, so it showed on exactly those
+// three. Each of those now has its own "+ Add Transaction" button in its ledger header instead
+// (previously desktop-only, unhidden on mobile — see index.css), making the FAB redundant
+// everywhere it used to appear. Always hidden now rather than deleting the element/handler outright
+// — keeps the revert cheap if a future mobile view without a header button needs it back.
 function updateMobileFabVisibility(activeTab) {
     const fab = document.getElementById('btn-mobile-fab-add-transaction');
     if (!fab) return;
-    const tab = activeTab || state.activeTab || 'dashboard';
-    const onDashboardList = tab === 'dashboard' && (state.dashboardType === 'personal' || state.dashboardType === 'joint');
-    const onCardLedger = (tab === 'creditcards' || tab === 'loans') && !!state.ccSelectedCardId;
-    const onSavings = tab === 'savings';
-    fab.classList.toggle('hidden', !isMobileViewport() || !(onDashboardList || onCardLedger || onSavings));
+    fab.classList.add('hidden');
 }
 
 function openMobileQuickAddModal() {
@@ -15935,9 +15941,6 @@ function renderBillsTab() {
     const ownershipFilter = state.billTrackerOwnership || 'joint';
     document.getElementById('bill-tracker-title').textContent = ownershipFilter === 'personal' ? 'Personal Expenses' : 'Joint Expenses';
     document.getElementById('btn-add-joint-bill').textContent = ownershipFilter === 'personal' ? '+ Add Personal Expense' : '+ Add Joint Expense';
-    document.querySelectorAll('#bill-ownership-toggle [data-bill-ownership]').forEach(button => {
-        button.classList.toggle('active', button.dataset.billOwnership === ownershipFilter);
-    });
     const categoryFilter = document.getElementById('bill-category-filter').value;
     const billSort = state.billTrackerSorts?.[ownershipFilter] || { key: ownershipFilter === 'personal' ? 'dueDay' : 'account', direction: 'asc' };
     document.getElementById('bill-sort-select').classList.add('hidden');
