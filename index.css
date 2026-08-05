@@ -102,6 +102,18 @@ body {
        descendants (e.g. the delivery table header) away from the real page scroll. */
     overflow-x: clip;
     -webkit-font-smoothing: antialiased;
+    /* iOS Safari's elastic "rubber-band" overscroll — pulling down past the very top of the page —
+       stretches the viewport open and can reveal page content above y:0 for a moment, including
+       above #safe-area-top-mask (which is sized to exactly cover the notch/Dynamic Island strip,
+       not an unbounded overscroll reveal). Confirmed real bug, 2026-08-05 ("still seeing details
+       behind notch/dynamic island" after the mask fix): the mask was covering the notch correctly
+       at rest, but momentary overscroll during a scroll gesture bypassed it. Disabling the bounce
+       at the source removes the reveal opportunity entirely, rather than trying to enlarge the mask
+       to chase an effectively unbounded overscroll distance. */
+    overscroll-behavior-y: none;
+}
+html {
+    overscroll-behavior-y: none;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -2067,6 +2079,35 @@ label {
     display: flex;
     justify-content: space-between;
     align-items: center;
+}
+
+/* Bill Settings card view — see the matching comment in app.js on why this card's HTML differs from
+   the shared .loan-card-top layout other overview cards (Credit Cards/Loans) still use unchanged.
+   Icon + Autopay/Manual share a row; the bill name sits centered on its own full-width row below,
+   instead of squeezed into the leftover space beside a small icon. Per explicit user request,
+   2026-08-05. */
+.bill-tracker-card-top {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+}
+.bill-tracker-card-icon-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+.bill-tracker-card-name {
+    width: 100%;
+    text-align: center;
+    margin: 0;
+}
+.bill-tracker-card-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.3rem;
+    width: 100%;
 }
 
 .loan-card-title {
@@ -4403,6 +4444,18 @@ body.maximized-calendar .day-transaction-item {
     #delivery-table .off-day-overlay-cell {
         display: none;
     }
+    /* With the platform columns and off-day banner both hidden just above, the table's real content
+       width on mobile no longer exceeds the viewport — confirmed live, 2026-08-05 (scrollWidth ===
+       clientWidth). That means the overflow-x:auto quirk this .table-responsive relied on (forcing
+       overflow-y to auto too, trapping the header's position:sticky inside its own non-scrolling box
+       instead of the real page scroll — see _updateDeliveryStickyOffsets() in app.js) no longer buys
+       anything on mobile: there's nothing left to horizontally scroll. Freeing it back to `visible`
+       here (same fix as Savings' own table-responsive) lets the header actually stick to the page as
+       you scroll, instead of silently never moving. Desktop, where all 4 platform columns really can
+       need horizontal scroll, is untouched. */
+    .delivery-grid-card .table-responsive {
+        overflow: visible !important;
+    }
     /* Tapping anywhere in the (now much shorter) row opens the platform picker — signal that with a
        pointer cursor and a little breathing room, same as any other tappable list row. */
     #delivery-table tbody tr {
@@ -4746,10 +4799,13 @@ body.maximized-calendar .day-transaction-item {
         padding: 0.4rem 0.3rem;
         font-size: 0.82rem;
     }
+    /* Amount widened (22% → 28%) and Name narrowed to compensate — 22% wasn't quite enough room for
+       a real dollar figure like "$1,000.00" without wrapping mid-number onto 2 lines; Name tolerates
+       wrapping far better than a currency amount does. Per explicit user request, 2026-08-05. */
     #billtracker-table-view .data-table th:nth-child(1),
-    #billtracker-table-view .data-table td:nth-child(1) { width: 55%; }
+    #billtracker-table-view .data-table td:nth-child(1) { width: 49%; }
     #billtracker-table-view .data-table th:nth-child(3),
-    #billtracker-table-view .data-table td:nth-child(3) { width: 22%; }
+    #billtracker-table-view .data-table td:nth-child(3) { width: 28%; }
     #billtracker-table-view .data-table th:nth-child(4),
     #billtracker-table-view .data-table td:nth-child(4) { width: 23%; }
     /* The Name cell's exclude/placeholder badges (exemptBadge/placeholderBadge in app.js) overlapped
@@ -5198,6 +5254,49 @@ body.maximized-calendar .day-transaction-item {
     }
     .header-top-row .header-title-compact p.header-subtitle-highlight {
         justify-content: center;
+    }
+    /* Credit Card/Loan detail pages: back button truly beside the icon+name now (a single row).
+       order:-2/-1 above (plus the centered-column layout) was the deliberate "safe approximation"
+       used 2026-08-05 because reaching inside .header-title-compact's own <h2> to place a sibling
+       felt too invasive at the time — this scoped override actually does it, since the shared
+       .header-title-compact class itself is untouched (only its layout WITHIN this specific
+       row-not-column context changes, so every other tab using that class is unaffected). Back
+       button keeps the hamburger-clearance margin that used to live on the title (it's the leftmost
+       element now, not the title). Per explicit user request, 2026-08-05. */
+    body[data-active-tab="creditcards"] .header-top-row,
+    body[data-active-tab="loans"] .header-top-row {
+        flex-direction: row;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        flex-wrap: nowrap;
+        gap: 0.5rem;
+    }
+    body[data-active-tab="creditcards"] #btn-cc-back,
+    body[data-active-tab="loans"] #btn-cc-back {
+        order: -1;
+        flex: 0 0 auto;
+        margin-left: 3.25rem;
+        white-space: nowrap;
+    }
+    body[data-active-tab="creditcards"] .header-top-row .header-title-compact,
+    body[data-active-tab="loans"] .header-top-row .header-title-compact {
+        order: 0;
+        /* Stays column, NOT row — .header-title-compact's 2 children are the <h2> (icon+name) and
+           the <p> stat-chip subtitle BELOW it (Balance/APR/Payoff etc. for these two tabs
+           specifically), which still need to stack vertically. Row here would put the whole
+           stat-chip line beside the name instead of under it. Only the icon+name <h2> sits beside
+           the back button — that's .header-top-row's own row direction, one level up. */
+        flex-direction: column;
+        align-items: flex-start;
+        text-align: left;
+        width: auto;
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 0;
+    }
+    body[data-active-tab="creditcards"] .header-top-row .header-title-compact p.header-subtitle-highlight,
+    body[data-active-tab="loans"] .header-top-row .header-title-compact p.header-subtitle-highlight {
+        justify-content: flex-start;
     }
     /* Calendar/List toggle has nothing left to toggle on mobile — enforceMobileListView() (app.js)
        already forces every view into List mode below this breakpoint since Calendar is unreadable
