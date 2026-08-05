@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-04 22:27';
+const BUILD_VERSION = '2026-08-05 07:27';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -9008,8 +9008,11 @@ function syncCollapseToggleButtons() {
 function updateGlobalNavVisibility() {
     const nav = document.getElementById('header-period-nav');
     if (!nav) return;
-    
-    const activeTab = state.activeTab || 'dashboard';
+
+    // document.body.dataset.activeTab, NOT state.activeTab — same reasoning as
+    // updateGlobalTogglesPlacement()'s own comment on this exact pattern (state.activeTab can be
+    // clobbered by a Google Drive pull to whatever tab a different device had open).
+    const activeTab = document.body.dataset.activeTab || 'dashboard';
     const isLoanHome = activeTab === 'loans' && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'loan');
     const isCreditCardHome = activeTab === 'creditcards' && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'credit');
     const shouldHideNav = activeTab === 'sync' || isLoanHome || isCreditCardHome;
@@ -9034,7 +9037,15 @@ function updateGlobalTogglesPlacement() {
     const hostViewToggle = document.getElementById('header-view-toggle-host');
     if (!host) return;
 
-    const activeTab = state.activeTab || 'dashboard';
+    // document.body.dataset.activeTab, NOT state.activeTab — same reasoning as
+    // relocateMobileStickyHeader()'s own comment on this exact pattern: state.activeTab is a
+    // persisted preference that a Google Drive pull overwrites wholesale with whatever tab was
+    // active on the last device that pushed, which can disagree with which .tab-view is actually on
+    // screen right now. Confirmed real bug, 2026-08-05: pulling from Drive while on the Dashboard
+    // tab silently hid every Dashboard-only toggle (Personal/Joint, Month/Full Year, the cycle
+    // filter) because this function computed visibility for whatever tab the OTHER device had open
+    // instead, even though the visible page was still clearly the Dashboard.
+    const activeTab = document.body.dataset.activeTab || 'dashboard';
 
     const allToggles = [
         'dashboard-toggle-container', // The Personal/Joint toggle
@@ -9215,7 +9226,12 @@ function updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans) {
 
     const todayBtn = document.getElementById('btn-header-today');
     if (todayBtn) {
-        const hideToday = isLoans || activeTab === 'bills' || activeTab === 'billsplitter' || isBillTrackerCards;
+        // isCreditCardHome (the account-list overview, no card selected) hides the button too, same
+        // as isLoans already does unconditionally for its own overview+detail — per explicit user
+        // request, 2026-08-04: the overview page has no date-nav/calendar context for "jump to
+        // today" to jump to (headerPeriodNav is hidden there too, just above). The detail page
+        // (isDebtDetail) keeps it, unaffected.
+        const hideToday = isLoans || isCreditCardHome || activeTab === 'bills' || activeTab === 'billsplitter' || isBillTrackerCards;
         todayBtn.classList.toggle('hidden', hideToday);
         // Bill Settings' List/Calendar sub-views only ever jump to the current *month* here (no
         // single day is meaningful the way it is on Dashboard/Savings) — relabeled so the button
@@ -16381,6 +16397,21 @@ function _updateListViewStickyOffset() {
     ccTableHeaders.forEach(th => {
         th.style.top = `${dashboardHeight + ccHeaderHeight}px`;
     });
+
+    // 3. Savings Ledger header & table headers — per explicit user request, 2026-08-05, same pattern
+    // as Personal/Joint and CC above. Shared between Calendar and List view (one header above both),
+    // so the table-header pass below is a no-op whenever #savings-list-view is hidden (Calendar mode
+    // — querySelectorAll against a table that isn't showing just returns nothing to iterate).
+    const savingsHeader = document.getElementById('savings-list-sticky-header');
+    let savingsHeaderHeight = 0;
+    if (savingsHeader) {
+        savingsHeader.style.top = `${dashboardHeight}px`;
+        savingsHeaderHeight = savingsHeader.getBoundingClientRect().height;
+    }
+    const savingsTableHeaders = document.querySelectorAll('#savings-list-view .data-table th');
+    savingsTableHeaders.forEach(th => {
+        th.style.top = `${dashboardHeight + savingsHeaderHeight}px`;
+    });
 }
 
 if (typeof window !== 'undefined') {
@@ -16408,12 +16439,29 @@ function _updateDeliveryStickyOffsets() {
     const table = document.getElementById('delivery-table');
     if (!colToggles || !table) return;
 
-    const stickyDashboard = document.querySelector('.main-sticky-dashboard');
-    const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
-    const dashboardHeight = dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
+    // On mobile, .delivery-grid-card .table-responsive (index.css, mobile media query) TRIES to stay
+    // overflow-y:visible while scrolling horizontally (overflow-x:auto) so the table header's
+    // position:sticky keeps resolving against the page's own scroll, same as desktop — but per the
+    // CSS Overflow spec, setting overflow-x to anything but visible forces the OTHER axis's computed
+    // value to auto too, even when explicitly written as visible (the exact same quirk documented on
+    // body's own overflow-x:clip above). Confirmed live, 2026-08-05: overflow-y computes to "auto"
+    // there regardless, making .table-responsive its own independently-scrolling box on mobile — so
+    // "stick to the top of MY OWN box" (offset 0) is the only offset that's ever correct there,
+    // regardless of whether .main-sticky-dashboard above it is ALSO sticky (a separate, unrelated
+    // scroll context once that quirk kicks in). Applying the outer pinned header's height as this
+    // offset — correct for desktop, where the table really does share the page's own scroll — instead
+    // pushed the table header down into the middle of its own already-independently-scrolling rows on
+    // mobile once Delivery joined MOBILE_STICKY_HEADER_TABS and the outer header became sticky there.
+    const dashboardHeight = isMobileViewport()
+        ? 0
+        : (() => {
+            const stickyDashboard = document.querySelector('.main-sticky-dashboard');
+            const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
+            return dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
+        })();
 
     // .delivery-col-toggles is not sticky (see index.css) — only the header itself pins, directly
-    // below whatever's sticky above it (the dashboard on desktop, nothing on mobile).
+    // below whatever's sticky above it (the dashboard on desktop, nothing on mobile — see above).
     table.querySelectorAll('thead th').forEach(th => {
         th.style.top = `${dashboardHeight}px`;
     });
@@ -21701,7 +21749,6 @@ function setupCCDashboardListeners() {
         Object.keys(columnFilterState).forEach(k => { if (k.startsWith('ccList:')) delete columnFilterState[k]; });
         if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
     };
-    document.getElementById('btn-clear-cc-filters').addEventListener('click', resetCCListFiltersAndSort);
     document.getElementById('btn-reset-cclist-filters').addEventListener('click', resetCCListFiltersAndSort);
     // Opens the real #cc-quick-add-form in a popup — see the button's own comment in Index.html.
     document.getElementById('btn-open-cclist-add-modal').addEventListener('click', () => {
@@ -22631,9 +22678,14 @@ function renderCardDashboard(cardId) {
     const isLoan = card.type === 'loan';
     const detailLayout = document.getElementById('cc-dashboard-layout');
     detailLayout?.classList.toggle('loan-dashboard-mode', isLoan);
-    document.getElementById('btn-cc-back').textContent = isLoan ? '← Back to Installment Loans' : '← Back to Credit Cards';
+    // Shortened for Loans specifically per explicit user request, 2026-08-05 ("simply '← Loans'") —
+    // Credit Cards' own label wasn't part of that ask, left as-is.
+    document.getElementById('btn-cc-back').textContent = isLoan ? '← Loans' : '← Back to Credit Cards';
     updateCCAccountNavControls(card);
     document.getElementById('btn-add-loan-payment').classList.toggle('hidden', !isLoan);
+    // +Payment replaces +Transaction on Loans — a loan's ledger only ever takes payments, never an
+    // arbitrary transaction. Per explicit user request, 2026-08-05.
+    document.getElementById('btn-open-cclist-add-modal').classList.toggle('hidden', isLoan);
     document.getElementById('card-payment-plans-summary')?.classList.toggle('hidden', isLoan);
     document.getElementById('cc-payoff-title').textContent = isLoan
         ? 'Loan Payoff Planner & Line Graph'
@@ -25184,11 +25236,21 @@ function initLongPressDetailOverlay() {
                 <div class="mobile-row-detail-list"></div>
             </div>`;
         document.body.appendChild(overlay);
+        // .scroll-top-btn's z-index (600) sits above this overlay's (300) — its own faded/visible
+        // state (toggled purely by scroll position, see the scroll listener elsewhere) knows nothing
+        // about this overlay, so it could render on top of and obscure Running Balance/whatever the
+        // last detail row happens to be. Confirmed real bug, 2026-08-05. Explicitly hidden/restored
+        // alongside the overlay itself rather than fixed via z-index alone, since a lower z-index on
+        // the overlay would just let some OTHER fixed element repeat the same problem later.
+        const hideScrollTop = () => document.getElementById('btn-scroll-top')?.classList.add('hidden');
+        const restoreScrollTop = () => document.getElementById('btn-scroll-top')?.classList.remove('hidden');
         overlay.addEventListener('click', e => {
             if (e.target === overlay || e.target.closest('.mobile-row-detail-close')) {
                 overlay.classList.add('hidden');
+                restoreScrollTop();
             }
         });
+        overlay._hideScrollTop = hideScrollTop;
         return overlay;
     }
 
@@ -25200,6 +25262,7 @@ function initLongPressDetailOverlay() {
             `<div class="mobile-row-detail-item"><span class="mobile-row-detail-label">${escapeHTML(p.label)}</span><span class="mobile-row-detail-value">${escapeHTML(p.value)}</span></div>`
         ).join('');
         overlay.classList.remove('hidden');
+        overlay._hideScrollTop();
     }
 
     function clearPress() {
