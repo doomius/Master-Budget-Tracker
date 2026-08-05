@@ -10,6 +10,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+    <!-- Permanent opaque mask over the safe-area-inset-top strip (notch/Dynamic Island, standalone/
+         home-screen mode only — env(safe-area-inset-top) is 0 in a normal Safari tab, so this is a
+         no-op there). Confirmed real bug, 2026-08-05: scrolled list content was visible through that
+         strip around the Dynamic Island on a real phone. .main-sticky-dashboard already reserves
+         this space with its own padding-top once it's the element actually stuck at the top, but
+         that only covers pages/moments where it IS the stuck element — this covers the strip
+         unconditionally, every page, every scroll position, independent of whatever's stuck. Fixed
+         (not sticky) and pinned above every other layer (main-sticky-dashboard is z-index 45,
+         scroll-top-btn 600) so nothing can ever paint above it. -->
+    <div id="safe-area-top-mask" aria-hidden="true"></div>
     <div id="app-busy-overlay" class="app-busy-overlay hidden" aria-hidden="true">
         <div class="app-busy-spinner"></div>
     </div>
@@ -441,9 +451,9 @@
                                      not mobile-gated). Right-justified as a group (margin-left: auto). Per
                                      explicit user request, 2026-08-04. -->
                                 <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-left: auto;">
-                                    <button type="button" class="action-btn small-btn solid-btn" id="btn-open-listview-add-modal">+ Add Transaction</button>
-                                    <button type="button" class="action-btn small-btn outline-btn" id="btn-export-listview-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
-                                    <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-listview-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                                    <button type="button" class="action-btn small-btn solid-btn" id="btn-open-listview-add-modal">+ Transaction</button>
+                                    <button type="button" class="action-btn small-btn outline-btn" id="btn-export-listview-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Download CSV</button>
+                                    <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-listview-filters" title="Clear this table's column filters and sort">Clear</button>
                                 </div>
                             </div>
                             <div id="list-view-tools-wrapper">
@@ -534,7 +544,7 @@
                                             <button type="button" class="segment-btn active" data-expense-date-mode="transfer">Transfer Date</button>
                                         </div>
                                         <button class="action-btn small-btn solid-btn" id="btn-add-joint-bill">+ Add Joint Expense</button>
-                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-jointbills-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-jointbills-filters" title="Clear this table's column filters and sort">Clear</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="joint-expenses-content" data-key="jointBills">Hide</button>
                                     </div>
                                 </div>
@@ -577,7 +587,7 @@
                                         <button type="button" class="action-btn small-btn danger-btn hidden" id="btn-delete-selected-allocations" title="Delete only the checked allocations">Delete Selected</button>
                                         <button type="button" class="action-btn small-btn danger-btn" id="btn-clear-month-allocations" title="Remove every personal allocation shown for the current month">Clear This Month</button>
                                         <button type="button" class="action-btn small-btn danger-btn" id="btn-clear-recurring-allocations" title="Delete every recurring allocation series and all of its generated occurrences, in every month">Clear All Recurring</button>
-                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-allocations-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-allocations-filters" title="Clear this table's column filters and sort">Clear</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="personal-allocations-content" data-key="personalAllocations">Hide</button>
                                     </div>
                                 </div>
@@ -645,9 +655,13 @@
                                                 <option value="payDate">Pay Date</option>
                                             </select>
                                         </label>
-                                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-export-billtracker-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
-                                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-reset-billtracker-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
-                                        <button class="action-btn small-btn solid-btn" id="btn-add-bill-tracker-setting">+ Add Bill Setting</button>
+                                        <!-- Per explicit user request, 2026-08-05: this row reads +Bill, Download CSV
+                                             (desktop-only — see index.css), Clear, in that left-to-right order — DOM
+                                             order here is what determines wrap grouping since this whole header row
+                                             is just one flex-wrap container. -->
+                                        <button class="action-btn small-btn solid-btn" id="btn-add-bill-tracker-setting">+ Bill</button>
+                                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-export-billtracker-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Download CSV</button>
+                                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-reset-billtracker-filters" title="Clear this table's column filters and sort">Clear</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="billtracker-list-content" data-key="billTrackerList">Hide</button>
                                     </div>
                                 </div>
@@ -699,7 +713,7 @@
                                     </div>
                                     <div style="display:flex; gap:0.5rem; align-items:center;">
                                         <button class="action-btn small-btn solid-btn" id="btn-add-seasonal">+ Add Seasonal Expense</button>
-                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-seasonal-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-seasonal-filters" title="Clear this table's column filters and sort">Clear</button>
                                         <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="seasonal-expenses-content" data-key="seasonal">Hide</button>
                                     </div>
                                 </div>
@@ -831,6 +845,13 @@
                     </section>
                     </div>
 
+                    <!-- .list-view-sticky-header: same "stays pinned while scrolling a long list"
+                         treatment already used by the Dashboard and Credit Card/Loan ledgers (see
+                         _updateListViewStickyOffset() in app.js, extended to cover this header too) —
+                         per explicit user request, 2026-08-05. Shared between Calendar and List view
+                         (this header sits above both), harmless in Calendar view since that content
+                         doesn't scroll the same way. -->
+                    <div class="list-view-sticky-header" id="savings-list-sticky-header">
                     <div class="table-card-header savings-view-header">
                         <h3 id="savings-ledger-title">Savings Calendar</h3>
                         <div style="display: flex; align-items: center; gap: 0.75rem;">
@@ -842,12 +863,13 @@
                                  the same real #savings-transfer-form in a modal, same mechanism as the
                                  mobile FAB (see openMobileQuickAddModal()/relocateQuickAddFormIntoModal()
                                  in app.js) but not gated to mobile-only. -->
-                            <button type="button" class="action-btn small-btn solid-btn" id="btn-open-savings-add-modal">+ Add Transaction</button>
-                            <button type="button" class="action-btn small-btn outline-btn" id="btn-export-savingslist-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
-                            <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                            <button type="button" class="action-btn small-btn solid-btn" id="btn-open-savings-add-modal">+ Transaction</button>
+                            <button type="button" class="action-btn small-btn outline-btn" id="btn-export-savingslist-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Download CSV</button>
+                            <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Clear</button>
                         </div>
                     </div>
                     <input type="search" id="savings-list-master-search" class="custom-input" placeholder="Search description, type, date, amount..." style="margin-bottom: 1rem; width: 100%; box-sizing: border-box;">
+                    </div>
                     <div class="view-grid savings-calendar-layout" id="savings-calendar-layout">
                         <div id="savings-calendar-view" class="calendar-card glass-card">
                             <div class="calendar-header-grid"><div>Sunday</div><div>Monday</div><div>Tuesday</div><div>Wednesday</div><div>Thursday</div><div>Friday</div><div>Saturday</div></div>
@@ -1213,7 +1235,10 @@
                                          full header width. Per explicit user request, 2026-08-04. -->
                                     <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 220px; max-width: 360px;">
                                         <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="🔍 Search merchant, description, owner, trip, date, amount..." style="margin: 0; width: 100%;">
-                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: nowrap; align-self: flex-start;"></div>
+                                        <!-- white-space was nowrap — per explicit user request, 2026-08-05, this cut the
+                                             pill off at the screen edge on mobile instead of wrapping like everything
+                                             else in this header does. -->
+                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: normal; align-self: flex-start;"></div>
                                     </div>
                                     <!-- Opens the real #cc-quick-add-form in a popup instead of a second,
                                          separate inline add-charge form sitting here full-time — same
@@ -1223,15 +1248,20 @@
                                          #cc-quick-add-form missing that form's recurring-charge and
                                          promo-rate-tracking fields — this is a strict functionality
                                          upgrade, not just a relocation. Right-justified as a group
-                                         (margin-left: auto). Per explicit user request, 2026-08-04. -->
+                                         (margin-left: auto). Per explicit user request, 2026-08-04.
+                                         +Payment (renamed from +Extra Loan Payment, moved here from the
+                                         filter-tools row below) replaces +Transaction on Loans specifically
+                                         — a loan's ledger only ever takes payments, never arbitrary
+                                         transactions — see renderCardDashboard()'s isLoan toggle in app.js.
+                                         Per explicit user request, 2026-08-05. -->
                                     <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-left: auto;">
-                                        <button type="button" class="action-btn small-btn solid-btn" id="btn-open-cclist-add-modal">+ Add Transaction</button>
-                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-export-cc-list-csv" title="Export the currently visible rows (respects search/filters) as a CSV file, openable in Excel">⬇ Export CSV</button>
-                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-cclist-filters" title="Clear this table's column filters and sort">Reset Filters/Sort</button>
+                                        <button type="button" class="action-btn small-btn solid-btn" id="btn-open-cclist-add-modal">+ Transaction</button>
+                                        <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-add-loan-payment" title="Post an additional payment to this loan">+ Payment</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-export-cc-list-csv" title="Export the currently visible rows (respects search/filters) as a CSV file, openable in Excel">⬇ Download CSV</button>
+                                        <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-cclist-filters" title="Clear this table's column filters and sort">Clear</button>
                                     </div>
                                 </div>
                                 <div class="cc-list-tools cc-filter-tools">
-                                    <button type="button" class="action-btn small-btn solid-btn hidden" id="btn-add-loan-payment" title="Post an additional payment to this loan">+ Extra Loan Payment</button>
                                     <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
                                         <option value="all">All merchants</option>
                                     </select>
@@ -1243,7 +1273,9 @@
                                     <select id="cc-list-filter-trip" class="custom-select" aria-label="Filter by trip">
                                         <option value="all">All trips</option>
                                     </select>
-                                    <button type="button" id="btn-clear-cc-filters" class="action-btn outline-btn">Clear Filters</button>
+                                    <!-- #btn-clear-cc-filters removed, 2026-08-05, per explicit user request — exact
+                                         duplicate of #btn-reset-cclist-filters above (both call the same
+                                         resetCCListFiltersAndSort() handler; see app.js). -->
                                 </div>
                             </div>
 
@@ -2020,7 +2052,14 @@
     <!-- Transaction Edit Modal Dialog -->
     <dialog id="edit-tx-dialog" class="glass-modal">
         <form id="edit-tx-form">
-            <h3 id="edit-tx-modal-title">Edit Transaction</h3>
+            <!-- tabindex="-1" + autofocus: <dialog>.showModal() auto-focuses the first focusable
+                 descendant if nothing else claims autofocus, which for this form is the Date field
+                 (before Description/Amount) — and focusing an <input type="date"> on iOS Safari
+                 auto-opens its native picker wheel, so every open of this dialog immediately showed
+                 the calendar instead of the edit form. Confirmed real bug, 2026-08-05. Giving the
+                 title autofocus (tabindex="-1" makes an otherwise-inert heading focus-targetable)
+                 pre-empts that fallback for every path that opens this shared dialog, not just one. -->
+            <h3 id="edit-tx-modal-title" tabindex="-1" autofocus>Edit Transaction</h3>
             <input type="hidden" id="edit-tx-id">
             <input type="hidden" id="edit-tx-date-orig">
             <input type="hidden" id="edit-tx-mode" value="edit">
