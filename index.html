@@ -879,7 +879,11 @@
                     <div class="list-view-sticky-header" id="savings-list-sticky-header">
                     <div class="table-card-header savings-view-header">
                         <h3 id="savings-ledger-title">Savings Calendar</h3>
-                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <!-- Narrowed and moved inline with the title/buttons instead of its own
+                             full-width row below — per explicit user request, 2026-08-05, matching
+                             the Credit Card ledger's own search-box placement. -->
+                        <input type="search" id="savings-list-master-search" class="custom-input" placeholder="Search description, type, date, amount..." style="flex: 1 1 auto; min-width: 150px; max-width: 320px; margin: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; margin-left: auto;">
                             <!-- Reachable regardless of Calendar/List view or device — the inline
                                  "Add Savings Entry" form below only ever shows in Calendar view, and
                                  mobile forces List with no way back to Calendar (see
@@ -893,7 +897,6 @@
                             <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Clear</button>
                         </div>
                     </div>
-                    <input type="search" id="savings-list-master-search" class="custom-input" placeholder="Search description, type, date, amount..." style="margin-bottom: 1rem; width: 100%; box-sizing: border-box;">
                     </div>
                     <div class="view-grid savings-calendar-layout" id="savings-calendar-layout">
                         <div id="savings-calendar-view" class="calendar-card glass-card">
