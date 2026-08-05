@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-05 07:27';
+const BUILD_VERSION = '2026-08-05 15:36';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -72,7 +72,17 @@ function _createBlankState() {
         // start of `date` and ignores everything before it — see getPersonalStartingBalanceAnchor()/
         // getJointStartingBalanceAnchor() and the checkpoint functions that consult them.
         personalStartingBalance: null,
-        jointStartingBalance: null
+        jointStartingBalance: null,
+        // Account Login URL + custom uploaded icon for the three accounts that aren't entries in
+        // state.loans[] (Personal/Joint checking, Savings) — everything else about them (starting
+        // balance, payroll) already had its own field above; these two are new, per explicit user
+        // request, 2026-08-05, mirroring the loginUrl/icon pattern loans already have.
+        personalLoginUrl: '',
+        jointLoginUrl: '',
+        savingsLoginUrl: '',
+        personalIcon: '',
+        jointIcon: '',
+        savingsIcon: ''
     };
 }
 
@@ -1354,6 +1364,12 @@ function migrateDatabase() {
     if (!state.seasonalExpenses) { state.seasonalExpenses = []; migrated = true; }
     if (state.personalStartingBalance === undefined) { state.personalStartingBalance = null; migrated = true; }
     if (state.jointStartingBalance === undefined) { state.jointStartingBalance = null; migrated = true; }
+    if (state.personalLoginUrl === undefined) { state.personalLoginUrl = ''; migrated = true; }
+    if (state.jointLoginUrl === undefined) { state.jointLoginUrl = ''; migrated = true; }
+    if (state.savingsLoginUrl === undefined) { state.savingsLoginUrl = ''; migrated = true; }
+    if (state.personalIcon === undefined) { state.personalIcon = ''; migrated = true; }
+    if (state.jointIcon === undefined) { state.jointIcon = ''; migrated = true; }
+    if (state.savingsIcon === undefined) { state.savingsIcon = ''; migrated = true; }
     if (!state.manualTransfers) { state.manualTransfers = []; migrated = true; }
     if (!state.deliveryBudgets) { state.deliveryBudgets = {}; migrated = true; }
     if (!state.billsAndAllocationsCleared20260714) {
@@ -2001,6 +2017,10 @@ function migrateDatabase() {
             }
             if (loan.loginUrl === undefined) {
                 loan.loginUrl = '';
+                migrated = true;
+            }
+            if (loan.customIconDataUrl === undefined) {
+                loan.customIconDataUrl = '';
                 migrated = true;
             }
             if (loan.isStoreCard === undefined) {
@@ -3700,6 +3720,7 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         // desktop-sized dashboard (metrics expanded, quick-add form expanded) despite the mobile
         // defaults being set correctly moments earlier, pre-pull.
         _mobileMetricsDefaultApplied = false;
+        _desktopBillsDefaultApplied = false;
         saveDatabase(true); // skipAutoSync — bringing local state in line with the Drive file is not a new edit to push back
         // renderAppImmediate() (synchronous), NOT renderApp() (which defers the actual paint to a
         // double-rAF, with a setTimeout fallback only after RENDER_RAF_FALLBACK_MS — see its own
@@ -3810,6 +3831,42 @@ function showSyncStatusFlag(status, message) {
         // Detail popover is already open — keep it live rather than making the user re-click.
         document.getElementById('sync-status-detail-message').textContent = message;
         document.getElementById('sync-status-detail-time').textContent = `at ${flag.dataset.time}`;
+    }
+    updateMobileSyncBadge(status, message);
+}
+
+let _mobileSyncBadgeFadeTimer = null;
+// Mobile counterpart to the sidebar's #sync-status-flag (see its own comment above) — same
+// status/message, driven from the same single call site, but pinned bottom-left so it's visible
+// without opening the hamburger menu. A successful sync fades itself out on its own after a few
+// seconds since there's nothing to act on; a failure stays parked (no timer) until the user taps it
+// and either reads the detail or retries — silently disappearing would defeat the entire point of a
+// sync-failure indicator. Per explicit user request, 2026-08-05.
+function updateMobileSyncBadge(status, message) {
+    const badge = document.getElementById('mobile-sync-badge');
+    const icon = document.getElementById('mobile-sync-badge-icon');
+    if (!badge || !icon) return;
+    clearTimeout(_mobileSyncBadgeFadeTimer);
+    badge.classList.remove('hidden', 'fading-out', 'mobile-sync-badge-pending', 'mobile-sync-badge-success', 'mobile-sync-badge-error');
+    badge.classList.add(`mobile-sync-badge-${status}`);
+    icon.textContent = status === 'pending' ? '🔄' : status === 'success' ? '👍' : '😞';
+    badge.dataset.message = message;
+    badge.dataset.time = _logTimestamp();
+    badge.title = message;
+    const detail = document.getElementById('mobile-sync-badge-detail');
+    if (detail && !detail.classList.contains('hidden')) {
+        document.getElementById('mobile-sync-badge-detail-message').textContent = message;
+        document.getElementById('mobile-sync-badge-detail-time').textContent = `at ${badge.dataset.time}`;
+    }
+    if (status === 'success') {
+        _mobileSyncBadgeFadeTimer = setTimeout(() => {
+            badge.classList.add('fading-out');
+            detail?.classList.add('hidden');
+            // Matches the opacity transition duration in index.css — actually hide it (not just
+            // transparent) once the fade finishes, so it isn't sitting there invisibly intercepting
+            // taps over whatever's underneath.
+            setTimeout(() => badge.classList.add('hidden'), 600);
+        }, 3000);
     }
 }
 
@@ -3947,17 +4004,25 @@ function openGigPlatformPicker(date) {
     document.getElementById('gig-platform-picker-subtitle').textContent = formatDateDisplay(date);
     dialog.dataset.date = date;
 
-    // Show each platform's current total right on its button — otherwise the only way to see what
-    // was already logged for a day was to tap into each platform one at a time, per user feedback.
+    // Show each platform's current total AND entry count right on its button — otherwise the only
+    // way to see what was already logged for a day was to tap into each platform one at a time, per
+    // user feedback. Count shown as "Door Dash - 2" (per explicit user request, 2026-08-05); amount
+    // stays right-justified via the existing .gig-platform-picker-btn (justify-content: space-between).
     const rec = state.deliveryEarnings.find(item => item.date === date);
+    let dayTotal = 0;
     dialog.querySelectorAll('.gig-platform-picker-btn').forEach(btn => {
         const key = btn.dataset.key;
         const capKey = key.charAt(0).toUpperCase() + key.slice(1);
         const noEarn = !!(rec && rec['noEarn' + capKey]);
         const amount = rec ? (Number(rec[key]) || 0) : 0;
+        if (!noEarn) dayTotal += amount;
+        const entryCount = rec && Array.isArray(rec[key + 'Entries']) ? rec[key + 'Entries'].length : 0;
+        const labelText = entryCount > 0 ? `${btn.dataset.label} - ${entryCount}` : btn.dataset.label;
         const amountText = noEarn ? 'No earnings' : `$${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        btn.innerHTML = `<span class="gig-platform-picker-btn-label">${btn.dataset.label}</span><span class="gig-platform-picker-btn-amount">${amountText}</span>`;
+        btn.innerHTML = `<span class="gig-platform-picker-btn-label">${escapeHTML(labelText)}</span><span class="gig-platform-picker-btn-amount">${amountText}</span>`;
     });
+    const dayTotalEl = document.getElementById('gig-platform-picker-day-total');
+    if (dayTotalEl) dayTotalEl.textContent = `$${dayTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     dialog.showModal();
 }
 
@@ -4648,16 +4713,34 @@ function setupEventListeners() {
     // Gig platform picker (mobile Delivery Earnings log) — see openGigPlatformPicker(). Picking a
     // platform closes this dialog and opens the existing per-platform gig-entry-dialog for it.
     const gigPlatformPickerDialog = document.getElementById('gig-platform-picker-dialog');
+    const gigEntryDialogEl = document.getElementById('gig-entry-dialog');
     if (gigPlatformPickerDialog) {
         gigPlatformPickerDialog.querySelectorAll('.gig-platform-picker-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const date = gigPlatformPickerDialog.dataset.date;
                 gigPlatformPickerDialog.close();
+                // Marks gig-entry-dialog so its own 'close' listener (below) knows to reopen this
+                // picker afterward — set ONLY on this mobile picker->entry path, not the desktop
+                // per-column-cell path (openGigEntryDialog called directly from renderDeliveryTab),
+                // so desktop's flow is completely unaffected. Per explicit user request, 2026-08-05:
+                // after saving OR cancelling one platform's entry, land back on the picker instead of
+                // the underlying page, so logging several platforms for the same day is one tap each
+                // instead of re-opening the picker fresh every time.
+                if (gigEntryDialogEl) gigEntryDialogEl.dataset.reopenPickerDate = date;
                 openGigEntryDialog(date, btn.dataset.key, btn.dataset.label);
             });
         });
         document.getElementById('btn-cancel-gig-platform-picker')?.addEventListener('click', () => gigPlatformPickerDialog.close());
     }
+    // Native 'close' fires for every dismissal path alike — Done (form submit), Escape, and backdrop
+    // click — so this one listener covers both "save" and "cancel" per the request above without
+    // needing to duplicate the reopen logic on each dismissal path separately.
+    gigEntryDialogEl?.addEventListener('close', () => {
+        const date = gigEntryDialogEl.dataset.reopenPickerDate;
+        if (!date) return;
+        delete gigEntryDialogEl.dataset.reopenPickerDate;
+        openGigPlatformPicker(date);
+    });
 
     // Segmented Dashboard toggles (Personal vs Joint)
     document.querySelectorAll('#dashboard-toggle-container .segment-btn').forEach(btn => {
@@ -4797,51 +4880,142 @@ function setupEventListeners() {
     document.getElementById('btn-open-savings-add-modal').addEventListener('click', () => {
         openMobileQuickAddModal();
     });
-    document.getElementById('btn-open-savings-balance').addEventListener('click', () => {
+    // Shared by both the Account Settings (Personal/Joint) and Savings Account Settings dialogs —
+    // wires an upload-trigger/file-input/remove-button/preview-span quad the same way
+    // renderLoanIconPreview() does for loan-dialog. Returns a getter for the current data URL so the
+    // submit handler can read it without needing its own module-level variable per dialog.
+    function setupAccountIconEditor({ triggerId, inputId, removeId, previewId, currentValue, defaultEmoji, label }) {
+        let dataUrl = currentValue || '';
+        const preview = document.getElementById(previewId);
+        const removeBtn = document.getElementById(removeId);
+        const render = () => {
+            const icon = dataUrl ? getCustomAccountIcon(dataUrl, label) : { glyph: defaultEmoji, label, image: false };
+            if (preview) {
+                preview.innerHTML = icon.glyph;
+                preview.classList.toggle('has-logo', !!icon.image);
+            }
+            removeBtn?.classList.toggle('hidden', !dataUrl);
+        };
+        render();
+        document.getElementById(triggerId)?.addEventListener('click', () => document.getElementById(inputId)?.click());
+        document.getElementById(inputId)?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            readImageFileAsDataUrl(file, (result) => { dataUrl = result; render(); });
+            e.target.value = '';
+        });
+        removeBtn?.addEventListener('click', () => { dataUrl = ''; render(); });
+        return { get: () => dataUrl, set: (v) => { dataUrl = v || ''; render(); } };
+    }
+
+    const savingsIconEditor = setupAccountIconEditor({
+        triggerId: 'btn-savings-settings-icon-upload-trigger', inputId: 'savings-settings-icon-upload',
+        removeId: 'btn-savings-settings-icon-remove', previewId: 'savings-settings-icon-preview',
+        currentValue: state.savingsIcon, defaultEmoji: '💰', label: 'Savings'
+    });
+    document.getElementById('btn-open-savings-account-settings').addEventListener('click', () => {
         document.getElementById('savings-current-amount').value = getSavingsStartingBalance().toFixed(2);
+        document.getElementById('savings-settings-login-url').value = state.savingsLoginUrl || '';
+        savingsIconEditor.set(state.savingsIcon);
         document.getElementById('savings-balance-dialog').showModal();
     });
     document.getElementById('btn-cancel-savings-balance').addEventListener('click', () => document.getElementById('savings-balance-dialog').close());
+    document.getElementById('savings-balance-form').addEventListener('submit', event => {
+        event.preventDefault();
+        const amount = Number(document.getElementById('savings-current-amount').value);
+        if (!Number.isFinite(amount)) return;
+        state.savingsStartingBalance = amount;
+        state.savingsCurrentAmount = amount;
+        state.savingsLoginUrl = document.getElementById('savings-settings-login-url').value.trim();
+        state.savingsIcon = savingsIconEditor.get();
+        saveDatabase();
+        document.getElementById('savings-balance-dialog').close();
+        renderApp();
+        logSuccess(`Savings account settings updated.`);
+    });
 
-    document.getElementById('btn-open-starting-balance').addEventListener('click', () => {
-        document.getElementById('starting-balance-form').reset();
-        document.getElementById('starting-balance-account').value = state.dashboardType === 'joint' ? 'joint' : 'personal';
-        document.getElementById('starting-balance-date').value = formatLocalDate(new Date());
-        document.getElementById('starting-balance-dialog').showModal();
+    const accountSettingsIconEditor = setupAccountIconEditor({
+        triggerId: 'btn-account-settings-icon-upload-trigger', inputId: 'account-settings-icon-upload',
+        removeId: 'btn-account-settings-icon-remove', previewId: 'account-settings-icon-preview',
+        currentValue: '', defaultEmoji: '🏠', label: 'Checking'
+    });
+    // Consolidated Personal/Joint Account Settings — Starting Balance (optional, only when both date
+    // + amount are filled), Account Login URL, custom Icon, and (Personal only) a way into the full
+    // Payroll dialog. Replaces the old separate "Starting Balance"/"Payroll" header buttons. Per
+    // explicit user request, 2026-08-05.
+    const populateAccountSettingsDialog = () => {
+        const account = document.getElementById('account-settings-account').value === 'joint' ? 'joint' : 'personal';
+        const isJoint = account === 'joint';
+        document.getElementById('account-settings-title').textContent = isJoint ? 'Joint Checking Settings' : 'Personal Checking Settings';
+        document.getElementById('account-settings-login-url').value = (isJoint ? state.jointLoginUrl : state.personalLoginUrl) || '';
+        accountSettingsIconEditor.set(isJoint ? state.jointIcon : state.personalIcon);
+        document.getElementById('account-settings-payroll-group').classList.toggle('hidden', isJoint);
+        document.getElementById('starting-balance-date').value = '';
+        document.getElementById('starting-balance-amount').value = '';
+    };
+    document.getElementById('btn-open-account-settings').addEventListener('click', () => {
+        document.getElementById('account-settings-account').value = state.dashboardType === 'joint' ? 'joint' : 'personal';
+        populateAccountSettingsDialog();
+        document.getElementById('account-settings-dialog').showModal();
+    });
+    document.getElementById('account-settings-account').addEventListener('change', populateAccountSettingsDialog);
+    document.getElementById('btn-account-settings-open-payroll').addEventListener('click', () => {
+        document.getElementById('account-settings-dialog').close();
+        window.openPayrollConfigModal();
     });
     const auditBtn = document.getElementById('btn-open-integrity-audit');
     if (auditBtn) auditBtn.addEventListener('click', showIntegrityAuditModal);
-    document.getElementById('btn-cancel-starting-balance').addEventListener('click', () => document.getElementById('starting-balance-dialog').close());
-    document.getElementById('starting-balance-form').addEventListener('submit', async (e) => {
+    document.getElementById('btn-cancel-account-settings').addEventListener('click', () => document.getElementById('account-settings-dialog').close());
+    document.getElementById('account-settings-form').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const account = document.getElementById('starting-balance-account').value === 'joint' ? 'joint' : 'personal';
+        const account = document.getElementById('account-settings-account').value === 'joint' ? 'joint' : 'personal';
+        const loginUrl = document.getElementById('account-settings-login-url').value.trim();
+        const iconDataUrl = accountSettingsIconEditor.get();
+        if (account === 'joint') {
+            state.jointLoginUrl = loginUrl;
+            state.jointIcon = iconDataUrl;
+        } else {
+            state.personalLoginUrl = loginUrl;
+            state.personalIcon = iconDataUrl;
+        }
+
+        // Starting Balance reset is optional here (blank by default) — only run the destructive
+        // wipe-and-reset when the user actually filled both fields in. Per explicit user request,
+        // 2026-08-05: this dialog now covers icon/login/starting-balance/payroll together, but the
+        // balance reset is still rare enough (and destructive enough) that it shouldn't run just
+        // because the dialog was opened to change something else.
         const dateStr = document.getElementById('starting-balance-date').value;
         const amount = Number(document.getElementById('starting-balance-amount').value);
-        if (!dateStr || !Number.isFinite(amount)) return;
-        const accountLabel = account === 'joint' ? 'Joint Checking' : 'Personal Checking';
-        if (!confirm(`Reset ${accountLabel} to $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} as of ${formatDateDisplay(dateStr)}?\n\nEvery transaction dated before ${formatDateDisplay(dateStr)} will be permanently deleted and the running balance for all earlier dates will read $0. This cannot be undone.`)) return;
-        applyStartingBalanceReset(account, dateStr, amount);
-        saveDatabase(true); // skipAutoSync — pushing the deletion is handled explicitly below, awaited, before this closes
-        // If a Drive sync is configured, the deletion above HAS to reach it before anything else
-        // pulls from the same file — otherwise the normal debounced auto-push leaves a window where
-        // a pull (e.g. the very next page load, on this device or another) still finds the old Drive
-        // copy and wholesale-replaces local state back to it, silently restoring every transaction
-        // this reset just deleted. Pushing synchronously here, before renderApp()/closing the
-        // dialog, closes that window.
-        if (getSyncWebAppUrl()) {
-            const overlay = document.getElementById('app-busy-overlay');
-            if (overlay) overlay.classList.remove('hidden');
-            try {
-                await pushStateToDrive();
-            } catch (err) {
-                logError(`Reset applied locally, but pushing the deletion to Google Drive failed: ${err.message}. Push manually from Sync Settings before pulling again, or the deleted transactions may reappear.`);
-            } finally {
-                if (overlay) overlay.classList.add('hidden');
+        const wantsBalanceReset = !!dateStr && Number.isFinite(amount) && document.getElementById('starting-balance-amount').value !== '';
+        if (wantsBalanceReset) {
+            const accountLabel = account === 'joint' ? 'Joint Checking' : 'Personal Checking';
+            if (!confirm(`Reset ${accountLabel} to $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} as of ${formatDateDisplay(dateStr)}?\n\nEvery transaction dated before ${formatDateDisplay(dateStr)} will be permanently deleted and the running balance for all earlier dates will read $0. This cannot be undone.`)) return;
+            applyStartingBalanceReset(account, dateStr, amount);
+            saveDatabase(true); // skipAutoSync — pushing the deletion is handled explicitly below, awaited, before this closes
+            // If a Drive sync is configured, the deletion above HAS to reach it before anything else
+            // pulls from the same file — otherwise the normal debounced auto-push leaves a window where
+            // a pull (e.g. the very next page load, on this device or another) still finds the old Drive
+            // copy and wholesale-replaces local state back to it, silently restoring every transaction
+            // this reset just deleted. Pushing synchronously here, before renderApp()/closing the
+            // dialog, closes that window.
+            if (getSyncWebAppUrl()) {
+                const overlay = document.getElementById('app-busy-overlay');
+                if (overlay) overlay.classList.remove('hidden');
+                try {
+                    await pushStateToDrive();
+                } catch (err) {
+                    logError(`Reset applied locally, but pushing the deletion to Google Drive failed: ${err.message}. Push manually from Sync Settings before pulling again, or the deleted transactions may reappear.`);
+                } finally {
+                    if (overlay) overlay.classList.add('hidden');
+                }
             }
+            logSystem(`Reset ${accountLabel} to ${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} as of ${formatDateDisplay(dateStr)}; earlier transactions deleted.`);
+        } else {
+            saveDatabase();
+            logSuccess('Account settings updated.');
         }
         renderApp();
-        document.getElementById('starting-balance-dialog').close();
-        logSystem(`Reset ${accountLabel} to ${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} as of ${formatDateDisplay(dateStr)}; earlier transactions deleted.`);
+        document.getElementById('account-settings-dialog').close();
     });
 
     document.getElementById('btn-cancel-debt-balance-adjust').addEventListener('click', () => {
@@ -6056,6 +6230,40 @@ function setupEventListeners() {
         if (!account) return;
         if (deleteLoanAccount(account)) document.getElementById('loan-dialog').close();
     });
+    document.getElementById('btn-restore-charge-skips').addEventListener('click', () => {
+        const accountId = document.getElementById('loan-edit-id').value;
+        const account = state.loans.find(l => l.id === accountId);
+        if (!account) return;
+        if (!confirm('This brings back any deleted Estimated Interest Charge or payment-plan fee for THIS account — but only for the current or a future statement month. A deleted charge from an already-closed past month never regenerates (by design, this app never rewrites reconciled history) — for that, correct the account\'s Current Balance by hand instead.\n\nContinue?')) return;
+        if (!state.cardChargeSkips) state.cardChargeSkips = {};
+        const prefixes = [`interest-${accountId}-`, `loan-interest-${accountId}-`];
+        let removedCount = 0;
+        Object.keys(state.cardChargeSkips).forEach(skipId => {
+            const matchesInterest = prefixes.some(p => skipId.startsWith(p));
+            // Plan-fee skip ids are `planfee-${planId}-${date}` — planId alone doesn't encode the
+            // account, so match against this account's own payment plan ids instead.
+            const matchesPlanFee = (account.paymentPlans || []).some(plan => skipId.startsWith(`planfee-${plan.id}-`));
+            if (matchesInterest || matchesPlanFee) {
+                delete state.cardChargeSkips[skipId];
+                removedCount++;
+            }
+        });
+        if (removedCount === 0) {
+            alert('No deleted interest/fee charges found for this account for the current or a future month.');
+            return;
+        }
+        // Clearing the skip flag alone doesn't regenerate anything — postInstallmentLoanInterestForMonth()/
+        // postCardStatementChargesForMonth() only ever run for a (account, year, month) combo that's
+        // actually being rendered/viewed. materializeAutomaticPaymentsForward() is the same forward-
+        // sweep its other callers already use after a save — runs those posting functions for every
+        // month from today out 24 months, so anything just un-skipped actually reappears instead of
+        // silently staying gone until the user happens to scroll to that month.
+        materializeAutomaticPaymentsForward(accountId);
+        saveDatabase();
+        renderApp();
+        openEditLoanModal(accountId);
+        logSuccess(`Restored ${removedCount} deleted interest/fee charge${removedCount === 1 ? '' : 's'} for ${account.name} (current/future statements only).`);
+    });
 
     // Bill Splitter item form
     const updateBillFormVisibility = () => {
@@ -6521,6 +6729,26 @@ function setupEventListeners() {
     };
     document.getElementById('loan-is-charge-card').addEventListener('change', updateChargeCardFields);
     document.getElementById('loan-is-store-card').addEventListener('change', updateStoreCardFields);
+
+    // Account icon upload/remove — see tempEditingLoanIconDataUrl/renderLoanIconPreview() and
+    // readImageFileAsDataUrl(). Per explicit user request, 2026-08-05.
+    document.getElementById('btn-loan-icon-upload-trigger').addEventListener('click', () => {
+        document.getElementById('loan-icon-upload').click();
+    });
+    document.getElementById('loan-icon-upload').addEventListener('change', (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        readImageFileAsDataUrl(file, (dataUrl) => {
+            tempEditingLoanIconDataUrl = dataUrl;
+            renderLoanIconPreview();
+        });
+        e.target.value = '';
+    });
+    document.getElementById('btn-loan-icon-remove').addEventListener('click', () => {
+        tempEditingLoanIconDataUrl = '';
+        renderLoanIconPreview();
+    });
+    document.getElementById('loan-name-field').addEventListener('input', renderLoanIconPreview);
     document.getElementById('loan-type-field').addEventListener('change', (e) => {
         const isCredit = e.target.value === 'credit';
         document.getElementById('loan-purchase-promo-section').classList.toggle('hidden', !isCredit);
@@ -6681,6 +6909,9 @@ function setupEventListeners() {
 
     // Balance transfer entry mode and save handler
     document.getElementById('xfer-mode').addEventListener('change', updateBalanceTransferModeFields);
+    document.getElementById('xfer-source').addEventListener('change', updateBalanceTransferModeFields);
+    document.getElementById('xfer-owner').addEventListener('change', updateXferDescriptionPreview);
+    document.getElementById('xfer-external-source-name').addEventListener('input', updateXferDescriptionPreview);
     document.getElementById('btn-cancel-xfer-edit').addEventListener('click', resetXferEditor);
     document.getElementById('btn-execute-xfer').addEventListener('click', () => {
         const targetId = document.getElementById('loan-edit-id').value;
@@ -6718,7 +6949,10 @@ function setupEventListeners() {
 
         const mode = document.getElementById('xfer-mode').value;
         const sourceId = document.getElementById('xfer-source').value;
+        const externalSourceName = document.getElementById('xfer-external-source-name').value.trim();
         const feePct = parseFloat(document.getElementById('xfer-fee-pct').value) || 0;
+        const ledgerOwner = document.getElementById('xfer-ledger-owner').value;
+        const customDescription = document.getElementById('xfer-description').value;
 
         if (mode === 'existing') {
             if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(currentBalance) || currentBalance < 0 || currentBalance > amount || !expDate) {
@@ -6731,8 +6965,11 @@ function setupEventListeners() {
                 alert('Please fill in a valid transfer amount, source account, and expiration date.');
                 return;
             }
-            if (!confirm(`Are you sure you want to transfer ${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} from the selected account to this card?`)) return;
-            executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDate, transferOwner);
+            const sourceDescription = sourceId === '__external__'
+                ? (externalSourceName || 'an external account')
+                : 'the selected account';
+            if (!confirm(`Are you sure you want to transfer ${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} from ${sourceDescription} to this card?`)) return;
+            executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDate, transferOwner, externalSourceName, ledgerOwner, customDescription);
         }
 
         resetXferEditor();
@@ -6758,6 +6995,7 @@ function setupEventListeners() {
         const editId = document.getElementById('loan-edit-id').value;
 
         const name = document.getElementById('loan-name-field').value;
+        const mobileNickname = document.getElementById('loan-mobile-nickname').value.trim();
         const type = document.getElementById('loan-type-field').value;
         const loginUrl = document.getElementById('loan-login-url').value.trim();
         const isStoreCard = type === 'credit' && document.getElementById('loan-is-store-card').checked;
@@ -6802,8 +7040,10 @@ function setupEventListeners() {
             const loan = state.loans.find(l => l.id === editId);
             if (loan) {
                 loan.name = name;
+                loan.mobileNickname = mobileNickname;
                 loan.type = type;
                 loan.loginUrl = loginUrl;
+                loan.customIconDataUrl = tempEditingLoanIconDataUrl;
                 loan.isStoreCard = isStoreCard;
                 loan.storeName = storeName;
                 loan.startBal = start;
@@ -6859,14 +7099,22 @@ function setupEventListeners() {
                 loan.extraPayment = extraPayment;
                 loan.isExemptFromSplitter = isExemptFromSplitter;
 
-                // Every other automatic-payment strategy gets its months materialized lazily, as
-                // the user happens to visit them (rebuildDisplayedDebtMonth only ever touches
-                // whichever month/year is currently on screen). A custom schedule's whole point is
-                // specific future dates the user just configured — often months they haven't
-                // navigated to yet — so without this, saving looked like it silently did nothing
-                // until they manually clicked forward to each scheduled month.
+                // A custom schedule's whole point is specific future dates the user just configured
+                // — often months they haven't navigated to yet — so without this, saving looked
+                // like it silently did nothing until they manually clicked forward to each
+                // scheduled month.
                 if (paymentStrategy === 'custom') materializeCustomScheduleMonths(loan.id, loan.customPaymentSchedule);
-                else if (type === 'credit' && (paymentStrategy === 'balance' || paymentStrategy === 'interestSaving' || paymentStrategy === 'minimum')) materializeAutomaticPaymentsForward(loan.id);
+                // Always regenerate current/future interest, fees, and automatic payments after ANY
+                // edit — not just the specific payment strategies this used to gate on. Starting
+                // balance, current balance, interest rate, and statement day all feed directly into
+                // postCardStatementChargesForMonth()/postInstallmentLoanInterestForMonth(), so
+                // correcting any of them (e.g. fixing a starting balance that was wrongly $0) left
+                // already-posted current/future interest charges stale until the user happened to
+                // revisit that month. Safe to run unconditionally: both posting functions already
+                // refuse to touch anything before the current real month, and skip
+                // deleted/overridden entries — see their own comments. Per explicit user request,
+                // 2026-08-05.
+                materializeAutomaticPaymentsForward(loan.id);
 
                 logSystem(`Updated payoff target: ${name}`);
             }
@@ -6875,8 +7123,10 @@ function setupEventListeners() {
             state.loans.push({
                 id: id,
                 name: name,
+                mobileNickname: mobileNickname,
                 type: type,
                 loginUrl: loginUrl,
+                customIconDataUrl: tempEditingLoanIconDataUrl,
                 isStoreCard: isStoreCard,
                 storeName: storeName,
                 startBal: start,
@@ -7098,6 +7348,25 @@ function setupEventListeners() {
             syncStatusDetail.classList.toggle('hidden');
         });
     }
+
+    // Mobile floating counterpart — see updateMobileSyncBadge() in app.js and the badge's own
+    // comment in Index.html. Tapping the badge opens the same detail popover pattern as the sidebar
+    // row above; "Try Sync Again" re-runs the actual push so a failure can be resolved without
+    // hunting down the Sync Settings page.
+    const mobileSyncBadge = document.getElementById('mobile-sync-badge');
+    const mobileSyncBadgeDetail = document.getElementById('mobile-sync-badge-detail');
+    if (mobileSyncBadge && mobileSyncBadgeDetail) {
+        mobileSyncBadge.addEventListener('click', () => {
+            document.getElementById('mobile-sync-badge-detail-message').textContent = mobileSyncBadge.dataset.message || '';
+            document.getElementById('mobile-sync-badge-detail-time').textContent = mobileSyncBadge.dataset.time ? `at ${mobileSyncBadge.dataset.time}` : '';
+            mobileSyncBadgeDetail.classList.toggle('hidden');
+        });
+    }
+    document.getElementById('btn-mobile-sync-retry')?.addEventListener('click', () => {
+        mobileSyncBadgeDetail?.classList.add('hidden');
+        logSystem('Retrying Google Drive sync...');
+        pushStateToDrive().catch(() => { /* errors are logged inside */ });
+    });
 
     // One-time catch-up for any recurring bill ever backdated to a start month before it existed —
     // see resyncAllRecurringBillsAcrossAllMonths()'s own comment for why this doesn't happen
@@ -7488,6 +7757,8 @@ function setupEventListeners() {
         document.getElementById('loan-login-url').value = '';
         document.getElementById('loan-is-store-card').checked = false;
         document.getElementById('loan-store-name').value = '';
+        tempEditingLoanIconDataUrl = '';
+        renderLoanIconPreview();
 
         tempEditingPromos = [];
         tempEditingPaymentPlans = [];
@@ -8515,55 +8786,55 @@ function setupEventListeners() {
         renderApp();
     });
 
-        // ⚙️ Payroll button handler
-    const btnConfigurePayroll = document.getElementById('btn-configure-payroll');
-    if (btnConfigurePayroll) {
-        btnConfigurePayroll.addEventListener('click', () => {
-            const config = state.payrollConfig;
-            document.getElementById('payroll-gross-pay').value = config.grossBasePay || 0;
-            document.getElementById('payroll-annual-salary').value = ((Number(config.grossBasePay) || 0) * 26).toFixed(2);
-            document.getElementById('payroll-stipend').value = config.stipendAmount || 0;
-            document.getElementById('payroll-first-date').value = config.firstPayDate || '2026-01-02';
-            const minBufferEl = document.getElementById('payroll-minimum-buffer');
-            if (minBufferEl) minBufferEl.value = getPersonalMinimumBuffer();
+    // ⚙️ Payroll — extracted to a named function so both the Account Settings dialog's "Open
+    // Payroll Settings" button and (if present) a direct trigger can reach it. Per explicit user
+    // request, 2026-08-05: Payroll used to have its own separate header button; it now only opens
+    // from inside the consolidated Account Settings dialog.
+    window.openPayrollConfigModal = function() {
+        const config = state.payrollConfig;
+        document.getElementById('payroll-gross-pay').value = config.grossBasePay || 0;
+        document.getElementById('payroll-annual-salary').value = ((Number(config.grossBasePay) || 0) * 26).toFixed(2);
+        document.getElementById('payroll-stipend').value = config.stipendAmount || 0;
+        document.getElementById('payroll-first-date').value = config.firstPayDate || '2026-01-02';
+        const minBufferEl = document.getElementById('payroll-minimum-buffer');
+        if (minBufferEl) minBufferEl.value = getPersonalMinimumBuffer();
 
-            // Custom check rates check
-            const hasCustom = !!config.hasDifferentRates;
-            document.getElementById('payroll-custom-rates-toggle').checked = hasCustom;
-            document.getElementById('payroll-custom-rates-panel').classList.toggle('hidden', !hasCustom);
-            document.getElementById('payroll-rate-1st').value = config.differentRates?.rate1st || 0;
-            document.getElementById('payroll-rate-2nd').value = config.differentRates?.rate2nd || 0;
-            document.getElementById('payroll-rate-3rd').value = config.differentRates?.rate3rd || 0;
+        // Custom check rates check
+        const hasCustom = !!config.hasDifferentRates;
+        document.getElementById('payroll-custom-rates-toggle').checked = hasCustom;
+        document.getElementById('payroll-custom-rates-panel').classList.toggle('hidden', !hasCustom);
+        document.getElementById('payroll-rate-1st').value = config.differentRates?.rate1st || 0;
+        document.getElementById('payroll-rate-2nd').value = config.differentRates?.rate2nd || 0;
+        document.getElementById('payroll-rate-3rd').value = config.differentRates?.rate3rd || 0;
 
-            // W-4 tax profile
-            const tax = config.taxProfile || {};
-            document.getElementById('payroll-filing-status').value = tax.filingStatus || 'single';
-            document.getElementById('payroll-step2c').checked = !!tax.step2cChecked;
-            document.getElementById('payroll-dependents-amt').value = tax.dependentsAmount || 0;
-            document.getElementById('payroll-other-income').value = tax.otherIncome || 0;
-            document.getElementById('payroll-other-deductions').value = tax.otherDeductions || 0;
-            document.getElementById('payroll-extra-withholding').value = tax.extraWithholding || 0;
+        // W-4 tax profile
+        const tax = config.taxProfile || {};
+        document.getElementById('payroll-filing-status').value = tax.filingStatus || 'single';
+        document.getElementById('payroll-step2c').checked = !!tax.step2cChecked;
+        document.getElementById('payroll-dependents-amt').value = tax.dependentsAmount || 0;
+        document.getElementById('payroll-other-income').value = tax.otherIncome || 0;
+        document.getElementById('payroll-other-deductions').value = tax.otherDeductions || 0;
+        document.getElementById('payroll-extra-withholding').value = tax.extraWithholding || 0;
 
-            // Paycheck deductions
-            const ded = config.deductions || {};
-            document.getElementById('payroll-pretax-medical').value = ded.pretaxMedical || 0;
-            document.getElementById('payroll-pretax-dental').value = ded.pretaxDental || 0;
-            document.getElementById('payroll-pretax-hsa').value = ded.pretaxHSA || 0;
-            document.getElementById('payroll-pretax-fsa').value = ded.pretaxFSA || 0;
-            document.getElementById('payroll-401k-trad-pct').value = ded.traditional401kPercent || 0;
-            document.getElementById('payroll-401k-roth-pct').value = ded.roth401kPercent || 0;
-            document.getElementById('payroll-posttax-other').value = ded.postTaxOther || 0;
+        // Paycheck deductions
+        const ded = config.deductions || {};
+        document.getElementById('payroll-pretax-medical').value = ded.pretaxMedical || 0;
+        document.getElementById('payroll-pretax-dental').value = ded.pretaxDental || 0;
+        document.getElementById('payroll-pretax-hsa').value = ded.pretaxHSA || 0;
+        document.getElementById('payroll-pretax-fsa').value = ded.pretaxFSA || 0;
+        document.getElementById('payroll-401k-trad-pct').value = ded.traditional401kPercent || 0;
+        document.getElementById('payroll-401k-roth-pct').value = ded.roth401kPercent || 0;
+        document.getElementById('payroll-posttax-other').value = ded.postTaxOther || 0;
 
-            // Render estimates + additional deductions lists (and make sure a stale in-progress
-            // edit from a prior open doesn't carry over)
-            exitPayrollEstimateEditMode();
-            renderPayrollEstimatesList();
-            renderPayrollAddedDeductionsList();
-            updatePayrollPreview();
+        // Render estimates + additional deductions lists (and make sure a stale in-progress
+        // edit from a prior open doesn't carry over)
+        exitPayrollEstimateEditMode();
+        renderPayrollEstimatesList();
+        renderPayrollAddedDeductionsList();
+        updatePayrollPreview();
 
-            document.getElementById('payroll-config-dialog').showModal();
-        });
-    }
+        document.getElementById('payroll-config-dialog').showModal();
+    };
 
     // Toggle custom rates panel when checkbox changes
     document.getElementById('payroll-custom-rates-toggle').addEventListener('change', (e) => {
@@ -8850,7 +9121,11 @@ function enforceMobileListView() {
         state.savingsMetricsCollapsed = true;
         state.savingsYearSummaryCollapsed = true;
         state.uiCollapsedSections.metrics = true;
-        state.uiCollapsedSections.transfers = true;
+        // Transfers (the Jason/Asia transfer-cycle-breakdown card) is the one exception — per
+        // explicit user request, 2026-08-05, it should default EXPANDED on mobile even though every
+        // other section here defaults collapsed, since it's the card you actually came to this page
+        // to check.
+        state.uiCollapsedSections.transfers = false;
         state.uiCollapsedSections.jointBills = true;
         state.uiCollapsedSections.personalAllocations = true;
     }
@@ -8863,6 +9138,21 @@ function enforceMobileListView() {
     // Joint/Personal, is handled separately — removed on every screen size, forced to 'joint'
     // unconditionally in migrateDatabase(), not just on mobile.)
     state.expenseCalendarViewMode = 'list';
+}
+
+// Desktop counterpart to enforceMobileListView()'s one-time mobile defaults above — the metrics and
+// transfers collapse state is shared (not viewport-scoped), so a value set on a phone (metrics
+// collapsed) can otherwise carry straight into a later desktop session via a Drive pull/sync. Both
+// cards default expanded on desktop; only runs once per page load (reset alongside
+// _mobileMetricsDefaultApplied after a Drive pull), same "seed once, then the user's own toggle
+// sticks" philosophy. Per explicit user request, 2026-08-05.
+let _desktopBillsDefaultApplied = false;
+function enforceDesktopBillsDefaults() {
+    if (isMobileViewport() || _desktopBillsDefaultApplied) return;
+    _desktopBillsDefaultApplied = true;
+    if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
+    state.uiCollapsedSections.metrics = false;
+    state.uiCollapsedSections.transfers = false;
 }
 
 // Per explicit user request, 2026-08-04: keep the Dashboard title and date-nav (year/month/day)
@@ -8927,6 +9217,32 @@ function relocateMobileStickyHeader() {
         headerTopRow.appendChild(headerRightActions);
         headerTopRow.insertAdjacentElement('afterend', unifiedLayout);
         unifiedLayout.prepend(periodNav);
+    }
+}
+
+// Bill Settings' All/Joint/Personal ownership filter and Cards/List/Calendar view toggle normally
+// sit inside the "Bill Settings & Auto-Sync" card's own header, next to its title — reasonable with
+// desktop's spare horizontal room, but on mobile that just meant scrolling past the title AND the
+// card's own posting-total line before reaching them. Relocated to #header-identity-toggles-host
+// (the same shared slot Dashboard's Personal/Joint toggle uses — empty and unused on this tab
+// otherwise) so they land directly below the global date-nav instead, matching every other page's
+// controls-right-below-the-date-selector layout. Per explicit user request, 2026-08-05. Idempotent/
+// state-free, same reasoning as relocateMobileStickyHeader() — #billtracker-calendar-date-mode-toggle
+// (never itself relocated) is the anchor both for detecting current position and restoring it.
+function relocateMobileBilltrackerToggles() {
+    const hostIdentity = document.getElementById('header-identity-toggles-host');
+    const ownershipFilter = document.getElementById('billtracker-ownership-filter');
+    const viewToggle = document.getElementById('billtracker-view-toggle');
+    const dateModeToggle = document.getElementById('billtracker-calendar-date-mode-toggle');
+    if (!hostIdentity || !ownershipFilter || !viewToggle || !dateModeToggle) return;
+
+    const shouldRelocate = isMobileViewport() && document.body.dataset.activeTab === 'billtracker';
+    if (shouldRelocate) {
+        hostIdentity.appendChild(ownershipFilter);
+        hostIdentity.appendChild(viewToggle);
+    } else {
+        dateModeToggle.insertAdjacentElement('beforebegin', ownershipFilter);
+        dateModeToggle.insertAdjacentElement('beforebegin', viewToggle);
     }
 }
 
@@ -9290,7 +9606,9 @@ function renderAppImmediate() {
     updateTabTitles();
     populateYearSelect();
     enforceMobileListView();
+    enforceDesktopBillsDefaults();
     relocateMobileStickyHeader();
+    relocateMobileBilltrackerToggles();
     populateCheckingAutocomplete();
     populateCCDropdowns();
     renderSummaryCards();
@@ -13518,8 +13836,9 @@ function renderPersonalList() {
         tomorrowD.setDate(tomorrowD.getDate() + 1);
         const tomorrowIso = formatLocalDate(tomorrowD);
         const todayBalance = getPersonalAdjustedRunningBalanceAtDate(tomorrowIso);
-        const todayLabel = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        personalTodayBalanceEl.textContent = `Today's Balance (${todayLabel}): ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        // Shortened per explicit user request, 2026-08-05 — was "Today's Balance (Aug 5, 2026): $X",
+        // the full date was redundant clutter next to the figure itself.
+        personalTodayBalanceEl.textContent = `Current Balance: ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
     if (personalEndingBalanceEl) {
@@ -13976,8 +14295,7 @@ function renderJointList() {
         tomorrowD.setDate(tomorrowD.getDate() + 1);
         const tomorrowIso = formatLocalDate(tomorrowD);
         const todayBalance = getJointAdjustedRunningBalanceAtDate(tomorrowIso);
-        const todayLabel = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        jointTodayBalanceEl.textContent = `Today's Balance (${todayLabel}): ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        jointTodayBalanceEl.textContent = `Current Balance: ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
     if (endingBalanceEl) {
@@ -17027,7 +17345,45 @@ function getDebtLogoIcon(key, label) {
         image: true,
     };
 }
+// Shared by every "upload a custom account icon" field (loan-dialog, and the new Personal/Joint/
+// Savings Account Settings dialogs) — reads an <input type="file"> selection into a data URL via
+// FileReader, with a type/size guard, and hands the result to `callback`. Kept small (1.5MB) since
+// this ends up embedded directly in state (and therefore the Google Drive JSON/localStorage) like
+// the built-in DEBT_ACCOUNT_LOGOS images already are, not stored as a separate file. Per explicit
+// user request, 2026-08-05 ("is there a way to upload images to use for account icons?").
+function readImageFileAsDataUrl(file, callback) {
+    if (!file) return;
+    if (!file.type || !file.type.startsWith('image/')) {
+        alert('Please choose an image file.');
+        return;
+    }
+    const MAX_BYTES = 1.5 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+        alert('That image is too large (max 1.5MB). Please choose a smaller image, or resize/compress it first.');
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => callback(reader.result);
+    reader.onerror = () => alert('Failed to read that image file.');
+    reader.readAsDataURL(file);
+}
+
+// A user-uploaded icon always wins over the auto-matched logo/emoji below — per explicit user
+// request, 2026-08-05. Same `{glyph, label, image: true}` shape getDebtLogoIcon() returns, so
+// every consumer of this function (renderDebtAccountIconBadge, etc.) doesn't need to know the
+// difference between a built-in logo and a custom one.
+function getCustomAccountIcon(dataUrl, label) {
+    if (!dataUrl) return null;
+    return {
+        glyph: `<img class="debt-account-logo" src="${dataUrl}" alt="${escapeHTML(label)} icon">`,
+        label,
+        image: true
+    };
+}
+
 function getDebtAccountIcon(account) {
+    const custom = getCustomAccountIcon(account?.customIconDataUrl, account?.name || 'Account');
+    if (custom) return custom;
     const text = `${account?.name || ''} ${account?.storeName || ''}`.toLowerCase();
     const logoMappings = [
         [/(american express|amex)/, 'amex', 'American Express'],
@@ -17515,8 +17871,33 @@ function updateBalanceTransferModeFields() {
     document.getElementById('xfer-source-group').classList.toggle('hidden', isExisting);
     document.getElementById('xfer-fee-group').classList.toggle('hidden', isExisting);
     document.getElementById('xfer-current-group').classList.toggle('hidden', !isExisting);
+    document.getElementById('xfer-ledger-owner-group').classList.toggle('hidden', isExisting);
+    document.getElementById('xfer-description-group').classList.toggle('hidden', isExisting);
+    // Only relevant in "New Transfer" mode with "Other / Not Tracked" picked as the source — per
+    // explicit user request, 2026-08-05.
+    const isExternal = !isExisting && document.getElementById('xfer-source').value === '__external__';
+    document.getElementById('xfer-external-source-group').classList.toggle('hidden', !isExternal);
     document.getElementById('xfer-amount-label').textContent = isExisting ? 'Original Transfer Amount' : 'Transfer Amount';
     document.getElementById('btn-execute-xfer').textContent = isExisting ? 'Add Existing Transfer' : 'Execute New Transfer';
+    if (!isExisting) updateXferDescriptionPreview();
+}
+
+// Tracks the last auto-generated description so a live update (Transferred By/source/external-name
+// changing) can tell "still the auto value, safe to overwrite" apart from "the user typed their own
+// description, leave it alone" — both look identical once written into the field otherwise.
+let xferDescriptionAutoValue = '';
+function updateXferDescriptionPreview() {
+    const descField = document.getElementById('xfer-description');
+    if (!descField || descField.value !== xferDescriptionAutoValue) return;
+    const sourceId = document.getElementById('xfer-source').value;
+    const isExternal = sourceId === '__external__';
+    const sourceCard = isExternal ? null : state.loans.find(l => l.id === sourceId);
+    const sourceLabel = isExternal
+        ? (document.getElementById('xfer-external-source-name').value.trim() || 'External Account')
+        : (sourceCard ? (sourceCard.mobileNickname || sourceCard.name) : '');
+    const transferOwnerLabel = document.getElementById('xfer-owner').value === 'asia' ? 'Asia' : 'Jason';
+    xferDescriptionAutoValue = sourceLabel ? `Balance Transfer - ${transferOwnerLabel} - ${sourceLabel}` : '';
+    descField.value = xferDescriptionAutoValue;
 }
 
 function recordExistingBalanceTransfer(targetId, originalAmount, currentBalance, rate, expDate, transferOwner) {
@@ -17556,7 +17937,7 @@ function renderBalanceTransfers(card) {
     transfers.forEach(item => {
         const original = Number(item.originalAmount ?? item.amount) || 0;
         const current = Number(item.currentBalance ?? item.amount) || 0;
-        const source = item.xferFromId ? state.loans.find(loan => loan.id === item.xferFromId)?.name : '';
+        const source = item.xferFromId ? state.loans.find(loan => loan.id === item.xferFromId)?.name : (item.xferFromExternalName || '');
         const person = item.transferOwner === 'jason' ? 'Jason' : item.transferOwner === 'asia' ? 'Asia' : 'Not recorded';
         const row = document.createElement('div');
         row.className = 'payment-plan-row';
@@ -17574,6 +17955,10 @@ function renderBalanceTransfers(card) {
             document.getElementById('xfer-current-group').classList.remove('hidden');
             document.getElementById('xfer-source-group').classList.add('hidden');
             document.getElementById('xfer-fee-group').classList.add('hidden');
+            // Editing a transfer's promo record (amount/rate/expiration) never touches its ledger
+            // transactions — the ledger owner/description fields have nothing to do here.
+            document.getElementById('xfer-ledger-owner-group').classList.add('hidden');
+            document.getElementById('xfer-description-group').classList.add('hidden');
             document.getElementById('btn-execute-xfer').textContent = 'Update Transfer';
             document.getElementById('btn-cancel-xfer-edit').classList.remove('hidden');
             document.getElementById('xfer-amount').focus();
@@ -17589,29 +17974,55 @@ function renderBalanceTransfers(card) {
         list.appendChild(row);
     });
 }
-function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDate, transferOwner) {
+function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDate, transferOwner, externalSourceName, ledgerOwner, customDescription) {
     if (isNaN(amount) || amount <= 0) {
         logError("Please enter a valid transfer amount.");
         return;
     }
 
     const targetCard = state.loans.find(l => l.id === targetId);
-    const sourceCard = state.loans.find(l => l.id === sourceId);
+    // "Other / Not Tracked" — per explicit user request, 2026-08-05: the source doesn't have to be
+    // a card this app tracks (e.g. one of Asia's cards that was never added here). No sourceCard,
+    // no balance to reduce, no transaction to log on "it" — everything below that touches
+    // sourceCard is skipped for this case, same as the already-existing "existing transfer" path
+    // (recordExistingBalanceTransfer) which also has no source.
+    const isExternal = sourceId === '__external__';
+    const sourceCard = isExternal ? null : state.loans.find(l => l.id === sourceId);
 
-    if (!targetCard || !sourceCard) {
+    if (!targetCard || (!isExternal && !sourceCard)) {
         logError("Invalid target or source account selected.");
         return;
     }
 
     const feeAmount = amount * (feePct / 100);
     const totalAdded = amount + feeAmount;
+    // Mobile nickname preferred over the full account name for a tracked source/target — per
+    // explicit user request, 2026-08-05 ("it should list the mobile nickname OR the external
+    // account name as entered"). Not gated by isMobileViewport() like getAccountDisplayName() is
+    // — this is a permanent transaction description, not a viewport-dependent header label.
+    const sourceLabel = isExternal ? (externalSourceName || 'External Account') : (sourceCard.mobileNickname || sourceCard.name);
+    const targetLabel = targetCard.mobileNickname || targetCard.name;
+    const transferOwnerLabel = transferOwner === 'asia' ? 'Asia' : 'Jason';
+    // The ledger `owner` field ('personal'/'joint') is the app-wide model every other transaction,
+    // filter, and Bill Splitter total keys off — distinct from `transferOwner` ('jason'/'asia',
+    // just who gets the badge). Defaulting to 'personal' here matches every other transaction's own
+    // default. Per explicit user request, 2026-08-05.
+    const resolvedLedgerOwner = ledgerOwner || 'personal';
+    const defaultDescription = `Balance Transfer - ${transferOwnerLabel} - ${sourceLabel}`;
+    const description = (customDescription || '').trim() || defaultDescription;
 
     // Adjust balances
-    sourceCard.currentBal = Math.max(0, sourceCard.currentBal - amount);
+    if (sourceCard) sourceCard.currentBal = Math.max(0, sourceCard.currentBal - amount);
     targetCard.currentBal += totalAdded;
 
-    // Log transactions on the target card
-    const dObj = new Date(state.selectedDate + 'T00:00:00');
+    // Log transactions on the target card — today's real date, NOT state.selectedDate. Confirmed
+    // real bug, 2026-08-05: state.selectedDate is whatever calendar day was last clicked ANYWHERE
+    // in the app (see its only two assignment sites), which has nothing to do with "when I'm
+    // executing this transfer" — a stale value from a previous session/click silently posted the
+    // charge on some unrelated past/future date, invisible unless you happened to scroll there,
+    // making a successful transfer look like it never created a transaction at all.
+    const todayStr = formatLocalDate(new Date());
+    const dObj = new Date(todayStr + 'T00:00:00');
     const y = dObj.getFullYear();
     const mShort = MONTH_ORDER[dObj.getMonth()];
     const key = `${y}-${mShort}`;
@@ -17620,35 +18031,52 @@ function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDat
     if (!state.cardCalendars[targetId]) state.cardCalendars[targetId] = {};
     if (!state.cardCalendars[targetId][key]) state.cardCalendars[targetId][key] = [];
 
-    // Add charge on target card
+    // Two separate charges on the target card — the transfer amount and the fee — rather than one
+    // combined line, both tagged with the same balanceTransferId so they're recognizably tied to
+    // this one transfer. Per explicit user request, 2026-08-05.
+    const balanceTransferId = Math.random().toString(36).substr(2, 9);
     state.cardCalendars[targetId][key].push({
         id: 'c-' + Math.random().toString(36).substr(2, 9),
-        date: state.selectedDate,
-        description: `Bal Transfer from ${sourceCard.name} (inc. ${feePct}% fee)`,
-        owner: transferOwner || 'personal',
+        date: todayStr,
+        description,
+        owner: resolvedLedgerOwner,
         balanceTransferBy: transferOwner || '',
-        amount: -Math.abs(totalAdded)
+        balanceTransferId,
+        amount: -Math.abs(amount)
     });
+    if (feeAmount > 0.005) {
+        state.cardCalendars[targetId][key].push({
+            id: 'c-' + Math.random().toString(36).substr(2, 9),
+            date: todayStr,
+            description: `${description} (Fee ${feePct}%)`,
+            owner: resolvedLedgerOwner,
+            balanceTransferBy: transferOwner || '',
+            balanceTransferId,
+            amount: -Math.abs(feeAmount)
+        });
+    }
 
-    // Log transaction on source card if it's a credit card
-    if (sourceCard.type === 'credit') {
+    // Log transaction on source card if it's a credit card (nothing to log against an external,
+    // untracked source — there's no ledger for it in this app)
+    if (sourceCard && sourceCard.type === 'credit') {
         if (!state.cardCalendars[sourceId]) state.cardCalendars[sourceId] = {};
         if (!state.cardCalendars[sourceId][key]) state.cardCalendars[sourceId][key] = [];
 
         state.cardCalendars[sourceId][key].push({
             id: 'c-' + Math.random().toString(36).substr(2, 9),
-            date: state.selectedDate,
-            description: `Bal Transfer to ${targetCard.name}`,
-            owner: transferOwner || 'personal',
+            date: todayStr,
+            description: `Balance Transfer - ${transferOwnerLabel} - ${targetLabel}`,
+            owner: resolvedLedgerOwner,
             balanceTransferBy: transferOwner || '',
             amount: Math.abs(amount)
         });
     }
 
-    // Add promo balance item
+    // Add promo balance item — same balanceTransferId as the two ledger charges above, so all three
+    // records tied to this one transfer share a recognizable link.
     if (!targetCard.promos) targetCard.promos = [];
     targetCard.promos.push({
-        id: Math.random().toString(36).substr(2, 9),
+        id: balanceTransferId,
         amount: totalAdded,
         originalAmount: amount,
         currentBalance: totalAdded,
@@ -17656,7 +18084,12 @@ function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDat
         expDate: expDate,
         isXfer: true,
         transferOwner: transferOwner || '',
-        xferFromId: sourceId
+        // xferFromId only ever points at a real tracked loan (renderBalanceTransfers() looks it up
+        // via state.loans.find) — left empty for an external source, same convention
+        // recordExistingBalanceTransfer() already uses for "no tracked source." The free-text name
+        // is preserved separately so the transfer list can still show where it came from.
+        xferFromId: isExternal ? '' : sourceId,
+        xferFromExternalName: isExternal ? (externalSourceName || 'External Account') : ''
     });
 
     saveDatabase();
@@ -17716,14 +18149,17 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// Newest entry first (prepend, not append) — per explicit user request, 2026-08-05, so the latest
+// sync result is the first thing visible on opening Sync Settings instead of being scrolled off the
+// bottom of a log that can run long over a session. No scrollTop reset needed: the newest entry is
+// now already at the top, right where the container opens.
 function logSystem(msg) {
     const container = document.getElementById('logs-container');
     if (!container) return;
     const entry = document.createElement('div');
     entry.className = 'log-entry system';
     entry.textContent = `[${_logTimestamp()}] [SYSTEM]: ${msg}`;
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    container.prepend(entry);
 }
 
 function logSuccess(msg) {
@@ -17732,8 +18168,7 @@ function logSuccess(msg) {
     const entry = document.createElement('div');
     entry.className = 'log-entry success';
     entry.textContent = `[${_logTimestamp()}] [SUCCESS]: ${msg}`;
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    container.prepend(entry);
 }
 
 function logError(msg) {
@@ -17742,8 +18177,7 @@ function logError(msg) {
     const entry = document.createElement('div');
     entry.className = 'log-entry error';
     entry.textContent = `[${_logTimestamp()}] [ERROR]: ${msg}`;
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    container.prepend(entry);
 }
 
 function logInfo(msg) {
@@ -17752,8 +18186,7 @@ function logInfo(msg) {
     const entry = document.createElement('div');
     entry.className = 'log-entry info';
     entry.textContent = `[${_logTimestamp()}] [INFO]: ${msg}`;
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+    container.prepend(entry);
 }
 
 function updateQuickAddFormFields() {
@@ -17769,11 +18202,6 @@ function updateQuickAddFormFields() {
         document.getElementById('contribution-direction').value = 'withdrawal';
     }
     const isWithdrawal = isContribution && (isExplicitWithdrawal || document.getElementById('contribution-direction').value === 'withdrawal');
-
-    const payrollBtn = document.getElementById('btn-configure-payroll');
-    if (payrollBtn) {
-        payrollBtn.classList.toggle('hidden', !isPersonal);
-    }
 
     document.getElementById('personal-type-group').classList.toggle('hidden', !isPersonal);
     document.getElementById('personal-joint-transfer-group').classList.toggle('hidden', !isJointTransfer);
@@ -17799,6 +18227,50 @@ function headerStatChip(label, value) {
     return `<span class="header-stat-chip">${escapeHTML(label)} <strong>${escapeHTML(String(value))}</strong></span>`;
 }
 
+// Returns the short mobile nickname (Settings → Account Settings → Mobile Nickname) in place of
+// the full account name when one's been set and we're on a mobile-width viewport — desktop always
+// shows the full name, since it has the room and the nickname exists purely as a mobile-space
+// workaround. Per explicit user request, 2026-08-05.
+function getAccountDisplayName(account) {
+    if (!account) return '';
+    if (isMobileViewport() && account.mobileNickname) return account.mobileNickname;
+    return account.name;
+}
+
+// Loan/credit-card account names vary wildly in length ("Amex" vs "Comerica Business Platinum
+// Visa Signature") — on the mobile pinned header (see relocateMobileCCDetailHeader()) a long one
+// wraps to 2 lines, which .header-account-link's underline-removal rule above merely tolerates
+// rather than fixes. Forcing nowrap + shrinking font-size until it fits keeps every name on one
+// row regardless of length, per explicit user request, 2026-08-05. Desktop's toolbar-sized title
+// has never had this problem (smaller font, wider toolbar), so this only runs on mobile.
+function fitAccountTitleFont(titleEl) {
+    if (!titleEl || !isMobileViewport()) {
+        if (titleEl) { titleEl.style.whiteSpace = ''; titleEl.style.maxWidth = ''; titleEl.style.overflow = ''; titleEl.style.textOverflow = ''; titleEl.style.fontSize = ''; }
+        return;
+    }
+    // The h2 sits in a column-direction flex container with align-items:center (see
+    // `.header-top-row .header-title-compact` mobile rule) — cross-axis items there shrink-to-fit
+    // their own content instead of stretching to the container's width, so left unconstrained the
+    // h2 just grows as wide as the name needs and bleeds off the edge of the screen rather than
+    // ever reporting scrollWidth > clientWidth. max-width clamps it back to the parent's actual
+    // available width so the two can be compared meaningfully.
+    titleEl.style.whiteSpace = 'nowrap';
+    titleEl.style.maxWidth = '100%';
+    titleEl.style.overflow = 'hidden';
+    // Ellipsis is just a safety net for names so long even the font-size floor below can't make
+    // them fit (e.g. "Chase Southwest Airlines Priority Card") — the vast majority of real account
+    // names fit well before hitting it.
+    titleEl.style.textOverflow = 'ellipsis';
+    const baseFontSize = 1.15;
+    const minFontSize = 0.62;
+    let fontSize = baseFontSize;
+    titleEl.style.fontSize = `${fontSize}rem`;
+    while (titleEl.scrollWidth > titleEl.clientWidth && fontSize > minFontSize) {
+        fontSize -= 0.05;
+        titleEl.style.fontSize = `${fontSize.toFixed(2)}rem`;
+    }
+}
+
 function updateTabTitles() {
     const activeTab = document.querySelector('.nav-btn.active').dataset.tab;
     const title = document.getElementById('current-tab-title');
@@ -17807,17 +18279,13 @@ function updateTabTitles() {
     // specific card/loan is selected) turn this back on, so switching tabs or navigating back to
     // the account list never leaves a stale bold subtitle behind.
     subtitle.classList.remove('header-subtitle-highlight');
-    const startingBalanceButton = document.getElementById('btn-open-starting-balance');
-    const showStartingBalance = activeTab === 'dashboard'
+    // Single consolidated button now (Starting Balance + Payroll used to be separate buttons here,
+    // each with their own visibility check) — see #account-settings-dialog. Per explicit user
+    // request, 2026-08-05.
+    const accountSettingsButton = document.getElementById('btn-open-account-settings');
+    const showAccountSettings = activeTab === 'dashboard'
         && (state.dashboardType === 'personal' || state.dashboardType === 'joint');
-    startingBalanceButton?.classList.toggle('hidden', !showStartingBalance);
-
-    // Payroll now lives in the sticky header (moved off the Quick-Add card) — since that header is
-    // always in the DOM regardless of tab, it needs its own visibility check tied to the active tab,
-    // not just to dashboardType the way updateQuickAddFormFields' check alone used to be enough for.
-    const payrollButton = document.getElementById('btn-configure-payroll');
-    const showPayroll = activeTab === 'dashboard' && state.dashboardType === 'personal';
-    payrollButton?.classList.toggle('hidden', !showPayroll);
+    accountSettingsButton?.classList.toggle('hidden', !showAccountSettings);
 
     const isLoanHome = activeTab === 'loans'
         && !state.loans.some(item => item.id === state.ccSelectedCardId && item.type === 'loan');
@@ -17833,7 +18301,18 @@ function updateTabTitles() {
             const card = state.loans.find(l => l.id === state.dashboardType);
             if (card) accountName = card.name;
         }
-        title.textContent = `${accountName} Dashboard`;
+        // Personal/Joint get a clickable icon badge (custom upload or a default emoji) mirroring
+        // the credit-card/loan pattern, driven by the new Account Settings dialog — per explicit
+        // user request, 2026-08-05. The third branch above (dashboardType holding a card id) is an
+        // unrelated legacy case with no icon/login of its own, so it keeps the plain text title.
+        if (state.dashboardType === 'personal' || state.dashboardType === 'joint') {
+            const isJoint = state.dashboardType === 'joint';
+            const pseudoAccount = { name: `${accountName} Checking`, loginUrl: isJoint ? state.jointLoginUrl : state.personalLoginUrl };
+            const icon = getCustomAccountIcon(isJoint ? state.jointIcon : state.personalIcon, pseudoAccount.name) || { glyph: isJoint ? '👥' : '🏠', label: pseudoAccount.name };
+            title.innerHTML = `${renderDebtAccountIconBadge(pseudoAccount, icon, 'header-debt-icon')}${escapeHTML(accountName)} Dashboard`;
+        } else {
+            title.textContent = `${accountName} Dashboard`;
+        }
         subtitle.textContent = `${state.dashboardType === 'personal' ? 'Personal checking calendar and cash flows' : (state.dashboardType === 'joint' ? 'Shared Joint Account ledger and expenditures' : 'Credit card transactions and running balance')}`;
     } else if (activeTab === 'bills') {
         title.textContent = `Shared Bills Split`;
@@ -17842,7 +18321,9 @@ function updateTabTitles() {
         title.textContent = `Delivery Side Gigs`;
         subtitle.textContent = "Log gig app logs and calculate daily payouts";
     } else if (activeTab === 'savings') {
-        title.textContent = 'Savings Tracker';
+        const pseudoAccount = { name: 'Savings Tracker', loginUrl: state.savingsLoginUrl };
+        const icon = getCustomAccountIcon(state.savingsIcon, pseudoAccount.name) || { glyph: '💰', label: pseudoAccount.name };
+        title.innerHTML = `${renderDebtAccountIconBadge(pseudoAccount, icon, 'header-debt-icon')}Savings Tracker`;
         subtitle.textContent = 'Plan savings transfers and track the projected balance';
     } else if (activeTab === 'loans') {
         const loan = state.loans.find(item => item.id === state.ccSelectedCardId && item.type === 'loan');
@@ -17857,7 +18338,7 @@ function updateTabTitles() {
             // .main-sticky-dashboard in index.css) instead of down in the page body, so they stay
             // visible while scrolling through the rest of the card's details.
             const payoffDate = projectCardPayoffPath(loan.id, 0, formatLocalDate(new Date()), 0, 0, false, 600).payoffDate;
-            title.innerHTML = `${renderDebtAccountIconBadge(loan, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open loan settings">${escapeHTML(loan.name)}</button>`;
+            title.innerHTML = `${renderDebtAccountIconBadge(loan, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open loan settings">${escapeHTML(getAccountDisplayName(loan))}</button>`;
             subtitle.classList.add('header-subtitle-highlight');
             // Order per explicit user request, 2026-08-03: Original Balance, Monthly Payment, APR,
             // Paid, Current Balance, Payoff — folds in what the removed "Card Metrics" section used
@@ -17872,6 +18353,7 @@ function updateTabTitles() {
                 headerStatChip('Payoff', payoffDate)
             ].join('');
             document.getElementById('btn-header-card-settings').onclick = () => openEditLoanModal(loan.id);
+            fitAccountTitleFont(title);
         } else {
             title.textContent = 'Installment Loans';
             subtitle.textContent = 'Debt payoff targets, escrow, and installment target options';
@@ -17885,7 +18367,7 @@ function updateTabTitles() {
             const icon = getDebtAccountIcon(card);
             // See the matching comment in the 'loans' branch above — same reasoning for cards.
             const payoffDate = projectCardPayoffPath(card.id, 0, formatLocalDate(new Date()), 0, 0, false, 600).payoffDate;
-            title.innerHTML = `${renderDebtAccountIconBadge(card, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open card settings">${escapeHTML(card.name)}</button>`;
+            title.innerHTML = `${renderDebtAccountIconBadge(card, icon, 'header-debt-icon')}<button type="button" class="header-account-link" id="btn-header-card-settings" title="Open card settings">${escapeHTML(getAccountDisplayName(card))}</button>`;
             subtitle.classList.add('header-subtitle-highlight');
             // Credit cards get their own bubble set (distinct from loans' Original
             // Balance/Monthly Payment/Paid/Current Balance) — per explicit user request,
@@ -17904,6 +18386,7 @@ function updateTabTitles() {
                 headerStatChip('Payoff', payoffDate)
             ].join('');
             document.getElementById('btn-header-card-settings').onclick = () => openEditLoanModal(card.id);
+            fitAccountTitleFont(title);
         } else {
             title.textContent = 'Credit Cards';
             subtitle.textContent = 'Credit card payoff targets and promotions';
@@ -20725,6 +21208,20 @@ function getCardRunningBalanceAtDate(cardId, targetDateStr) {
 }
 
 // --- CREDIT CARD SUB-DASHBOARD & DETAILS EDITING ---
+// Staged the same way tempEditingPromos etc. below are — the loan-dialog's icon upload only commits
+// to the real loan.customIconDataUrl on Save, so Cancel leaves an untouched account alone.
+let tempEditingLoanIconDataUrl = '';
+function renderLoanIconPreview() {
+    const preview = document.getElementById('loan-icon-preview');
+    if (!preview) return;
+    const nameField = document.getElementById('loan-name-field');
+    const icon = tempEditingLoanIconDataUrl
+        ? getCustomAccountIcon(tempEditingLoanIconDataUrl, nameField?.value || 'Account')
+        : getDebtAccountIcon({ name: nameField?.value || '', storeName: document.getElementById('loan-store-name')?.value || '', type: document.getElementById('loan-type-field')?.value });
+    preview.innerHTML = icon.glyph;
+    preview.classList.toggle('has-logo', !!icon.image);
+    document.getElementById('btn-loan-icon-remove')?.classList.toggle('hidden', !tempEditingLoanIconDataUrl);
+}
 let tempEditingPromos = [];
 // Set while editing an existing balance transfer row (see renderBalanceTransfers()'s Edit button).
 // Balance transfers commit straight to the real loan object rather than staging in
@@ -20741,6 +21238,11 @@ function resetXferEditor() {
     document.getElementById('xfer-fee-pct').value = '3.0';
     document.getElementById('xfer-promo-rate').value = '0';
     document.getElementById('xfer-promo-exp').value = '';
+    document.getElementById('xfer-source').value = document.getElementById('xfer-source').options[0]?.value || '';
+    document.getElementById('xfer-external-source-name').value = '';
+    document.getElementById('xfer-ledger-owner').value = 'personal';
+    document.getElementById('xfer-description').value = '';
+    xferDescriptionAutoValue = '';
     document.getElementById('btn-execute-xfer').textContent = 'Add Transfer';
     document.getElementById('btn-cancel-xfer-edit').classList.add('hidden');
     updateBalanceTransferModeFields();
@@ -21442,19 +21944,15 @@ function applyCreditCardSectionState(renderPlannerOnOpen = true) {
         ccSectionDefaultsResetForPageLoad = true;
     }
 
-    // Only the account prev/select/next row and the stat-bubble row collapse — the title and
-    // date-nav must always stay visible. Toggled solely via the page-level Hide All button (see
-    // getMasterCollapseControls()); there's no dedicated button of its own. Per explicit user
-    // request, 2026-08-03 (an earlier version collapsed the whole title/date-nav/bubbles card,
-    // which hid too much).
+    // Only the stat-bubble row collapses — the title, date-nav, and account prev/select/next row
+    // must always stay visible/usable regardless of Hide All. Toggled solely via the page-level
+    // Hide All button (see getMasterCollapseControls()); there's no dedicated button of its own.
+    // Originally the account-nav row collapsed here too (2026-08-03), but that made switching
+    // accounts require un-collapsing first — per explicit user request, 2026-08-05, the account
+    // switcher now stays visible no matter what.
     const headerCardKey = isLoan ? 'loanHeaderCard' : 'ccHeaderCard';
     const headerCardCollapsed = !!state.uiCollapsedSections[headerCardKey];
-    const headerCardAccountNav = document.getElementById('cc-account-nav');
     const headerCardBubbles = document.getElementById('current-tab-subtitle');
-    // header-card-force-hidden (defined in index.css) uses !important so it reliably wins over
-    // #cc-account-nav's own nav-count-based .hidden toggle (updateCCAccountNavControls()) when
-    // collapsed, while leaving that existing logic in sole control when not collapsed.
-    headerCardAccountNav?.classList.toggle('header-card-force-hidden', headerCardCollapsed);
     headerCardBubbles?.classList.toggle('header-card-force-hidden', headerCardCollapsed);
 
     const metricsCollapsed = !!state.uiCollapsedSections[metricsKey];
@@ -21731,20 +22229,15 @@ function setupCCDashboardListeners() {
     });
 
 
-    ['cc-list-filter-text', 'cc-list-filter-merchant', 'cc-list-filter-owner', 'cc-list-filter-trip'].forEach(id => {
-        document.getElementById(id).addEventListener('input', () => {
-            if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
-        });
+    document.getElementById('cc-list-filter-text').addEventListener('input', () => {
+        if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
     });
-    // Shared by both "Clear Filters" (row 3, the merchant/ownership/trip dropdowns) and "Reset
-    // Filters/Sort" (row 1, matching the Dashboard list view's own button of the same name) — the
-    // two ended up meaning the same full reset once "Reset Filters/Sort" was added here, so both
-    // just call this instead of keeping two near-identical handlers in sync by hand.
+    // The merchant/ownership/trip dropdown row this used to also clear was removed entirely,
+    // 2026-08-05, per explicit user request — the search box above already covers all three via
+    // matchesMasterSearch(). "Clear" now just resets the search text, sort, and any column-header
+    // filters.
     const resetCCListFiltersAndSort = () => {
         document.getElementById('cc-list-filter-text').value = '';
-        document.getElementById('cc-list-filter-merchant').value = 'all';
-        document.getElementById('cc-list-filter-owner').value = 'all';
-        document.getElementById('cc-list-filter-trip').value = 'all';
         state.ccListSort = { key: 'date', direction: 'asc' };
         Object.keys(columnFilterState).forEach(k => { if (k.startsWith('ccList:')) delete columnFilterState[k]; });
         if (state.ccSelectedCardId) renderCCCardList(state.ccSelectedCardId);
@@ -22665,11 +23158,11 @@ function updateCCAccountNavControls(card) {
     const index = accounts.findIndex(a => a.id === card.id);
     const prevAccount = accounts[(index - 1 + accounts.length) % accounts.length];
     const nextAccount = accounts[(index + 1) % accounts.length];
-    prevBtn.innerHTML = `&#8592; ${escapeHTML(prevAccount.name)}`;
-    nextBtn.innerHTML = `${escapeHTML(nextAccount.name)} &#8594;`;
+    prevBtn.innerHTML = `&#8592; ${escapeHTML(getAccountDisplayName(prevAccount))}`;
+    nextBtn.innerHTML = `${escapeHTML(getAccountDisplayName(nextAccount))} &#8594;`;
     prevBtn.title = `Previous: ${prevAccount.name}`;
     nextBtn.title = `Next: ${nextAccount.name}`;
-    select.innerHTML = accounts.map(a => `<option value="${escapeHTML(a.id)}"${a.id === card.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('');
+    select.innerHTML = accounts.map(a => `<option value="${escapeHTML(a.id)}"${a.id === card.id ? ' selected' : ''}>${escapeHTML(getAccountDisplayName(a))}</option>`).join('');
 }
 
 function renderCardDashboard(cardId) {
@@ -22678,9 +23171,9 @@ function renderCardDashboard(cardId) {
     const isLoan = card.type === 'loan';
     const detailLayout = document.getElementById('cc-dashboard-layout');
     detailLayout?.classList.toggle('loan-dashboard-mode', isLoan);
-    // Shortened for Loans specifically per explicit user request, 2026-08-05 ("simply '← Loans'") —
-    // Credit Cards' own label wasn't part of that ask, left as-is.
-    document.getElementById('btn-cc-back').textContent = isLoan ? '← Loans' : '← Back to Credit Cards';
+    // Shortened for both per explicit user request (Loans: 2026-08-05 "simply '← Loans'"; Credit
+    // Cards matched the same day for consistency).
+    document.getElementById('btn-cc-back').textContent = isLoan ? '← Loans' : '← Credit Cards';
     updateCCAccountNavControls(card);
     document.getElementById('btn-add-loan-payment').classList.toggle('hidden', !isLoan);
     // +Payment replaces +Transaction on Loans — a loan's ledger only ever takes payments, never an
@@ -23182,11 +23675,6 @@ function renderCCCardList(cardId) {
     const year = state.ccYear;
     const cardCal = state.cardCalendars[cardId] || {};
     const textFilter = document.getElementById('cc-list-filter-text').value.trim().toLowerCase();
-    const merchantSelect = document.getElementById('cc-list-filter-merchant');
-    const tripSelect = document.getElementById('cc-list-filter-trip');
-    const merchantFilter = merchantSelect.value || 'all';
-    const ownerFilter = document.getElementById('cc-list-filter-owner').value;
-    const tripFilter = tripSelect.value || 'all';
 
     let txList = [];
     if (state.ccListScope === 'month') {
@@ -23199,35 +23687,14 @@ function renderCCCardList(cardId) {
         });
     }
 
-    const populateFilter = (select, values, allLabel, selectedValue) => {
-        select.replaceChildren();
-        const allOption = document.createElement('option');
-        allOption.value = 'all';
-        allOption.textContent = allLabel;
-        select.appendChild(allOption);
-        [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b)).forEach(value => {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = value;
-            select.appendChild(option);
-        });
-        select.value = [...select.options].some(option => option.value === selectedValue) ? selectedValue : 'all';
-    };
-    populateFilter(merchantSelect, txList.map(t => (t.merchant || '').trim()), 'All merchants', merchantFilter);
-    populateFilter(tripSelect, txList.map(t => (t.trip || '').trim()), 'All trips', tripFilter);
-
+    // The merchant/ownership/trip dropdown row this used to also filter by was removed entirely,
+    // 2026-08-05, per explicit user request — matchesMasterSearch() below already covers all three
+    // (plus date/amount/badge text) through the single search box.
     txList = txList.filter(t => {
         const owner = t.owner || 'personal';
         const merchant = (t.merchant || '').trim();
         const trip = (t.trip || '').trim();
-        // Master search: matches merchant/description/owner/trip/date/amount/badge-text together —
-        // the box used to only check description despite looking like a general search, so a query
-        // like a dollar amount, the owner name, or a badge word (Manual/Recurring/Overridden) that's
-        // clearly visible on the row itself silently matched nothing.
-        return matchesMasterSearch(textFilter, merchant, t.description, owner, trip, formatDateDisplay(t.date), t.date, Number(t.amount).toFixed(2), getTransactionIndicatorSearchText(t))
-            && (isLoan || merchantSelect.value === 'all' || merchant === merchantSelect.value)
-            && (isLoan || ownerFilter === 'all' || owner === ownerFilter)
-            && (isLoan || tripSelect.value === 'all' || trip === tripSelect.value);
+        return matchesMasterSearch(textFilter, merchant, t.description, owner, trip, formatDateDisplay(t.date), t.date, Number(t.amount).toFixed(2), getTransactionIndicatorSearchText(t));
     });
     // Same-date tie-break must match compareTransactionsChronologically exactly — see the comment on
     // computeAllEstimatedBalancesForCard's own sort for why disagreeing here breaks the balance chain.
@@ -23641,8 +24108,11 @@ function openEditLoanModal(loanId) {
     document.getElementById('btn-delete-loan-account').classList.remove('hidden');
 
     document.getElementById('loan-name-field').value = loan.name;
+    document.getElementById('loan-mobile-nickname').value = loan.mobileNickname || '';
     document.getElementById('loan-type-field').value = loan.type || 'loan';
     document.getElementById('loan-login-url').value = loan.loginUrl || '';
+    tempEditingLoanIconDataUrl = loan.customIconDataUrl || '';
+    renderLoanIconPreview();
     document.getElementById('loan-is-store-card').checked = !!loan.isStoreCard;
     document.getElementById('loan-store-name').value = loan.storeName || '';
     document.getElementById('loan-start-bal').value = loan.startBal;
@@ -23713,7 +24183,13 @@ function openEditLoanModal(loanId) {
     applyLoanDialogCollapseDefaults();
     updateLoanDialogIndicators();
 
-    // Populate balance transfer source select dropdown (excluding self)
+    // Populate balance transfer source select dropdown (excluding self) — "Other / Not Tracked"
+    // goes LAST, after every real tracked loan/card, so the dropdown's default pre-selected option
+    // (a <select> always defaults to its first <option>) stays whatever it already was — a real
+    // tracked card — rather than silently changing the default "New Transfer" experience to assume
+    // an external source. Still a clearly visible, one-click-away choice for a source outside this
+    // app's own loans/cards (e.g. one of Asia's cards that was never added here). Per explicit user
+    // request, 2026-08-05.
     const xferSelect = document.getElementById('xfer-source');
     xferSelect.innerHTML = '';
     state.loans.filter(l => l.id !== loanId).forEach(other => {
@@ -23722,6 +24198,13 @@ function openEditLoanModal(loanId) {
         opt.textContent = `${other.name} (Bal: $${other.currentBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`;
         xferSelect.appendChild(opt);
     });
+    const externalOpt = document.createElement('option');
+    externalOpt.value = '__external__';
+    externalOpt.textContent = 'Other / Not Tracked';
+    xferSelect.appendChild(externalOpt);
+    // resetXferEditor() (above) already ran its own preview update, but against the previous
+    // card's stale source list — refresh now that the dropdown reflects this card's real options.
+    updateXferDescriptionPreview();
 
     // Populate mortgage fields
     const isMortgage = !!loan.isMortgage;
