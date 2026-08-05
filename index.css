@@ -66,6 +66,19 @@
     box-sizing: border-box;
 }
 
+/* See the element's own comment in Index.html — permanent mask over env(safe-area-inset-top), every
+   page, every scroll position, independent of any sticky header's own top padding. */
+#safe-area-top-mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top, 0px);
+    background: var(--bg-main);
+    z-index: 700;
+    pointer-events: none;
+}
+
 body {
     background-color: var(--bg-main);
     background-image: var(--bg-mesh);
@@ -2904,9 +2917,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .cc-filter-tools {
     grid-template-columns: minmax(200px, 1.5fr) repeat(3, minmax(150px, 1fr)) auto;
     padding: 1rem;
-    border: 1px solid var(--glass-border);
-    border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.02);
 }
 
 .cc-owner-badge,
@@ -3072,6 +3082,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
        .split-separator now also contains the Extra Transfers button, which must stay upright. */
     .split-separator > span {
         transform: rotate(90deg);
+    }
+    /* .transfer-cycle-breakdown's 1st/15th boxes (base rule: grid-template-columns: 1fr 1fr, ~2588)
+       never had a mobile override either — squeezed side by side on a narrow phone, the 15th box
+       overflowed off the right edge of the screen instead of wrapping. Confirmed real bug,
+       2026-08-05: looked fine for Asia (shorter content — no split-transfer badge) but Jason's
+       longer numbers plus a "(1st Transfer Split)" badge pushed the 15th box past the viewport.
+       Stacking to one column removes the horizontal squeeze entirely regardless of content length,
+       for both people, not just whichever one happens to have shorter text this month. */
+    .transfer-cycle-breakdown {
+        grid-template-columns: 1fr;
     }
 
     /* #unified-header-layout's "left period right" / "toggles toggles toggles" grid never had a
@@ -3672,6 +3692,20 @@ body.maximized-calendar .day-transaction-item {
 
 #savings-list-view {
     padding: 1.25rem;
+}
+
+/* Same fix/reasoning as #list-view-table-container/#cc-list-view-table-container above (~1636): the
+   shorthand `overflow: visible` sets BOTH axes to visible in one declaration, which is what actually
+   avoids the CSS Overflow spec quirk (setting overflow-x to non-visible silently forces overflow-y
+   to compute as auto too, even when overflow-y is separately declared visible — same quirk documented
+   on body's own overflow-x:clip, and the one that broke the Delivery table's sticky header,
+   _updateDeliveryStickyOffsets() in app.js). Without this, .table-responsive's base overflow-x:auto
+   left this table as its own independently-scrolling box, breaking the sticky column-header offset
+   _updateListViewStickyOffset() now computes for it (added 2026-08-05) the same way it did for
+   Delivery. No horizontal-scroll tradeoff here the way there was for Delivery's wider table — the
+   mobile column-hiding rule just below (hide Type) already keeps this table narrow enough to fit. */
+#savings-list-view .table-responsive {
+    overflow: visible !important;
 }
 
 @media (max-width: 1200px) and (min-width: 901px) {
@@ -4864,9 +4898,15 @@ body.maximized-calendar .day-transaction-item {
     body[data-active-tab="dashboard"] #btn-toggle-metrics {
         display: none !important;
     }
-    /* Export CSV isn't a mobile action (nowhere to put the downloaded file to use) — per explicit
-       user request, 2026-08-04. */
-    body[data-active-tab="dashboard"] #btn-export-listview-csv {
+    /* Download CSV isn't a mobile action (nowhere to put the downloaded file to use) — per explicit
+       user request, 2026-08-04, extended 2026-08-05 to every remaining CSV button app-wide
+       (Savings, Bill Settings — Dashboard and Credit Cards/Loans already had this; desktop-only,
+       full stop, per explicit user request). #btn-export-billtracker-csv normally starts with the
+       static `hidden` class too (JS only un-hides it outside Cards sub-view) — !important beats
+       that regardless of which sub-view toggles it on. */
+    body[data-active-tab="dashboard"] #btn-export-listview-csv,
+    body[data-active-tab="savings"] #btn-export-savingslist-csv,
+    body[data-active-tab="billtracker"] #btn-export-billtracker-csv {
         display: none !important;
     }
     /* Starting/Ending Balance detail lines under the ledger title pushed the search/filter row
