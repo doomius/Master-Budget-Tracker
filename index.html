@@ -517,17 +517,14 @@
                                         <div class="muted-text" id="joint-expenses-total-line" style="font-size:.8rem;margin-top:.15rem;"></div>
                                     </div>
                                     <div style="display:flex; gap:0.5rem; align-items:center;">
-                                        <!-- Restored 2026-08-01: this toggle's click handlers and active-state sync already
-                                             existed in app.js (setupEventListeners' #bill-ownership-toggle wiring, renderBillsTab's
-                                             own sync) but the markup itself had been removed from this page, silently forcing
-                                             state.billTrackerOwnership back to 'joint' on every load (see migrateDatabase) with no
-                                             way to view/edit/delete a personal-owned Bill Splitter recurring bill ever again — found
-                                             live when a personal "iCloud Storage" bill kept posting every month with no way to reach
-                                             it in any tab. -->
-                                        <div class="segmented-control" id="bill-ownership-toggle">
-                                            <button type="button" class="segment-btn active" data-bill-ownership="joint">Joint</button>
-                                            <button type="button" class="segment-btn" data-bill-ownership="personal">Personal</button>
-                                        </div>
+                                        <!-- Removed again 2026-08-04, per explicit user request: personal-scoped expenses
+                                             don't belong in Bill Splitter — Bills & Expenses (billtracker tab) now has its own
+                                             All/Joint/Personal filter over the same underlying recurring-bill templates
+                                             (state.billTrackerSettings), so a personal bill stays fully reachable there even
+                                             with this Joint/Personal toggle gone. (An earlier 2026-08-01 removal of this same
+                                             toggle predated that billtracker filter and orphaned a personal recurring bill with
+                                             no way to reach it anywhere — not a risk this time. state.billTrackerOwnership is
+                                             forced to 'joint' unconditionally in migrateDatabase(), same as before.) -->
                                         <div class="segmented-control" id="expense-calendar-view-toggle">
                                             <button type="button" class="segment-btn active" data-expense-view-mode="list">List</button>
                                             <button type="button" class="segment-btn" data-expense-view-mode="calendar">Calendar</button>
