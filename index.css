@@ -67,13 +67,24 @@
 }
 
 /* See the element's own comment in Index.html — permanent mask over env(safe-area-inset-top), every
-   page, every scroll position, independent of any sticky header's own top padding. */
+   page, every scroll position, independent of any sticky header's own top padding.
+   35% taller than the raw inset, NOT a flat +Npx addition — per explicit user request, 2026-08-05,
+   a sliver of scrolled content was still visible on some pages even with the mask in place.
+   env(safe-area-inset-top) reflects only the physical notch/Dynamic Island; it does NOT grow when
+   iOS adds extra chrome on top of that (the screen-recording-in-progress indicator bar being the
+   case actually seen) — there's no CSS-visible signal for that extra height. A flat +20px addition
+   was tried first and reverted: it's harmless on a notched device (same background color as the
+   sticky title below it, so the overshoot is visually seamless) but WRONG on any device with zero
+   inset (every non-notched phone, and this same page in a plain desktop/Android browser) — 0px+20px
+   is still 20px, a permanent unwanted bar with nothing to justify it there, clipping into the
+   title's own top padding. Multiplying instead of adding keeps the zero-inset case exactly zero
+   (0 * 1.35 is still 0) while still giving a notched device roughly a third more headroom. */
 #safe-area-top-mask {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    height: env(safe-area-inset-top, 0px);
+    height: calc(env(safe-area-inset-top, 0px) * 1.35);
     background: var(--bg-main);
     z-index: 700;
     pointer-events: none;
@@ -2908,15 +2919,30 @@ label {
     white-space: nowrap;
 }
 
+/* The filter-summary pill's search-group wrapper capped at 360px unconditionally, which forced
+   the pill to wrap onto 2 lines even on a wide desktop screen with plenty of room to spare —
+   confirmed real bug, 2026-08-05. That cap (plus the pill's own wrap) is real mobile behavior
+   (narrow screens genuinely need it), so it's scoped to the mobile media query below instead of
+   applying everywhere. */
+.cc-list-search-group {
+    max-width: none;
+}
+#cc-filter-summary {
+    white-space: nowrap;
+}
+@media (max-width: 900px) {
+    .cc-list-search-group {
+        max-width: 360px;
+    }
+    #cc-filter-summary {
+        white-space: normal;
+    }
+}
+
 input[type="date"]::-webkit-calendar-picker-indicator {
     display: none !important;
     -webkit-appearance: none !important;
     opacity: 0;
-}
-
-.cc-filter-tools {
-    grid-template-columns: minmax(200px, 1.5fr) repeat(3, minmax(150px, 1fr)) auto;
-    padding: 1rem;
 }
 
 .cc-owner-badge,
@@ -2947,9 +2973,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 @media (max-width: 1200px) {
     .cc-list-tools {
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    }
-    .cc-filter-tools {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     }
 }
 @media (max-width: 1200px) {
@@ -3433,6 +3456,91 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     }
 }
 
+/* Floating mobile sync-status badge — see the matching comment on its markup in Index.html and
+   showSyncStatusFlag()/updateMobileSyncBadge() in app.js. Desktop always has the sidebar's own
+   #sync-status-flag in view, so this stays hidden there entirely. */
+.mobile-sync-badge {
+    display: none;
+    position: fixed;
+    left: 1rem;
+    bottom: 1rem;
+    z-index: 652;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 15, 30, 0.92);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    font-size: 1.35rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    transition: opacity 0.6s ease, transform 0.3s ease;
+    opacity: 1;
+}
+@media (max-width: 900px) {
+    .mobile-sync-badge:not(.hidden) {
+        display: flex;
+    }
+}
+.mobile-sync-badge.fading-out {
+    opacity: 0;
+    transform: scale(0.85);
+}
+.mobile-sync-badge.mobile-sync-badge-pending {
+    border-color: var(--text-secondary);
+}
+.mobile-sync-badge.mobile-sync-badge-pending .mobile-sync-badge-icon {
+    display: inline-block;
+    animation: sync-status-spin 1s linear infinite;
+}
+.mobile-sync-badge.mobile-sync-badge-success {
+    border-color: #2ecc71;
+    box-shadow: 0 0 0 2px rgba(46, 204, 113, 0.2), var(--glass-shadow);
+}
+.mobile-sync-badge.mobile-sync-badge-error {
+    border-color: #e74c3c;
+    box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.25), var(--glass-shadow);
+    animation: sync-status-error-pulse 1.6s ease-in-out infinite;
+}
+.mobile-sync-badge-detail {
+    position: fixed;
+    left: 1rem;
+    right: 1rem;
+    bottom: calc(1rem + 46px + 0.6rem);
+    z-index: 652;
+    width: auto;
+    background: rgba(10, 15, 30, 0.96);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--glass-shadow);
+    padding: 0.85rem 1rem;
+    color: var(--text-primary);
+    display: none;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+@media (max-width: 900px) {
+    .mobile-sync-badge-detail:not(.hidden) {
+        display: flex;
+    }
+}
+.mobile-sync-badge-detail-message {
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+.mobile-sync-badge-detail-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+#btn-mobile-sync-retry {
+    align-self: flex-start;
+}
+
 .header-controls {
     display: flex;
     align-items: center;
@@ -3706,6 +3814,23 @@ body.maximized-calendar .day-transaction-item {
    mobile column-hiding rule just below (hide Type) already keeps this table narrow enough to fit. */
 #savings-list-view .table-responsive {
     overflow: visible !important;
+}
+/* The overflow fix above was the missing piece for measuring/positioning correctly, but the actual
+   sticky pin only works if the <th> elements are themselves position:sticky — that part was never
+   added for Savings, unlike the matching #list-view-table-container/#cc-list-view-table-container
+   rule below. Without it, _updateListViewStickyOffset()'s JS-assigned `top` just shifted each <th>
+   down from its normal position:relative spot (the generic .data-table th default) instead of
+   pinning it, so the header row visibly floated down into the table body as the page scrolled.
+   Confirmed real bug, 2026-08-05. */
+#savings-list-view .data-table thead th {
+    position: sticky;
+    z-index: 94;
+    background: #0d111e;
+    white-space: normal;
+    border-top: 1px solid var(--glass-border);
+    border-bottom: 2px solid var(--glass-border);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    /* top is set dynamically via JS _updateListViewStickyOffset */
 }
 
 @media (max-width: 1200px) and (min-width: 901px) {
@@ -4773,7 +4898,6 @@ body.maximized-calendar .day-transaction-item {
     body[data-active-tab="loans"] #unified-header-layout #header-right-actions {
         position: static !important;
     }
-
     /* Dashboard header button-wall — Personal/Joint, Today/Threshold, Month/Full Year, and the
        cycle filter each live in their own row (inherited from the desktop layout's structure), so
        on a narrow phone they simply stack instead of fitting side by side. Shrinking each control's
@@ -4793,6 +4917,18 @@ body.maximized-calendar .day-transaction-item {
     body[data-active-tab="dashboard"] #header-left-buttons-row,
     body[data-active-tab="dashboard"] #header-identity-toggles-host {
         gap: 0.35rem !important;
+    }
+    /* Savings and Bill Settings' Today/Current Month button lives in #header-right-actions instead
+       of #header-left-actions/#header-left-buttons-row (see updateHeaderPeriodNavAndToday() in
+       app.js — those two tabs specifically prepend it into hostRight) — a completely different
+       container from the one every other centering rule here targets, so it was left rendering at
+       its normal desktop flex position (effectively left-aligned) instead of centered like every
+       other toggle row on the page. Confirmed real bug, 2026-08-05. */
+    body[data-active-tab="savings"] #header-right-actions,
+    body[data-active-tab="billtracker"] #header-right-actions {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
     }
     /* The "deeper restructure" flagged above, now done per explicit user request, 2026-08-04:
        Personal/Joint now shares a row with Today/Threshold instead of stacking above it, and Month/
@@ -4917,6 +5053,14 @@ body.maximized-calendar .day-transaction-item {
     body[data-active-tab="dashboard"] #list-view-ending-balance {
         display: none !important;
     }
+    /* Flatten the sticky ledger header's own border/shadow on mobile — per explicit user request,
+       2026-08-05, it read as a redundant box-within-a-box against the outer .glass-card's own
+       border. Still position:sticky, still solid-background (needed for legibility over scrolling
+       rows underneath) — just no separate outline. */
+    body[data-active-tab="dashboard"] .list-view-sticky-header {
+        border: none !important;
+        box-shadow: none !important;
+    }
 
     /* Bills & Expenses (billtracker tab), mobile — per explicit user request, 2026-08-04: no Calendar
        sub-view on mobile (matches every other page's Calendar/List removal, same "no calendar option
@@ -5023,6 +5167,18 @@ body.maximized-calendar .day-transaction-item {
         align-items: center !important;
         justify-content: center !important;
         gap: 0.3rem;
+    }
+    /* #btn-cc-back ("← Loans"/"← Back to Credit Cards") sat BELOW the big centered icon+title on
+       the loan/card detail page — order:-1 below puts the title before it in DOM order, and with no
+       explicit order of its own the back button (order:0) fell in after. A back-navigation link
+       reading below the page's own title is backwards from every standard "← Back" placement
+       convention; order:-2 here beats the title's -1, putting it first — above the icon+title, not
+       beside it (the icon itself is nested inside header-title-compact's own <h2>, not a sibling —
+       reordering flex siblings can't reach in there without restructuring that shared element, which
+       every other tab's title also uses). Per explicit user request, 2026-08-05 — best safe
+       approximation of "next to the icon" without touching that shared structure. */
+    #btn-cc-back {
+        order: -2;
     }
     .header-top-row .header-title-compact {
         order: -1;
@@ -5286,10 +5442,7 @@ body.maximized-calendar .day-transaction-item {
    payment-plan-only surfaces while retaining the same calendar, ledger, metrics, and payoff graph. */
 #cc-dashboard-layout.loan-dashboard-mode #card-payment-plans-summary,
 #cc-dashboard-layout.loan-dashboard-mode .sidebar-details-card,
-#cc-dashboard-layout.loan-dashboard-mode #cc-list-add-form,
-#cc-dashboard-layout.loan-dashboard-mode #cc-list-filter-merchant,
-#cc-dashboard-layout.loan-dashboard-mode #cc-list-filter-owner,
-#cc-dashboard-layout.loan-dashboard-mode #cc-list-filter-trip {
+#cc-dashboard-layout.loan-dashboard-mode #cc-list-add-form {
     display: none !important;
 }
 #cc-dashboard-layout.loan-dashboard-mode #cc-calendar-view-container {
@@ -5424,18 +5577,13 @@ body.maximized-calendar .day-transaction-item {
     gap: 0.4rem;
     flex-wrap: wrap;
 }
-.header-debt-icon { margin-right: 0.45rem; text-decoration: none; }
-.header-debt-icon.has-logo {
-    display: inline-flex;
-    width: 1.55rem;
-    height: 1.55rem;
-    flex: 0 0 1.55rem;
-    overflow: hidden;
-    padding: 0.1rem;
-    border-radius: 0.35rem;
-    background: #fff;
-    vertical-align: middle;
-}
+/* Used to shrink a logo-image icon down to 1.55rem just in header contexts (loan/card detail pages,
+   Dashboard, Savings Tracker) — smaller than the Loans/Credit Cards home page's own icon (2.7rem,
+   set by the base .debt-account-icon rule below, which this used to override). Removed the
+   width/height/flex/border-radius/background overrides entirely so every header icon now inherits
+   that same 2.7rem sizing instead of a special-cased smaller one — per explicit user request,
+   2026-08-05 ("use this size for every page that displays an icon"). */
+.header-debt-icon { margin-right: 0.45rem; text-decoration: none; vertical-align: middle; }
 @media (max-width: 640px) {
     /* Was single-column here, stacking each metric bubble (Estimated Cost/Payment Date/Payment
        Source/Recurring, or the Loans/CC equivalents) into its own full-width row — 4 rows of mostly
@@ -5666,3 +5814,5 @@ body.maximized-calendar .day-transaction-item {
     .mobile-row-detail-overlay { align-items: center; }
     .mobile-row-detail-card { border-radius: 16px; }
 }
+
+
