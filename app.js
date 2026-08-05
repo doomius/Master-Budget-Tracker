@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-05 15:36';
+const BUILD_VERSION = '2026-08-05 18:03';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -3234,6 +3234,47 @@ function formatDateDisplay(isoStr) {
     return `${month}/${day}/${year.slice(-2)}`;
 }
 
+// MM/DD only, no year — the ledger tables' own Date column on mobile, where the year is already
+// shown in the header date-nav right above (and, unlike formatDateDisplay(), the shorter text also
+// stops the column from wrapping onto 2 lines in the narrower mobile width). Deliberately a separate
+// function rather than changing formatDateDisplay() itself, which is used all over the app (confirm
+// dialogs, log messages, subtitles, etc.) where the year is NOT otherwise visible on screen and
+// still needs to show. Per explicit user request, 2026-08-05.
+function formatDateDisplayCompact(isoStr) {
+    if (typeof isoStr !== 'string') return isoStr;
+    const match = isoStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return isoStr;
+    const [, , month, day] = match;
+    return `${month}/${day}`;
+}
+
+// Whole-dollar amount + trailing "*" for mobile ledger table cells — cents rarely matter for a
+// glanceable running total on a phone, and dropping them (plus the year/weekday above) is what
+// actually keeps these narrow columns from wrapping onto 2 lines. The "*" marks it as rounded;
+// tapping the row (every one of these tables already opens a transaction-detail modal on tap) shows
+// the real, unrounded amount — a substitute for "long press" specifically, since long-press isn't a
+// reliably supported gesture across mobile browsers without a dedicated gesture library, whereas tap
+// is the existing, already-working interaction on every one of these rows. Per explicit user
+// request, 2026-08-05. `absValue` — caller supplies the sign/prefix, this only formats the digits.
+function formatMobileRoundedAmount(absValue) {
+    // Wrapped in its own nowrap span — these ledger `<td>`s have overflow-wrap:anywhere (so long
+    // merchant names/descriptions can still break), which was also breaking THIS short token apart
+    // between the digits and the trailing "*" in a narrow mobile column. Confirmed live, 2026-08-05.
+    return `<span style="white-space:nowrap;">$${Math.round(Math.abs(absValue)).toLocaleString('en-US')}*</span>`;
+}
+
+// Whole-dollar amounts (no cents) drop the trailing .00 — unlike formatMobileRoundedAmount() above,
+// this never actually rounds/loses precision (an amount ending in cents still shows them in full),
+// so it's safe to use everywhere, not just mobile. Used for Bill Settings amounts, which are
+// disproportionately round numbers (rent, a fixed loan payment, etc.) where ".00" is pure noise.
+// Per explicit user request, 2026-08-05.
+function formatBillAmountText(value) {
+    const num = parseFloat(value || 0);
+    return Number.isInteger(num)
+        ? `$${num.toLocaleString('en-US')}`
+        : `$${num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+}
+
 // Every native <input type="date"> shows mm/dd/yy by overlaying a text field on top of the real
 // (invisible) date input — the real one still holds the ISO value and drives all the existing code
 // that reads/sets .value, it's just visually hidden and click-through disabled. The overlay is a
@@ -3707,8 +3748,26 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         }
         const validationError = validateImportedDatabase(json.data);
         if (validationError) throw new Error(`Data from Google Drive failed validation: ${validationError}`);
+        // Snapshot this device's own view/filter/sort/collapsed-panel preferences (see
+        // VIEW_SETTING_STATE_KEYS's own comment — dashboardType, viewMode, ccViewMode,
+        // savingsListScope, etc.: "what does the UI look like on THIS device", never real
+        // financial data) before the wholesale wipe below. A pull legitimately needs to replace
+        // every real-data field with the pulled version, but blindly overwriting these too meant
+        // whichever tab-view/toggle state the LAST device to push happened to have open silently
+        // took over here — confirmed real bug, 2026-08-05 ("why if I have Personal and Calendar
+        // selected am I looking at the Joint list?"). Same underlying cause as the earlier
+        // state.activeTab clobbering bug, but activeTab already has its own fix via
+        // document.body.dataset.activeTab (a DOM value the pull never touches); these fields have
+        // no such DOM equivalent, so they're preserved here instead, restored right after the
+        // pulled data lands. Only keys this device actually had a value for are restored — a key
+        // never set locally still seeds normally from the pulled/migrated data.
+        const localViewSettings = {};
+        VIEW_SETTING_STATE_KEYS.forEach(key => {
+            if (state[key] !== undefined) localViewSettings[key] = state[key];
+        });
         Object.keys(state).forEach(k => delete state[k]);
         Object.assign(state, json.data);
+        Object.assign(state, localViewSettings);
         migrateDatabase();
         // enforceMobileListView() only applies its one-time mobile defaults (metrics collapsed,
         // quick-add tools collapsed, etc.) once per page load, guarded by
@@ -9617,7 +9676,16 @@ function renderAppImmediate() {
     syncCollapseToggleButtons();
     updateGlobalTogglesPlacement();
 
-    const activeTab = state.activeTab || document.querySelector('.nav-btn.active')?.dataset?.tab || 'dashboard';
+    // document.body.dataset.activeTab, NOT state.activeTab — same reasoning as
+    // updateGlobalNavVisibility()/updateGlobalTogglesPlacement()'s own comments on this exact
+    // pattern (state.activeTab can be clobbered by a Google Drive pull to whatever tab a different
+    // device had open). Confirmed real bug, 2026-08-05: this was the one place in the whole render
+    // pass that never got that same fix — pulling from Drive while looking at any tab OTHER than
+    // whatever tab was active on the last device to push meant this dispatch called the WRONG tab's
+    // render function (or none), so the tab actually on screen kept showing its pre-pull placeholder
+    // content until some later action (e.g. switching tabs, which reads this same dataset attribute)
+    // finally re-rendered it with the real pulled data.
+    const activeTab = document.body.dataset.activeTab || 'dashboard';
     // Personal vs Joint share the exact same #list-view-table-container, but with different column
     // sets — this lets mobile CSS (@media 900px) target each one's own redundant columns to hide
     // instead of a single nth-child rule that's only correct for one of the two. Mirrors the
@@ -13788,7 +13856,12 @@ function findTodayMarkerIndex(sortedList, todayStr, allowGapFallback) {
 
 function renderPersonalList() {
     const container = document.getElementById('list-view-table-container');
-    document.getElementById('list-view-title').textContent = `Personal Checking Ledger (${state.listScope === 'month' ? MONTH_NAMES[state.currentMonth] + ' ' + state.currentYear : state.currentYear})`;
+    // The (Month Year)/(Year) suffix repeats what's already visible in the date-nav right above this
+    // title on mobile's pinned header — confirmed real redundancy, 2026-08-05. Desktop keeps it
+    // (more room, and the title isn't pinned directly under the date-nav there).
+    document.getElementById('list-view-title').textContent = isMobileViewport()
+        ? 'Personal Checking Ledger'
+        : `Personal Checking Ledger (${state.listScope === 'month' ? MONTH_NAMES[state.currentMonth] + ' ' + state.currentYear : state.currentYear})`;
 
     let txList = [];
     const year = state.currentYear;
@@ -14033,13 +14106,13 @@ function renderPersonalList() {
         const startingBalance = t.runningBalance - t.amount;
         return `
             <tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} data-id="${t.id}" data-date="${t.date}" data-desc="${escapeHTML(displayTitle)}" data-amount="${t.amount}" data-isgig="${t.isGig ? 'true' : 'false'}" data-dynamic="${isEditableDynamic ? 'true' : 'false'}" data-below-threshold="${t.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${t.parentDynId || ''}" style="cursor: pointer;">
-                <td><strong>${formatDateDisplay(t.date)}</strong></td>
+                <td><strong>${isMobileViewport() ? formatDateDisplayCompact(t.date) : formatDateDisplay(t.date)}</strong></td>
                 <td><span class="card-icon info" style="font-size:0.75rem; padding: 2px 6px;">${dayName}</span></td>
                 <td><span${t.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(displayTitle)}</span> ${getTransactionIndicatorBadges(t)}</td>
                 <td><span class="day-transaction-item ${typeClass}" style="display:inline-block; padding: 2px 6px; border-radius:4px; font-size:0.75rem;">${t.type.toUpperCase()}</span></td>
                 <td class="font-heading">$${startingBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                <td class="${t.amount >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;">${t.amount >= 0 ? '+' : '-'}$${Math.abs(t.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                <td class="${t.runningBalance >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;">$${t.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                <td class="${t.amount >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;" data-detail-value="${t.amount >= 0 ? '+' : '-'}$${Math.abs(t.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${t.amount >= 0 ? '+' : '-'}${isMobileViewport() ? formatMobileRoundedAmount(t.amount) : `$${Math.abs(t.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                <td class="${t.runningBalance >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;" data-detail-value="$${t.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${isMobileViewport() ? formatMobileRoundedAmount(t.runningBalance) : `$${t.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
                 <td>
                     ${actionHtml}
                 </td>
@@ -14253,7 +14326,10 @@ function syncCheckingTransferMirror(tx, origin) {
 function renderJointList() {
     const container = document.getElementById('list-view-table-container');
     const periodLabel = state.listScope === 'month' ? `${MONTH_NAMES[state.currentMonth]} ${state.currentYear}` : String(state.currentYear);
-    document.getElementById('list-view-title').textContent = `Joint Account Ledger (${periodLabel})`;
+    // See the matching comment in renderPersonalList() — same redundancy, same mobile-only fix.
+    document.getElementById('list-view-title').textContent = isMobileViewport()
+        ? 'Joint Account Ledger'
+        : `Joint Account Ledger (${periodLabel})`;
     const periodStart = state.listScope === 'month' ? `${state.currentYear}-${String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0')}-01` : `${state.currentYear}-01-01`;
     const periodEnd = state.listScope === 'month' ? `${state.currentYear}-${String(MONTH_ORDER.indexOf(state.currentMonth) + 1).padStart(2, '0')}-${String(new Date(state.currentYear, MONTH_ORDER.indexOf(state.currentMonth) + 1, 0).getDate()).padStart(2, '0')}` : `${state.currentYear}-12-31`;
     // Starting Balance = the previous day's end-of-day balance — i.e. the prior month's (or prior
@@ -14528,12 +14604,12 @@ function renderJointList() {
             : `<button class="action-btn small-btn danger-btn delete-joint-btn" data-id="${tx.id}">Delete</button>`;
         const startingBalance = tx.runningBalance - (Number(tx.amount) || 0);
         return `<tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} data-id="${tx.id}" data-date="${tx.date}" data-desc="${escapeHTML(description)}" data-amount="${tx.amount}" data-dynamic="${tx.isSplitterDynamic ? 'true' : 'false'}" data-below-threshold="${tx.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${tx.parentDynId || ''}" style="cursor:pointer;">
-            <td>${formatDateDisplay(tx.date)}</td><td><strong${tx.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(description)}</strong> ${getTransactionIndicatorBadges(tx)}</td>
+            <td>${isMobileViewport() ? formatDateDisplayCompact(tx.date) : formatDateDisplay(tx.date)}</td><td><strong${tx.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(description)}</strong> ${getTransactionIndicatorBadges(tx)}</td>
             <td class="${color(Number(tx.jason) || 0)}">${tx.type === 'contribution' ? money(Number(tx.jason) || 0) : '—'}</td>
             <td class="${color(Number(tx.asia) || 0)}">${tx.type === 'contribution' ? money(Number(tx.asia) || 0) : '—'}</td>
             <td class="font-heading">$${startingBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-            <td class="${color(Number(tx.amount) || 0)} font-heading">${money(Number(tx.amount) || 0)}</td>
-            <td class="${color(tx.runningBalance)} font-heading">$${tx.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+            <td class="${color(Number(tx.amount) || 0)} font-heading" data-detail-value="${money(Number(tx.amount) || 0)}">${isMobileViewport() ? `${Number(tx.amount) < 0 ? '-' : '+'}${formatMobileRoundedAmount(Number(tx.amount) || 0)}` : money(Number(tx.amount) || 0)}</td>
+            <td class="${color(tx.runningBalance)} font-heading" data-detail-value="$${tx.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${isMobileViewport() ? formatMobileRoundedAmount(tx.runningBalance) : `$${tx.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
             <td class="table-actions-cell">${deleteBtn}</td></tr>`;
     };
 
@@ -16757,26 +16833,19 @@ function _updateDeliveryStickyOffsets() {
     const table = document.getElementById('delivery-table');
     if (!colToggles || !table) return;
 
-    // On mobile, .delivery-grid-card .table-responsive (index.css, mobile media query) TRIES to stay
-    // overflow-y:visible while scrolling horizontally (overflow-x:auto) so the table header's
-    // position:sticky keeps resolving against the page's own scroll, same as desktop — but per the
-    // CSS Overflow spec, setting overflow-x to anything but visible forces the OTHER axis's computed
-    // value to auto too, even when explicitly written as visible (the exact same quirk documented on
-    // body's own overflow-x:clip above). Confirmed live, 2026-08-05: overflow-y computes to "auto"
-    // there regardless, making .table-responsive its own independently-scrolling box on mobile — so
-    // "stick to the top of MY OWN box" (offset 0) is the only offset that's ever correct there,
-    // regardless of whether .main-sticky-dashboard above it is ALSO sticky (a separate, unrelated
-    // scroll context once that quirk kicks in). Applying the outer pinned header's height as this
-    // offset — correct for desktop, where the table really does share the page's own scroll — instead
-    // pushed the table header down into the middle of its own already-independently-scrolling rows on
-    // mobile once Delivery joined MOBILE_STICKY_HEADER_TABS and the outer header became sticky there.
-    const dashboardHeight = isMobileViewport()
-        ? 0
-        : (() => {
-            const stickyDashboard = document.querySelector('.main-sticky-dashboard');
-            const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
-            return dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
-        })();
+    // .delivery-grid-card .table-responsive is forced back to overflow:visible on mobile now (index.css,
+    // mobile media query) — the platform columns/off-day banner hidden there mean the table no longer
+    // has any real horizontal overflow to justify overflow-x:auto's forced-overflow-y-to-auto quirk,
+    // which used to trap this header's position:sticky inside its own non-scrolling box instead of the
+    // real page scroll. With that freed, mobile shares the page's own scroll same as desktop, so both
+    // branches compute the same real pinned-header height instead of mobile hardcoding 0. Confirmed
+    // real bug, 2026-08-05 ("make this sticky") — the header was never actually staying visible while
+    // scrolling on mobile before this.
+    const dashboardHeight = (() => {
+        const stickyDashboard = document.querySelector('.main-sticky-dashboard');
+        const dashboardIsSticky = stickyDashboard && getComputedStyle(stickyDashboard).position === 'sticky';
+        return dashboardIsSticky ? stickyDashboard.getBoundingClientRect().height : 0;
+    })();
 
     // .delivery-col-toggles is not sticky (see index.css) — only the header itself pins, directly
     // below whatever's sticky above it (the dashboard on desktop, nothing on mobile — see above).
@@ -18244,8 +18313,10 @@ function getAccountDisplayName(account) {
 // row regardless of length, per explicit user request, 2026-08-05. Desktop's toolbar-sized title
 // has never had this problem (smaller font, wider toolbar), so this only runs on mobile.
 function fitAccountTitleFont(titleEl) {
+    const nameBtn = titleEl?.querySelector('.header-account-link');
     if (!titleEl || !isMobileViewport()) {
-        if (titleEl) { titleEl.style.whiteSpace = ''; titleEl.style.maxWidth = ''; titleEl.style.overflow = ''; titleEl.style.textOverflow = ''; titleEl.style.fontSize = ''; }
+        if (titleEl) { titleEl.style.whiteSpace = ''; titleEl.style.maxWidth = ''; titleEl.style.overflow = ''; titleEl.style.textOverflow = ''; titleEl.style.fontSize = ''; titleEl.style.display = ''; titleEl.style.alignItems = ''; }
+        if (nameBtn) { nameBtn.style.overflow = ''; nameBtn.style.textOverflow = ''; nameBtn.style.whiteSpace = ''; nameBtn.style.minWidth = ''; nameBtn.style.flex = ''; }
         return;
     }
     // The h2 sits in a column-direction flex container with align-items:center (see
@@ -18257,12 +18328,29 @@ function fitAccountTitleFont(titleEl) {
     titleEl.style.whiteSpace = 'nowrap';
     titleEl.style.maxWidth = '100%';
     titleEl.style.overflow = 'hidden';
-    // Ellipsis is just a safety net for names so long even the font-size floor below can't make
-    // them fit (e.g. "Chase Southwest Airlines Priority Card") — the vast majority of real account
-    // names fit well before hitting it.
     titleEl.style.textOverflow = 'ellipsis';
+    // Ellipsis on the h2 alone was a safety net for names so long even the font-size floor below
+    // can't make them fit — but the icon badge + name button are two separate inline children of
+    // the h2, and text-overflow:ellipsis on a parent can only make an ENTIRE inline-block/atomic
+    // child (the name <button>, display:inline-block) disappear as a whole when it doesn't fit — it
+    // can't partially reveal characters from inside one. Confirmed real bug, 2026-08-05 (visible
+    // after the back button started sharing this row and shrank the available space further): a
+    // long name rendered as a bare "…" with the name itself fully invisible, at any font size, not
+    // just at the floor. Making the h2 a flex row and giving the name button its OWN
+    // overflow/ellipsis (with flex:1/min-width:0 so it only claims the space left after the
+    // fixed-size icon) lets ellipsis truncate WITHIN the button's own text instead of hiding the
+    // whole thing.
+    titleEl.style.display = 'flex';
+    titleEl.style.alignItems = 'center';
+    if (nameBtn) {
+        nameBtn.style.overflow = 'hidden';
+        nameBtn.style.textOverflow = 'ellipsis';
+        nameBtn.style.whiteSpace = 'nowrap';
+        nameBtn.style.minWidth = '0';
+        nameBtn.style.flex = '1 1 auto';
+    }
     const baseFontSize = 1.15;
-    const minFontSize = 0.62;
+    const minFontSize = 0.8;
     let fontSize = baseFontSize;
     titleEl.style.fontSize = `${fontSize}rem`;
     while (titleEl.scrollWidth > titleEl.clientWidth && fontSize > minFontSize) {
@@ -23842,12 +23930,12 @@ function renderCCCardList(cardId) {
             else if (t.isAutomaticCardPayment) entryActions = `<button class="action-btn small-btn outline-btn edit-loan-auto-btn" data-id="${t.id}" data-date="${t.date}">Edit</button>${t.automaticPaymentOverridden ? `<button class="action-btn small-btn outline-btn revert-auto-payment-btn" data-id="${t.id}" title="Discard the manually-edited amount and recalculate from the account's automatic payment setting">Revert to Auto</button>` : ''}<button class="action-btn small-btn danger-btn delete-loan-entry-btn" data-id="${t.id}">Delete</button>`;
             rowsHtml += `
                 <tr class="${isPayment ? 'is-payment-row ' : ''}${isTodayRow ? 'today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}" data-id="${t.id}" data-date="${t.date}"${todayRowMarkerId}>
-                    <td><strong>${formatDateDisplay(t.date)}</strong><br><span class="muted-text">${dayName}</span></td>
+                    <td><strong>${isMobileViewport() ? formatDateDisplayCompact(t.date) : formatDateDisplay(t.date)}</strong>${isMobileViewport() ? '' : `<br><span class="muted-text">${dayName}</span>`}</td>
                     <td>${escapeHTML(t.description || 'Loan Payment')} ${getTransactionIndicatorBadges(t)}</td>
                     <td><span class="highlight-item-tag">${activityType}</span></td>
                     <td class="font-heading">${startBalText}</td>
-                    <td class="${amount >= 0 ? 'positive' : 'negative'} font-heading">${amount >= 0 ? '+' : '-'}$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                    <td class="${estBal > 0.01 ? 'negative' : 'positive'} font-heading" style="font-weight:600;">${estBalText}</td>
+                    <td class="${amount >= 0 ? 'positive' : 'negative'} font-heading" data-detail-value="${amount >= 0 ? '+' : '-'}$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${amount >= 0 ? '+' : '-'}${isMobileViewport() ? formatMobileRoundedAmount(amount) : `$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                    <td class="${estBal > 0.01 ? 'negative' : 'positive'} font-heading" style="font-weight:600;" data-detail-value="${estBalText}">${isMobileViewport() ? `${estBal < -0.009 ? '-' : ''}${formatMobileRoundedAmount(estBal)}` : estBalText}</td>
                     <td class="table-actions-cell"><div class="debt-table-action-buttons">${entryActions}</div></td>
                 </tr>`;
             return;
@@ -23864,14 +23952,14 @@ function renderCCCardList(cardId) {
 
         rowsHtml += `
             <tr class="editable-row ${isPayment ? 'is-payment-row ' : ''}${isTodayRow ? 'today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}" data-id="${t.id}" data-date="${t.date}" style="cursor:pointer;"${todayRowMarkerId}>
-                <td><strong>${formatDateDisplay(t.date)}</strong><br><span class="muted-text">${dayName}</span></td>
+                <td><strong>${isMobileViewport() ? formatDateDisplayCompact(t.date) : formatDateDisplay(t.date)}</strong>${isMobileViewport() ? '' : `<br><span class="muted-text">${dayName}</span>`}</td>
                 <td>${merchantCell}</td>
                 <td>${escapeHTML(t.description)}${payoffNote} ${getTransactionIndicatorBadges(t)}</td>
                 <td><span class="cc-owner-badge ${owner}">${owner === 'joint' ? 'Joint' : 'Personal'}</span></td>
                 <td>${trip ? `<span class="cc-trip-badge">${escapeHTML(trip)}</span>` : '<span class="muted-text">-</span>'}</td>
                 <td class="font-heading">${startBalText}</td>
-                <td class="${amount < 0 ? 'negative' : 'positive'} font-heading">${amount >= 0 ? '+' : '-'}$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                <td class="${estBal > 0.01 ? 'negative' : 'positive'} font-heading" style="font-weight:600;">${estBalText}</td>
+                <td class="${amount < 0 ? 'negative' : 'positive'} font-heading" data-detail-value="${amount >= 0 ? '+' : '-'}$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${amount >= 0 ? '+' : '-'}${isMobileViewport() ? formatMobileRoundedAmount(amount) : `$${Math.abs(amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                <td class="${estBal > 0.01 ? 'negative' : 'positive'} font-heading" style="font-weight:600;" data-detail-value="${estBalText}">${isMobileViewport() ? `${estBal < -0.009 ? '-' : ''}${formatMobileRoundedAmount(estBal)}` : estBalText}</td>
                 <td>${t.isAutomaticCardPayment && t.automaticPaymentOverridden ? `<button class="action-btn small-btn outline-btn revert-auto-payment-btn" data-id="${t.id}" title="Discard the manually-edited amount and recalculate from the account's automatic payment setting">Revert to Auto</button>` : ''}<button class="action-btn small-btn danger-btn delete-list-tx-btn" data-key="${t.monthKey}" data-id="${t.id}">Delete</button></td>
             </tr>`;
     });
@@ -24571,7 +24659,7 @@ function renderBillTrackerTab() {
                 row.innerHTML = `
                     <td><div class="debt-table-account">${renderDebtAccountIconBadge(bill, icon, 'compact')}<div><strong>${escapeHTML(bill.name)}</strong>${exemptBadge}${placeholderBadge}</div></div></td>
                     <td>${escapeHTML(bill.category || '')}<br><span class="muted-text">${bill.ownership === 'joint' ? 'Joint' : 'Personal'}</span></td>
-                    <td class="negative font-heading" style="font-weight:600;">$${parseFloat(bill.estimate || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td class="negative font-heading" style="font-weight:600;">${formatBillAmountText(bill.estimate)}</td>
                     <td>${paymentDateText}</td>
                     <td>${closingDateText || 'None'}</td>
                     <td>${bill.autopay ? 'Yes' : 'No'}</td>
@@ -24625,19 +24713,26 @@ function renderBillTrackerTab() {
 
         const card = document.createElement('div');
         card.className = 'glass-card loan-overview-card bill-tracker-card';
+        // Restructured from the shared .loan-card-top/.debt-account-heading layout (icon+name side
+        // by side, autopay badge at the far right) — a long bill name squeezed into that narrow
+        // remaining space wrapped awkwardly right up against the icon. Icon and Autopay/Manual now
+        // share their own top row, with the name on its own centered row below, spanning the full
+        // card width. Scoped to .bill-tracker-card-top specifically (own HTML/CSS here), not the
+        // shared .loan-card-top class other pages' overview cards still use unchanged. Per explicit
+        // user request, 2026-08-05.
         card.innerHTML = `
-            <div class="loan-card-top">
-                <div class="debt-account-heading">
+            <div class="loan-card-top bill-tracker-card-top">
+                <div class="bill-tracker-card-icon-row">
                     ${renderDebtAccountIconBadge(bill, icon)}
-                    <div class="debt-account-heading-copy">
-                        <h3 class="loan-card-title">${escapeHTML(bill.name)}</h3>
-                        ${ownershipBadge}${exemptBadge}${placeholderBadge}
-                    </div>
+                    <span class="card-icon ${bill.autopay ? 'success' : 'info'} debt-progress-badge">${bill.autopay ? 'Autopay' : 'Manual'}</span>
                 </div>
-                <span class="card-icon ${bill.autopay ? 'success' : 'info'} debt-progress-badge">${bill.autopay ? 'Autopay' : 'Manual'}</span>
+                <h3 class="loan-card-title bill-tracker-card-name">${escapeHTML(bill.name)}</h3>
+                <div class="debt-account-heading-copy bill-tracker-card-badges">
+                    ${ownershipBadge}${exemptBadge}${placeholderBadge}
+                </div>
             </div>
             <div class="debt-overview-metrics">
-                <div><span>Estimated Cost</span><strong>$${parseFloat(bill.estimate || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong></div>
+                <div><span>Estimated Cost</span><strong>${formatBillAmountText(bill.estimate)}</strong></div>
                 <div><span>Payment Date</span><strong>${paymentDateText}</strong></div>
                 <div><span>Payment Source</span><strong>${escapeHTML(sourceName)}</strong></div>
                 <div><span>Recurring</span><strong>${recurDesc}</strong></div>
@@ -25698,7 +25793,13 @@ function initLongPressDetailOverlay() {
             const th = headerCells[i];
             let label = (th ? th.textContent : '').replace(/🔍/g, '').replace(/[▲▼]/g, '').trim();
             if (!label || /^actions$/i.test(label)) return null;
-            const value = td.textContent.replace(/\s+/g, ' ').trim();
+            // A cell can opt into showing something more precise here than what's actually visible
+            // in the row itself — used by the mobile-rounded Amount/Balance columns (see
+            // formatMobileRoundedAmount()) so "view actuals" really does show the real, unrounded
+            // number instead of just echoing the same rounded text back. Confirmed real bug,
+            // 2026-08-05: this used to read td.textContent unconditionally, so long-pressing a
+            // rounded row just repeated the rounded value instead of revealing anything new.
+            const value = (td.dataset.detailValue || td.textContent).replace(/\s+/g, ' ').trim();
             if (!value) return null;
             return { label, value };
         }).filter(Boolean);
