@@ -28,6 +28,21 @@
     </button>
     <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
     <button type="button" class="scroll-top-btn scroll-top-faded" id="btn-scroll-top" title="Scroll to top" aria-label="Scroll to top">&#8593;</button>
+
+    <!-- Mobile-only floating Google Drive sync status — the sidebar's own #sync-status-flag is
+         behind the hamburger menu on mobile, so a failed sync could go unnoticed without opening it
+         every time. Mirrors #sync-status-flag's status/message (see showSyncStatusFlag() in app.js,
+         which drives both), hidden until the first sync attempt of the session, hidden entirely on
+         desktop (see index.css). A successful sync fades itself out automatically; a failed sync
+         stays put until dismissed via a retry. Per explicit user request, 2026-08-05. -->
+    <button type="button" id="mobile-sync-badge" class="mobile-sync-badge hidden" aria-label="Google Drive sync status">
+        <span id="mobile-sync-badge-icon" class="mobile-sync-badge-icon">🔄</span>
+    </button>
+    <div id="mobile-sync-badge-detail" class="mobile-sync-badge-detail hidden">
+        <div id="mobile-sync-badge-detail-message" class="mobile-sync-badge-detail-message"></div>
+        <div id="mobile-sync-badge-detail-time" class="mobile-sync-badge-detail-time"></div>
+        <button type="button" id="btn-mobile-sync-retry" class="action-btn small-btn solid-btn">Try Sync Again</button>
+    </div>
     <!-- Mobile-only floating "Add Transaction" button — see mobile-fab-add-transaction CSS
          (index.css) for the tab/view scoping that decides when this is actually visible, and
          openMobileQuickAddModal() (app.js) for what it opens. -->
@@ -250,9 +265,12 @@
             <section class="dashboard-metrics-section" id="dashboard-metrics-section">
                 <div class="dashboard-metrics-section-header" style="display: flex; align-items: center; justify-content: space-between;">
                     <h3 style="margin:0;">Dashboard Metrics</h3>
+                    <!-- Single consolidated entry point (Starting Balance + Payroll used to be two
+                         separate buttons/dialogs here) — opens #account-settings-dialog, which also
+                         covers Account Login URL and a custom account icon, plus (Personal only) a
+                         way into the full Payroll dialog. Per explicit user request, 2026-08-05. -->
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <button type="button" class="action-btn outline-btn" id="btn-open-starting-balance" title="Reset a checking account's balance as of a specific date" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Starting Balance</button>
-                        <button type="button" class="action-btn outline-btn hidden" id="btn-configure-payroll" title="Configure Payroll Tracker" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Payroll</button>
+                        <button type="button" class="action-btn outline-btn" id="btn-open-account-settings" title="Account Settings" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Account Settings</button>
                     </div>
                 </div>
                 <div class="summary-cards" id="summary-cards">
@@ -819,11 +837,18 @@
                     <div class="bills-sticky-metrics">
                     <div class="table-card-header savings-section-header">
                         <h3>Savings Metrics</h3>
-                        <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-savings-metrics">Hide Metrics</button>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <!-- Matches the Dashboard's own "⚙️ Account Settings" button (placement,
+                                 label, and style) instead of the small unlabeled gear icon this used
+                                 to be on the balance card below — that one was easy to miss entirely.
+                                 Per explicit user request, 2026-08-05. -->
+                            <button type="button" class="action-btn outline-btn" id="btn-open-savings-account-settings" title="Account Settings" style="display: inline-flex; align-items: center; gap: 4px; padding: 0.35rem 0.7rem; font-weight: 500; font-size: 0.78rem; height: 30px;">⚙️ Account Settings</button>
+                            <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-savings-metrics">Hide Metrics</button>
+                        </div>
                     </div>
                     <section class="summary-cards savings-summary-cards" id="savings-metrics-panel">
                         <div class="glass-card summary-card">
-                            <div class="card-header"><span>Current Savings Balance</span><button type="button" class="savings-settings-btn" id="btn-open-savings-balance" title="Edit starting balance" aria-label="Edit starting balance">⚙️</button></div>
+                            <div class="card-header"><span>Current Savings Balance</span></div>
                             <div class="card-value positive" id="savings-current-display">$0.00</div>
                             <div class="card-sub" id="savings-current-sub">Starting balance plus completed activity</div>
                         </div>
@@ -1233,12 +1258,13 @@
                                     <!-- Search and the filter-summary pill stacked together so the pill
                                          sits directly under the search box specifically, not spanning the
                                          full header width. Per explicit user request, 2026-08-04. -->
-                                    <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 220px; max-width: 360px;">
+                                    <div class="cc-list-search-group" style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 220px;">
                                         <input type="search" id="cc-list-filter-text" class="custom-input" placeholder="🔍 Search merchant, description, owner, trip, date, amount..." style="margin: 0; width: 100%;">
-                                        <!-- white-space was nowrap — per explicit user request, 2026-08-05, this cut the
-                                             pill off at the screen edge on mobile instead of wrapping like everything
-                                             else in this header does. -->
-                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; white-space: normal; align-self: flex-start;"></div>
+                                        <!-- Single line, left-justified on desktop (see .cc-list-search-group /
+                                             #cc-filter-summary rules in index.css) — only wraps below the mobile
+                                             breakpoint, where screen width actually requires it. Per explicit
+                                             user request, 2026-08-05. -->
+                                        <div id="cc-filter-summary" class="filtered-items-pill" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; border-radius: 12px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.4); font-size: 0.8rem; font-weight: 600; color: #90caf9; align-self: flex-start;"></div>
                                     </div>
                                     <!-- Opens the real #cc-quick-add-form in a popup instead of a second,
                                          separate inline add-charge form sitting here full-time — same
@@ -1261,22 +1287,10 @@
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-cclist-filters" title="Clear this table's column filters and sort">Clear</button>
                                     </div>
                                 </div>
-                                <div class="cc-list-tools cc-filter-tools">
-                                    <select id="cc-list-filter-merchant" class="custom-select" aria-label="Filter by merchant">
-                                        <option value="all">All merchants</option>
-                                    </select>
-                                    <select id="cc-list-filter-owner" class="custom-select">
-                                        <option value="all">All ownership</option>
-                                        <option value="personal">Personal</option>
-                                        <option value="joint">Joint</option>
-                                    </select>
-                                    <select id="cc-list-filter-trip" class="custom-select" aria-label="Filter by trip">
-                                        <option value="all">All trips</option>
-                                    </select>
-                                    <!-- #btn-clear-cc-filters removed, 2026-08-05, per explicit user request — exact
-                                         duplicate of #btn-reset-cclist-filters above (both call the same
-                                         resetCCListFiltersAndSort() handler; see app.js). -->
-                                </div>
+                                <!-- .cc-filter-tools (merchant/ownership/trip dropdown row) removed entirely,
+                                     mobile and desktop, per explicit user request, 2026-08-05 — the search box
+                                     above already covers merchant/owner/trip text, and #btn-reset-cclist-filters
+                                     ("Clear") no longer had anything of its own left to reset here. -->
                             </div>
 
                             <div class="table-responsive" id="cc-list-view-table-container">
@@ -1288,7 +1302,17 @@
 
                 <!-- 5. SYNC SETTINGS VIEW -->
                 <div id="view-sync" class="tab-view">
-                    <div class="sync-layout glass-card">
+                    <!-- Moved to the very top of the page, newest entry first (see logSystem() etc. in
+                         app.js) — per explicit user request, 2026-08-05, so the latest sync result is
+                         the first thing visible on opening this page, no scrolling needed. -->
+                    <div class="sync-logs-box">
+                        <h4>Local Sync Engine Output Log</h4>
+                        <div class="logs-container" id="logs-container">
+                            <div class="log-entry system">[SYSTEM]: Sync engine ready. Enter a Web App URL below and test the connection.</div>
+                        </div>
+                    </div>
+
+                    <div class="sync-layout glass-card" style="margin-top:1.5rem;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
                             <h3 style="margin:0;">Google Drive Synchronization</h3>
                             <button type="button" class="action-btn small-btn outline-btn collapse-toggle-btn" data-target="sync-settings-intro-body" data-key="syncSettingsIntro" title="Collapse or expand the Web App URL setup">Hide</button>
@@ -1313,13 +1337,6 @@
                             <h4 style="margin-bottom:0.5rem;">Danger Zone</h4>
                             <p class="muted-text" style="margin-bottom:1rem;">Wipes all local app data (everything in this browser/device) and reloads to a blank slate. Does NOT touch the Google Drive file. Use this before importing a JSON backup if you want to start clean &mdash; make sure you have that backup file first, this cannot be undone.</p>
                             <button type="button" class="action-btn danger-btn" id="btn-clear-local-data">Clear All Local Data</button>
-                        </div>
-
-                        <div class="sync-logs-box" style="margin-top:1.5rem;">
-                            <h4>Local Sync Engine Output Log</h4>
-                            <div class="logs-container" id="logs-container">
-                                <div class="log-entry system">[SYSTEM]: Sync engine ready. Enter a Web App URL above and test the connection.</div>
-                            </div>
                         </div>
 
                         <div class="sync-layout glass-card" style="margin-top:1.5rem; padding:1.5rem;">
@@ -1451,7 +1468,13 @@
          choosing a platform then opens gig-entry-dialog above for that specific platform/day. -->
     <dialog id="gig-platform-picker-dialog" class="glass-modal gig-platform-picker-dialog">
         <h3 id="gig-platform-picker-title">Log Earnings</h3>
-        <p class="muted-text" id="gig-platform-picker-subtitle"></p>
+        <!-- Day total sits right-justified across from the date — per explicit user request,
+             2026-08-05, same "see it without opening anything" reasoning the per-button totals
+             below (openGigPlatformPicker() in app.js) were already added for. -->
+        <div class="muted-text" style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem;">
+            <span id="gig-platform-picker-subtitle"></span>
+            <strong id="gig-platform-picker-day-total"></strong>
+        </div>
         <div class="gig-platform-picker-options">
             <button type="button" class="action-btn solid-btn gig-platform-picker-btn" data-key="cash" data-label="Cash">Cash</button>
             <button type="button" class="action-btn solid-btn gig-platform-picker-btn" data-key="sideGigs" data-label="Door Dash">Door Dash</button>
@@ -1672,6 +1695,11 @@
                     <label for="loan-name-field">Account Name</label>
                     <input type="text" id="loan-name-field" required class="custom-input" placeholder="e.g. Greensky Slab Leak, Discover Card">
                 </div>
+                <div class="form-group">
+                    <label for="loan-mobile-nickname">Mobile Nickname</label>
+                    <input type="text" id="loan-mobile-nickname" class="custom-input" placeholder="e.g. Southwest Card" maxlength="40">
+                    <small class="muted-text">Optional short name shown instead of the full Account Name on mobile.</small>
+                </div>
                 <!-- Account Type is set implicitly by which page's Add button was clicked (Installment
                      Loans vs Credit Cards) and never shown &mdash; the field still exists and still drives
                      every isCredit check in app.js, just hidden from the user since there's nothing
@@ -1690,6 +1718,16 @@
                     <label for="loan-login-url">Account Website</label>
                     <input type="text" inputmode="url" id="loan-login-url" class="custom-input" placeholder="https://www.example.com/login">
                     <small class="muted-text">Optional link shown on the account summary and dashboard.</small>
+                </div>
+                <div class="form-group">
+                    <label>Account Icon</label>
+                    <div style="display:flex; align-items:center; gap:0.6rem;">
+                        <span id="loan-icon-preview" class="debt-account-icon" style="pointer-events:none;"></span>
+                        <button type="button" class="action-btn small-btn outline-btn" id="btn-loan-icon-upload-trigger">Upload Image</button>
+                        <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-loan-icon-remove">Remove</button>
+                        <input type="file" accept="image/*" id="loan-icon-upload" style="display:none;">
+                    </div>
+                    <small class="muted-text">Optional — overrides the automatically matched logo.</small>
                 </div>
                 <div class="form-group hidden" id="loan-store-card-group">
                     <label class="checkbox-label" style="margin-top:1.65rem;"><input type="checkbox" id="loan-is-store-card"> Store card</label>
@@ -2002,7 +2040,31 @@
                 <div id="loan-xfer-list" style="display:flex; flex-direction:column; gap:.4rem; margin-bottom:1rem;"></div>
                 <div style="background: rgba(255, 255, 255, 0.02); padding: 0.75rem; border-radius: 6px; border: 1px dashed var(--glass-border); display: flex; flex-direction: column; gap: 0.75rem;">
                     <div class="form-group"><label style="font-size:0.75rem;">Transfer Entry</label><select id="xfer-mode" class="custom-select"><option value="new">New Transfer</option><option value="existing">Existing Transfer</option></select></div>
-                    <div class="form-group"><label style="font-size:0.75rem;">Transferred By</label><select id="xfer-owner" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select></div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;">Transferred By</label>
+                            <select id="xfer-owner" class="custom-select"><option value="jason">Jason</option><option value="asia">Asia</option></select>
+                        </div>
+                        <!-- Separate from "Transferred By" above — that one only tracks which person's
+                             badge shows on the transaction (see getTransactionTransferPerson() in
+                             app.js), it was never a real "personal" or "joint" ledger owner. Reusing it
+                             as the ledger owner (the app-wide personal/joint model every other
+                             transaction, filter, and Bill Splitter total keys off) miscategorized every
+                             balance-transfer transaction, since 'jason'/'asia' never matches 'personal'/
+                             'joint' anywhere else. Per explicit user request, 2026-08-05. -->
+                        <div class="form-group" id="xfer-ledger-owner-group">
+                            <label style="font-size:0.75rem;">Personal or Joint</label>
+                            <select id="xfer-ledger-owner" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select>
+                        </div>
+                    </div>
+                    <div class="form-group" id="xfer-description-group">
+                        <label style="font-size:0.75rem;">Description</label>
+                        <!-- Auto-filled from Transferred By + the source/target account's name (mobile
+                             nickname if it has one, else the external name typed below, else its full
+                             name) whenever those change — see updateXferDescriptionPreview() in app.js.
+                             Still a plain editable text field, so typing over it sticks. -->
+                        <input type="text" id="xfer-description" class="custom-input" placeholder="e.g. Balance Transfer - Asia - Asia's SW Card" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
+                    </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label id="xfer-amount-label" style="font-size:0.75rem;">Transfer Amount</label>
@@ -2013,9 +2075,21 @@
                         </div>
                         <div class="form-group" id="xfer-source-group">
                             <label style="font-size:0.75rem;">Transfer From Target</label>
+                            <!-- "Other / Not Tracked" (value="__external__") is a real option, not just a
+                                 placeholder — per explicit user request, 2026-08-05: a balance transfer's
+                                 source isn't always a card this app tracks (e.g. one of Asia's cards that
+                                 was never added here). Picking it reveals #xfer-external-source-group
+                                 below for a free-text name instead of requiring a match in state.loans.
+                                 See the option's own generation point in app.js (openEditLoanModal) for
+                                 why it's added there instead of statically here — it must stay in sync
+                                 with the dynamically-populated real loans. -->
                             <select id="xfer-source" class="custom-select" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
-                                <!-- Dynamically loaded other loans -->
+                                <!-- Dynamically loaded: "Other / Not Tracked" first, then other loans -->
                             </select>
+                        </div>
+                        <div class="form-group hidden" id="xfer-external-source-group">
+                            <label style="font-size:0.75rem;">External Account Name (optional)</label>
+                            <input type="text" id="xfer-external-source-name" class="custom-input" placeholder="e.g. Asia's Discover Card" style="padding:0.3rem 0.5rem; font-size:0.8rem;">
                         </div>
                         <div class="form-group" id="xfer-fee-group">
                             <label style="font-size:0.75rem;">Transfer Fee (%)</label>
@@ -2039,6 +2113,21 @@
                     </div>
                 </div>
                 </div>
+            </div>
+
+            <!-- Deleting an auto-posted Estimated Interest Charge or payment-plan fee (see the
+                 Delete button next to each in the ledger below) sets a permanent skip flag
+                 (state.cardChargeSkips) so postCardStatementChargesForMonth()/
+                 postInstallmentLoanInterestForMonth() don't just recreate it on the next render —
+                 this button clears every skip flag for THIS account, letting anything eligible
+                 regenerate. Only current/future statement months ever regenerate at all (by design,
+                 both functions refuse to fabricate history for an already-closed past month) — a
+                 deleted PAST charge needs its Current Balance corrected by hand instead, which this
+                 can't help with; the confirm() below says so up front rather than silently doing
+                 nothing for that case. Added per explicit user request, 2026-08-05 ("I accidentally
+                 deleted estimated interest charges... how can I add those back?"). -->
+            <div style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <button type="button" class="action-btn small-btn outline-btn" id="btn-restore-charge-skips">↺ Restore Deleted Interest/Fee Charges</button>
             </div>
 
             <div class="modal-buttons" style="margin-top: 1.5rem;">
@@ -2245,28 +2334,60 @@
         <div id="bill-calendar-day-list" class="highlights-list"></div>
     </dialog>
 
-    <dialog id="starting-balance-dialog" class="glass-modal">
-        <form id="starting-balance-form" class="detail-form">
-            <h3>Reset Checking Balance</h3>
-            <p class="muted-text" style="margin-top:-0.5rem;">Sets a checking account's balance as of a specific date. Every transaction dated before that date is deleted and the running balance for all earlier dates is zeroed &mdash; this cannot be undone.</p>
+    <!-- Consolidated Personal/Joint checking settings — Starting Balance, Account Login URL, and a
+         custom Account Icon, plus (Personal only) a way into the full Payroll dialog, all behind the
+         single "⚙️ Account Settings" button that used to be two separate buttons/dialogs (Starting
+         Balance and Payroll). Per explicit user request, 2026-08-05. -->
+    <dialog id="account-settings-dialog" class="glass-modal">
+        <form id="account-settings-form" class="detail-form">
+            <h3 id="account-settings-title">Account Settings</h3>
             <div class="form-group">
-                <label for="starting-balance-account">Account</label>
-                <select id="starting-balance-account" class="custom-select">
+                <label for="account-settings-account">Account</label>
+                <select id="account-settings-account" class="custom-select">
                     <option value="personal">Personal Checking</option>
                     <option value="joint">Joint Checking</option>
                 </select>
             </div>
+
+            <div class="form-group">
+                <label>Account Icon</label>
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span id="account-settings-icon-preview" class="debt-account-icon" style="pointer-events:none;"></span>
+                    <button type="button" class="action-btn small-btn outline-btn" id="btn-account-settings-icon-upload-trigger">Upload Image</button>
+                    <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-account-settings-icon-remove">Remove</button>
+                    <input type="file" accept="image/*" id="account-settings-icon-upload" style="display:none;">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="account-settings-login-url">Account Website</label>
+                <input type="text" inputmode="url" id="account-settings-login-url" class="custom-input" placeholder="https://www.example.com/login">
+                <small class="muted-text">Optional link shown on the account icon &mdash; click the icon on the Dashboard to open it.</small>
+            </div>
+
+            <div class="form-group hidden" id="account-settings-payroll-group">
+                <label>Payroll</label>
+                <div>
+                    <button type="button" class="action-btn outline-btn" id="btn-account-settings-open-payroll">⚙️ Open Payroll Settings</button>
+                </div>
+            </div>
+
+            <div class="table-card-header" style="margin-top:0.5rem;">
+                <h4 style="margin:0; font-size:0.95rem;">Reset Starting Balance</h4>
+            </div>
+            <p class="muted-text" style="margin-top:-0.5rem;">Sets this account's balance as of a specific date. Every transaction dated before that date is deleted and the running balance for all earlier dates is zeroed &mdash; this cannot be undone. Leave blank to make no change here.</p>
             <div class="form-group">
                 <label for="starting-balance-date">As Of Date</label>
-                <input type="date" id="starting-balance-date" required class="custom-input">
+                <input type="date" id="starting-balance-date" class="custom-input">
             </div>
             <div class="form-group">
                 <label for="starting-balance-amount">Starting Balance</label>
-                <div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="starting-balance-amount" required class="custom-input"></div>
+                <div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="starting-balance-amount" class="custom-input"></div>
             </div>
+
             <div class="modal-buttons">
-                <button type="button" class="action-btn outline-btn" id="btn-cancel-starting-balance">Cancel</button>
-                <button type="submit" class="action-btn danger-btn">Wipe &amp; Reset Balance</button>
+                <button type="button" class="action-btn outline-btn" id="btn-cancel-account-settings">Cancel</button>
+                <button type="submit" class="action-btn solid-btn">Save Account Settings</button>
             </div>
         </form>
     </dialog>
@@ -2328,11 +2449,31 @@
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-loan-extra-payment">Cancel</button><button type="submit" class="action-btn solid-btn">Save Payment</button></div>
         </form>
     </dialog>
+    <!-- Consolidated Savings Tracker settings — Starting Balance, Account Login URL, and a custom
+         Account Icon, all behind the single "⚙️" button on the Current Savings Balance card that
+         used to open just the balance field alone. Per explicit user request, 2026-08-05. -->
     <dialog id="savings-balance-dialog" class="glass-modal">
         <form id="savings-balance-form" class="detail-form">
-            <h3>Savings Balance Settings</h3>
+            <h3>Savings Account Settings</h3>
+
+            <div class="form-group">
+                <label>Account Icon</label>
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span id="savings-settings-icon-preview" class="debt-account-icon" style="pointer-events:none;"></span>
+                    <button type="button" class="action-btn small-btn outline-btn" id="btn-savings-settings-icon-upload-trigger">Upload Image</button>
+                    <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-savings-settings-icon-remove">Remove</button>
+                    <input type="file" accept="image/*" id="savings-settings-icon-upload" style="display:none;">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="savings-settings-login-url">Account Website</label>
+                <input type="text" inputmode="url" id="savings-settings-login-url" class="custom-input" placeholder="https://www.example.com/login">
+                <small class="muted-text">Optional link shown on the account icon &mdash; click the icon on the Savings Tracker to open it.</small>
+            </div>
+
             <div class="form-group"><label for="savings-current-amount">Starting Savings Balance</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-current-amount" required class="custom-input"></div><small>Current balance is calculated from this amount plus completed savings activity.</small></div>
-            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-balance">Cancel</button><button type="submit" class="action-btn solid-btn">Save Starting Balance</button></div>
+            <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-savings-balance">Cancel</button><button type="submit" class="action-btn solid-btn">Save Account Settings</button></div>
         </form>
     </dialog>
     <dialog id="savings-edit-dialog" class="glass-modal">
