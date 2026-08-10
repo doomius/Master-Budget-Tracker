@@ -169,8 +169,9 @@
                              inside #global-toggles-host. -->
                         <div id="header-identity-toggles-host" style="display: flex; align-items: center; gap: 0.75rem;">
                             <div class="segmented-control" id="dashboard-toggle-container">
-                                <button class="segment-btn active" data-type="personal" id="btn-dash-personal">Personal</button>
+                                <button class="segment-btn active" data-type="personal" id="btn-dash-personal">Jason</button>
                                 <button class="segment-btn" data-type="joint" id="btn-dash-joint">Joint</button>
+                                <button class="segment-btn" data-type="asia" id="btn-dash-asia">Asia</button>
                             </div>
                         </div>
                         <div id="header-left-buttons-row" style="display: flex; align-items: center; gap: 0.4rem;">
@@ -384,6 +385,28 @@
                                     <input type="checkbox" id="personal-joint-split-protect" style="cursor:pointer;">
                                     <label for="personal-joint-split-protect" style="margin:0; cursor:pointer; font-size:0.85rem;">Split across days this cycle to keep checking at/above the minimum buffer</label>
                                 </div>
+                                <!-- Asia's Checking Transaction Type selector, Phase 3 — mirrors #personal-type-group/
+                                     #personal-joint-transfer-group/#personal-joint-split-group exactly, scoped to
+                                     her own dashboard (state.dashboardType === 'asia'). -->
+                                <div class="form-group hidden" id="asia-type-group">
+                                    <label for="asia-trans-type">Transaction Type</label>
+                                    <select id="asia-trans-type" class="custom-select">
+                                        <option value="transaction">Asia Transaction</option>
+                                        <option value="savings-transfer">Savings Transfer</option>
+                                        <option value="joint-transfer">Joint Transfer</option>
+                                    </select>
+                                </div>
+                                <div class="form-group hidden" id="asia-joint-transfer-group">
+                                    <label for="asia-joint-direction">Transfer Direction</label>
+                                    <select id="asia-joint-direction" class="custom-select">
+                                        <option value="deposit">Deposit into Joint</option>
+                                        <option value="withdrawal">Withdrawal from Joint</option>
+                                    </select>
+                                </div>
+                                <div class="form-group hidden" id="asia-joint-split-group" style="display:flex; align-items:center; gap:0.4rem;">
+                                    <input type="checkbox" id="asia-joint-split-protect" style="cursor:pointer;">
+                                    <label for="asia-joint-split-protect" style="margin:0; cursor:pointer; font-size:0.85rem;">Split across days this cycle to keep checking at/above the minimum buffer</label>
+                                </div>
                                 <div class="form-group">
                                     <label for="trans-desc">Description</label>
                                     <input type="text" id="trans-desc" placeholder="e.g. Payday, Walmart, Gas" required class="custom-input" list="checking-description-suggestions" autocomplete="off">
@@ -511,7 +534,10 @@
                             </div>
                             <div class="split-columns" id="transfer-calc-body">
                                 <div class="split-col jason-split">
-                                    <div class="col-name-pill">Jason</div>
+                                    <!-- Ownership flag, blue for Jason / green for Asia — same color pair as the
+                                         savings-transfer flags on the Joint ledger. Per explicit user request,
+                                         2026-08-09. -->
+                                    <div class="col-name-pill"><span class="owner-flag owner-jason" title="Jason">&#9873;</span>Jason</div>
                                     <div class="split-amount-highlight" id="jason-transfer">$0.00</div>
                                     <div class="transfer-breakdown-line" id="jason-transfer-breakdown"></div>
                                     <div class="transfer-cycle-breakdown">
@@ -524,7 +550,7 @@
                                     <button type="button" class="action-btn small-btn outline-btn" id="btn-toggle-manual-transfers" title="Toggle Manual Planned Transfers">⚙️ Extra Transfers</button>
                                 </div>
                                 <div class="split-col asia-split">
-                                    <div class="col-name-pill">Asia</div>
+                                    <div class="col-name-pill"><span class="owner-flag owner-asia" title="Asia">&#9873;</span>Asia</div>
                                     <div class="split-amount-highlight" id="asia-transfer">$0.00</div>
                                     <div class="transfer-breakdown-line" id="asia-transfer-breakdown"></div>
                                     <div class="transfer-cycle-breakdown">
@@ -651,8 +677,10 @@
                                         <div class="segmented-control" id="billtracker-ownership-filter">
                                             <button type="button" class="segment-btn active" data-billtracker-ownership="all">All</button>
                                             <button type="button" class="segment-btn" data-billtracker-ownership="joint">Joint</button>
-                                            <button type="button" class="segment-btn" data-billtracker-ownership="personal">Personal</button>
+                                            <button type="button" class="segment-btn" data-billtracker-ownership="jason">Jason</button>
+                                            <button type="button" class="segment-btn" data-billtracker-ownership="asia">Asia</button>
                                         </div>
+                                        <label class="checkbox-label" style="display:flex; align-items:center; gap:0.4rem;"><input type="checkbox" id="billtracker-scheduled-this-month-only"> Scheduled this month only</label>
                                         <div class="segmented-control" id="billtracker-view-toggle">
                                             <button type="button" class="segment-btn active" data-billtracker-mode="cards">Cards</button>
                                             <button type="button" class="segment-btn" data-billtracker-mode="list">List</button>
@@ -838,6 +866,14 @@
                     <div class="table-card-header savings-section-header">
                         <h3>Savings Metrics</h3>
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <!-- Which Savings pool this tab shows — Household (the original shared
+                                 tracker) or Asia's own fully separate pool. Same segmented-control
+                                 pattern as #dashboard-toggle-container (Jason/Joint/Asia checking).
+                                 Phase 3, 2026-08-07. -->
+                            <div class="segmented-control" id="savings-pool-toggle">
+                                <button type="button" class="segment-btn active" data-savings-pool="household" id="btn-savings-pool-household">Jason</button>
+                                <button type="button" class="segment-btn" data-savings-pool="asia" id="btn-savings-pool-asia">Asia</button>
+                            </div>
                             <!-- Matches the Dashboard's own "⚙️ Account Settings" button (placement,
                                  label, and style) instead of the small unlabeled gear icon this used
                                  to be on the balance card below — that one was easy to miss entirely.
@@ -879,6 +915,14 @@
                     <div class="list-view-sticky-header" id="savings-list-sticky-header">
                     <div class="table-card-header savings-view-header">
                         <h3 id="savings-ledger-title">Savings Calendar</h3>
+                        <!-- List-view-only controls (search/export/clear this table, plus the "+
+                             Transaction" modal shortcut) — Calendar view has its own equivalents
+                             already (click a day to add/view entries; the always-visible Add Savings
+                             Entry sidebar), so this whole group is hidden there instead of cluttering
+                             the calendar header with table controls that have nothing to search/export/
+                             clear yet. Toggled in renderSavingsTab(). Confirmed real bug, 2026-08-07:
+                             was unconditionally visible in both views. -->
+                        <div id="savings-list-only-controls" style="display: contents;">
                         <!-- Narrowed and moved inline with the title/buttons instead of its own
                              full-width row below — per explicit user request, 2026-08-05, matching
                              the Credit Card ledger's own search-box placement. -->
@@ -896,6 +940,7 @@
                             <button type="button" class="action-btn small-btn outline-btn" id="btn-export-savingslist-csv" title="Export the currently visible rows (respects search/column filters) as a CSV file, openable in Excel">⬇ Download CSV</button>
                             <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-savingslist-filters" title="Clear this table's column filters and sort">Clear</button>
                         </div>
+                        </div>
                     </div>
                     </div>
                     <div class="view-grid savings-calendar-layout" id="savings-calendar-layout">
@@ -906,8 +951,28 @@
                         <div class="sidebar-details-card glass-card" id="savings-entry-sidebar">
                             <h3>Add Savings Entry</h3>
                             <form id="savings-transfer-form" class="detail-form">
-                                <div class="form-group"><label for="savings-entry-type">Entry Type</label><select id="savings-entry-type" class="custom-select"><option value="deposit">Deposit (Checking &rarr; Savings)</option><option value="withdrawal">Withdrawal (Savings &rarr; Checking)</option><option value="interest">Interest (Savings only)</option></select></div>
-                                <div class="form-group" id="savings-transfer-source-group"><label for="savings-transfer-source">Checking Account</label><select id="savings-transfer-source" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select></div>
+                                <div class="form-group">
+                                    <label>Entry Type</label>
+                                    <!-- Action-button toggle instead of a <select> — visually mirrors #trans-direction-group's
+                                         Charge/Deposit pattern, extended to 3 options since Interest isn't tied to a
+                                         checking account the way Deposit/Withdrawal are. Per explicit user request,
+                                         2026-08-07. #savings-entry-type stays the real source of truth every existing
+                                         read site (updateSavingsEntryForm(), the submit handler) already reads.
+                                         Deliberately NOT class="direction-toggle-group" — that class is also what the
+                                         global document-level Charge/Deposit delegate (see setDirectionToggleValue()'s
+                                         click listener) matches on, and it's hardcoded to a binary data-direction
+                                         attribute this 3-button group doesn't have; confirmed live it fires AFTER this
+                                         group's own listener and stomps every button's class back to "deposit"
+                                         regardless of which was clicked. savings-type-toggle-group gets the identical
+                                         visual styling (see index.css) without tripping that delegate. -->
+                                    <div class="savings-type-toggle-group" id="savings-entry-type-group">
+                                        <button type="button" class="direction-btn active-deposit" data-savings-entry-type="deposit" id="btn-savings-type-deposit">➕ Deposit</button>
+                                        <button type="button" class="direction-btn" data-savings-entry-type="withdrawal" id="btn-savings-type-withdrawal">➖ Withdrawal</button>
+                                        <button type="button" class="direction-btn" data-savings-entry-type="interest" id="btn-savings-type-interest">💰 Interest</button>
+                                    </div>
+                                    <input type="hidden" id="savings-entry-type" value="deposit">
+                                </div>
+                                <div class="form-group" id="savings-transfer-source-group"><label for="savings-transfer-source">Checking Account</label><select id="savings-transfer-source" class="custom-select"><option value="jason">Jason</option><option value="joint">Joint</option></select></div>
                                 <div class="form-group"><label for="savings-transfer-date">Date</label><div style="position: relative; display: flex; align-items: center;"><input type="date" id="savings-transfer-date" required class="custom-input"></div></div>
                                 <div class="form-group"><label for="savings-transfer-description">Description</label><input type="text" id="savings-transfer-description" required class="custom-input" placeholder="e.g. Emergency fund transfer"></div>
                                 <div class="form-group"><label for="savings-transfer-amount" id="savings-entry-amount-label">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-transfer-amount" required class="custom-input" placeholder="0.00"></div><small id="savings-entry-hint">Moves this amount from the selected checking account into Savings.</small></div>
@@ -936,6 +1001,12 @@
                                     <div class="debt-summary-controls debt-summary-controls-left">
                                         <label>Sort <select id="loan-summary-sort" class="custom-select debt-summary-sort"><option value="name">Account name</option><option value="balance-desc">Balance: high to low</option><option value="balance-asc">Balance: low to high</option></select></label>
                                         <label class="checkbox-label"><input type="checkbox" id="loan-summary-hide-zero"> Hide $0 balances</label>
+                                        <div class="segmented-control" id="debt-ownership-filter-loan">
+                                            <button type="button" class="segment-btn active" data-debt-ownership="all">All</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="joint">Joint</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="jason">Jason</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="asia">Asia</button>
+                                        </div>
                                     </div>
                                     <h3 class="debt-summary-title">Installment Loan Summary</h3>
                                     <div class="debt-summary-actions">
@@ -980,6 +1051,12 @@
                                     <div class="debt-summary-controls debt-summary-controls-left">
                                         <label>Sort <select id="credit-summary-sort" class="custom-select debt-summary-sort"><option value="name">Account name</option><option value="balance-desc">Balance: high to low</option><option value="balance-asc">Balance: low to high</option></select></label>
                                         <label class="checkbox-label"><input type="checkbox" id="credit-summary-hide-zero"> Hide $0 balances</label>
+                                        <div class="segmented-control" id="debt-ownership-filter-credit">
+                                            <button type="button" class="segment-btn active" data-debt-ownership="all">All</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="joint">Joint</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="jason">Jason</button>
+                                            <button type="button" class="segment-btn" data-debt-ownership="asia">Asia</button>
+                                        </div>
                                     </div>
                                     <h3 class="debt-summary-title">Credit Card Summary</h3>
                                     <div class="debt-summary-actions">
@@ -1061,7 +1138,7 @@
                         <div class="glass-card payoff-planner hidden">
                                 <div><strong>Payoff Planner</strong><div class="muted-text">Calculate a monthly payment and optionally schedule future payments.</div></div>
                                 <label>Pay off by <input type="date" id="payoff-target-date" class="custom-input"></label>
-                                <label>Pay from <select id="payoff-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option></select></label>
+                                <label>Pay from <select id="payoff-source" class="custom-select"><option value="jason">Jason's Checking</option><option value="joint">Joint Checking</option><option value="asia">Asia's Checking</option></select></label>
                                 <button type="button" id="btn-calculate-payoff" class="action-btn outline-btn">Calculate</button>
                                 <div id="payoff-suggestion" class="payoff-suggestion">Choose a target date.</div>
                                 <button type="button" id="btn-apply-payoff-plan" class="action-btn solid-btn" disabled>Schedule Future Payments</button>
@@ -1131,8 +1208,9 @@
                                         <div class="form-group">
                                             <label for="cc-trans-owner">Ownership</label>
                                             <select id="cc-trans-owner" class="custom-select">
-                                                <option value="personal">Personal</option>
+                                                <option value="jason">Jason</option>
                                                 <option value="joint">Joint</option>
+                                                <option value="asia">Asia</option>
                                             </select>
                                         </div>
                                         <div class="form-group">
@@ -1552,7 +1630,7 @@
             </div>
             <div class="form-row">
                 <div class="form-group" id="bill-due-day-group"><label for="bill-due-day">Charge Day of Month</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="1" max="31" id="bill-due-day" required class="custom-input" value="1"></div>
-                <div class="form-group" id="bill-payment-source-group"><label for="bill-payment-source">Payment Source</label><select id="bill-payment-source" class="custom-select"><option value="jointChecking">Joint Checking Account</option><option value="personalChecking">Personal Checking Account</option><optgroup label="Credit Cards" id="bill-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group" id="bill-payment-source-group"><label for="bill-payment-source">Payment Source</label><select id="bill-payment-source" class="custom-select"><option value="jointChecking">Joint Checking Account</option><option value="jasonChecking">Jason's Checking Account</option><option value="asiaChecking">Asia's Checking Account</option><optgroup label="Joint Cards" id="bill-source-cc-optgroup-joint"></optgroup><optgroup label="Asia's Cards" id="bill-source-cc-optgroup-asia"></optgroup><optgroup label="Jason's Cards" id="bill-source-cc-optgroup-jason"></optgroup></select></div>
                 <div class="form-group"><label>&nbsp;</label><label class="checkbox-label"><input type="checkbox" id="bill-recurring"> Recurring monthly charge</label></div>
             </div>
             <div class="form-row hidden" id="bill-recurrence-dates-group">
@@ -1672,7 +1750,7 @@
                     <div class="form-group"><label for="seasonal-charge-amount">Charge Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" step="0.01" id="seasonal-charge-amount" class="custom-input"></div></div>
                     <div class="form-group"><label for="seasonal-charge-date">Charge Date</label><input type="date" id="seasonal-charge-date" class="custom-input"><small class="muted-text">Posts this date each occurrence (year/quarter/month kept, per Frequency).</small></div>
                 </div>
-                <div class="form-group"><label for="seasonal-charge-source">Charge Paid From</label><select id="seasonal-charge-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option><optgroup label="Credit Cards" id="seasonal-charge-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group"><label for="seasonal-charge-source">Charge Paid From</label><select id="seasonal-charge-source" class="custom-select"><option value="jason">Jason's Checking</option><option value="joint">Joint Checking</option><optgroup label="Joint Cards" id="seasonal-charge-source-cc-optgroup-joint"></optgroup><optgroup label="Asia's Cards" id="seasonal-charge-source-cc-optgroup-asia"></optgroup><optgroup label="Jason's Cards" id="seasonal-charge-source-cc-optgroup-jason"></optgroup></select></div>
             </div>
             <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem;">
                 <input type="checkbox" id="seasonal-exempt-splitter" style="cursor: pointer;">
@@ -1799,7 +1877,7 @@
 
             <div class="form-row" id="loan-payment-settings-row">
                 <div class="form-group" id="loan-payment-strategy-group"><label for="loan-payment-strategy">Automatic Monthly Payment</label><select id="loan-payment-strategy" class="custom-select"><option value="none">Do not schedule automatically</option><option value="balance">Full Card Balance</option><option value="interestSaving">Interest-Saving Balance</option><option value="minimum">Minimum Payment</option><option value="custom">Custom Schedule (multiple amounts)</option></select></div>
-                <div class="form-group"><label for="loan-payment-source">Pay From</label><select id="loan-payment-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option><optgroup label="Credit Cards" id="loan-source-cc-optgroup"></optgroup></select></div>
+                <div class="form-group"><label for="loan-payment-source">Pay From</label><select id="loan-payment-source" class="custom-select"><option value="jason">Jason's Checking</option><option value="joint">Joint Checking</option><option value="asia">Asia's Checking</option><optgroup label="Credit Cards" id="loan-source-cc-optgroup"></optgroup></select></div>
                 <div class="form-group">
                     <label for="loan-first-payment-date">First Payment Date (optional)</label>
                     <div style="display:flex; align-items:center; gap:.4rem;">
@@ -1920,8 +1998,9 @@
                     <div class="form-group hidden" id="loan-consolidation-cashout-dest-group">
                         <label for="loan-consolidation-cashout-dest">Deposit Cash-Out Into</label>
                         <select id="loan-consolidation-cashout-dest" class="custom-select">
-                            <option value="personal">Personal Checking</option>
+                            <option value="jason">Jason's Checking</option>
                             <option value="joint">Joint Checking</option>
+                            <option value="asia">Asia's Checking</option>
                         </select>
                     </div>
                     <div id="loan-consolidation-total-summary" class="muted-text" style="font-weight:600;"></div>
@@ -2021,7 +2100,7 @@
                         <div class="form-group"><label>Estimated Payments Remaining at Minimum</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" min="0" id="existing-plan-remaining-payments" class="custom-input"></div>
                         <div class="form-group"><label>Monthly Principal Payment</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-payment" class="custom-input"></div>
                         <div class="form-group"><label>Monthly Fee</label><input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="existing-plan-fee" class="custom-input" value="0"></div>
-                        <div class="form-group"><label>Ownership</label><select id="existing-plan-ownership" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select></div>
+                        <div class="form-group"><label>Ownership</label><select id="existing-plan-ownership" class="custom-select"><option value="jason">Jason</option><option value="joint">Joint</option><option value="asia">Asia</option></select></div>
                     </div>
                     <div style="display:flex; gap:.5rem; margin-top:.75rem;">
                         <button type="button" id="btn-add-existing-plan" class="action-btn small-btn solid-btn">Add Existing Plan</button>
@@ -2057,7 +2136,7 @@
                              'joint' anywhere else. Per explicit user request, 2026-08-05. -->
                         <div class="form-group" id="xfer-ledger-owner-group">
                             <label style="font-size:0.75rem;">Personal or Joint</label>
-                            <select id="xfer-ledger-owner" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select>
+                            <select id="xfer-ledger-owner" class="custom-select"><option value="jason">Jason</option><option value="joint">Joint</option><option value="asia">Asia</option></select>
                         </div>
                     </div>
                     <div class="form-group" id="xfer-description-group">
@@ -2162,6 +2241,15 @@
             <div class="form-group">
                 <label for="edit-tx-date">Date</label>
                 <input type="date" id="edit-tx-date" required class="custom-input">
+                <!-- Only populated/shown for the anchor of a dynamic joint-transfer occurrence (see
+                     updateAnchorDateHint() in app.js) — a live running-balance preview for whatever
+                     date is currently entered, plus, when that date is overridden away from its
+                     natural 1st/15th cycle date, the natural date itself and a one-click way back
+                     (btn-reset-anchor-date) that resets ONLY this date — unlike "Revert to Original"
+                     further down, which clears the whole occurrence including any split pieces. Per
+                     explicit user request, 2026-08-09. -->
+                <small id="edit-tx-anchor-date-hint" class="muted-text hidden" style="display:block; margin-top:4px;"></small>
+                <button type="button" class="action-btn small-btn outline-btn hidden" id="btn-reset-anchor-date" style="margin-top:6px;">Reset to Natural Date</button>
             </div>
 
             <div class="form-group hidden" id="edit-merchant-group">
@@ -2181,7 +2269,7 @@
                 <div class="form-group">
                     <label for="edit-tx-owner">Ownership</label>
                     <select id="edit-tx-owner" class="custom-select">
-                        <option value="personal">Personal</option>
+                        <option value="jason">Jason</option>
                         <option value="joint">Joint</option>
                     </select>
                 </div>
@@ -2211,6 +2299,22 @@
                 <span class="input-hint" style="font-size:0.75rem; color:var(--text-muted); margin-top:4px; display:block;">Defaults to Charge / Expense unless Deposit / Income is selected</span>
             </div>
 
+            <!-- Only shown when the transaction being edited is a savings-transfer checking mirror
+                 (tx.savingsTransfer) — lets the account it's tied to be switched between its savings
+                 pool's two valid checking accounts (Jason/Joint for the household pool, Asia/Joint for
+                 Asia's own pool), matching the switch the Savings ledger's own edit dialog has always
+                 had via its own "Checking Account" field. Per explicit user request, 2026-08-09. The
+                 non-Joint option's value/label are rewritten by populateEditTxSavingsAccountField() at
+                 open time since which pool this belongs to isn't knowable until the tx itself is read. -->
+            <div class="form-group hidden" id="edit-tx-savings-account-group">
+                <label for="edit-tx-savings-account">Checking Account</label>
+                <select id="edit-tx-savings-account" class="custom-select">
+                    <option value="jason">Jason</option>
+                    <option value="joint">Joint</option>
+                </select>
+                <small>This savings transfer's checking side can be moved between these two accounts.</small>
+            </div>
+
             <!-- Below-threshold override suggestions — only shown for a dynamic joint-transfer
                  occurrence flagged by simulateJasonCheckingAndAdjustTransfers as dropping Jason's
                  personal checking under the minimum buffer. Purely inert/click-to-fill; neither
@@ -2225,11 +2329,15 @@
             </div>
 
             <!-- Split Transfer — only for the anchor occurrence of a dynamic joint transfer
-                 (xfer-1st-*/xfer-15th-*/joint-xfer-jason-*), not Asia's side or a split piece's own
-                 editor. Lets the user spread one cycle's transfer across multiple dates; the amount
-                 never changes, only how it's distributed — see addSplitPiece/editSplitPiece/
-                 removeSplitPiece in app.js for the exact rebalancing rules. -->
-            <input type="hidden" id="edit-tx-parent-dyn-id">
+                 (xfer-1st-*/xfer-15th-*/joint-xfer-jason-*), not Asia's side. Lets the user spread
+                 one cycle's transfer across multiple dates; the group's total never changes, only how
+                 it's distributed — see addSplitPiece/editSplitPiece/removeSplitPiece in app.js for
+                 the exact rebalancing rules. Clicking EITHER the anchor above or any split piece row
+                 elsewhere in the app opens this same section (see openDynamicTxEditor()'s own
+                 comment) — per explicit user request, 2026-08-09, so every date belonging to one
+                 split group is editable from one place, with a live running-balance preview per row
+                 (see renderSplitEditorRows()) to check against the minimum-buffer threshold before
+                 committing a date. -->
             <div class="hidden" id="edit-tx-split-section" style="margin-bottom: 1rem;">
                 <button type="button" class="action-btn outline-btn" id="btn-toggle-split-transfer">Split Transfer</button>
                 <div class="hidden" id="edit-tx-split-rows-container" style="margin-top: 0.75rem; background: rgba(129, 140, 248, 0.08); border: 1px solid rgba(129, 140, 248, 0.3); padding: 0.75rem; border-radius: 6px;">
@@ -2241,12 +2349,6 @@
                     </div>
                     <div class="muted-text" id="edit-tx-split-remaining-text" style="margin-top: 0.5rem; font-weight: 600;"></div>
                 </div>
-            </div>
-
-            <!-- Split-piece notice — shown instead of the section above when editing one date of an
-                 already-split transfer, not the anchor. -->
-            <div class="hidden" id="edit-tx-piece-notice" style="background: rgba(129, 140, 248, 0.1); border: 1px solid rgba(129, 140, 248, 0.3); padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;">
-                This is one date of a split transfer. Editing the amount/date here only affects this piece — the original date absorbs the difference. Use "Delete" below to remove this date entirely (its amount merges back into the previous date in the group).
             </div>
 
             <!-- Recurring Charge Group (CC only) -->
@@ -2347,8 +2449,9 @@
             <div class="form-group">
                 <label for="account-settings-account">Account</label>
                 <select id="account-settings-account" class="custom-select">
-                    <option value="personal">Personal Checking</option>
+                    <option value="personal">Jason's Checking</option>
                     <option value="joint">Joint Checking</option>
+                    <option value="asia">Asia's Checking</option>
                 </select>
             </div>
 
@@ -2447,7 +2550,7 @@
             <div class="form-group"><label for="loan-extra-payment-description">Description</label><input type="text" id="loan-extra-payment-description" required class="custom-input" value="Extra Loan Payment"></div>
             <div class="form-row">
                 <div class="form-group"><label for="loan-extra-payment-amount">Payment Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0.01" id="loan-extra-payment-amount" required class="custom-input"></div></div>
-                <div class="form-group"><label for="loan-extra-payment-source">Pay From</label><select id="loan-extra-payment-source" class="custom-select"><option value="personal">Personal Checking</option><option value="joint">Joint Checking</option></select></div>
+                <div class="form-group"><label for="loan-extra-payment-source">Pay From</label><select id="loan-extra-payment-source" class="custom-select"><option value="jason">Jason's Checking</option><option value="joint">Joint Checking</option><option value="asia">Asia's Checking</option></select></div>
             </div>
             <div class="modal-buttons"><button type="button" class="action-btn outline-btn" id="btn-cancel-loan-extra-payment">Cancel</button><button type="submit" class="action-btn solid-btn">Save Payment</button></div>
         </form>
@@ -2457,9 +2560,12 @@
          used to open just the balance field alone. Per explicit user request, 2026-08-05. -->
     <dialog id="savings-balance-dialog" class="glass-modal">
         <form id="savings-balance-form" class="detail-form">
-            <h3>Savings Account Settings</h3>
+            <h3 id="savings-balance-dialog-title">Savings Account Settings</h3>
 
-            <div class="form-group">
+            <!-- Icon/Login URL are household-pool-only (no separate state fields exist for Asia's
+                 pool — out of scope per the Phase 3 plan's data model), so this whole group is
+                 hidden when viewing Asia's Savings pool. See the toggle in btn-open-savings-account-settings's click handler. -->
+            <div class="form-group" id="savings-icon-group">
                 <label>Account Icon</label>
                 <div style="display:flex; align-items:center; gap:0.6rem;">
                     <span id="savings-settings-icon-preview" class="debt-account-icon" style="pointer-events:none;"></span>
@@ -2469,7 +2575,7 @@
                 </div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="savings-login-url-group">
                 <label for="savings-settings-login-url">Account Website</label>
                 <input type="text" inputmode="url" id="savings-settings-login-url" class="custom-input" placeholder="https://www.example.com/login">
                 <small class="muted-text">Optional link shown on the account icon &mdash; click the icon on the Savings Tracker to open it.</small>
@@ -2483,8 +2589,16 @@
         <form id="savings-edit-form" class="detail-form">
             <h3>Edit Savings Entry</h3>
             <input type="hidden" id="savings-edit-id">
-            <div class="form-group"><label for="savings-edit-type">Entry Type</label><select id="savings-edit-type" class="custom-select"><option value="deposit">Deposit (Checking &rarr; Savings)</option><option value="withdrawal">Withdrawal (Savings &rarr; Checking)</option><option value="interest">Interest (Savings only)</option></select></div>
-            <div class="form-group" id="savings-edit-source-group"><label for="savings-edit-source">Checking Account</label><select id="savings-edit-source" class="custom-select"><option value="personal">Personal</option><option value="joint">Joint</option></select></div>
+            <div class="form-group">
+                <label>Entry Type</label>
+                <div class="savings-type-toggle-group" id="savings-edit-type-group">
+                    <button type="button" class="direction-btn active-deposit" data-savings-entry-type="deposit" id="btn-savings-edit-type-deposit">➕ Deposit</button>
+                    <button type="button" class="direction-btn" data-savings-entry-type="withdrawal" id="btn-savings-edit-type-withdrawal">➖ Withdrawal</button>
+                    <button type="button" class="direction-btn" data-savings-entry-type="interest" id="btn-savings-edit-type-interest">💰 Interest</button>
+                </div>
+                <input type="hidden" id="savings-edit-type" value="deposit">
+            </div>
+            <div class="form-group" id="savings-edit-source-group"><label for="savings-edit-source">Checking Account</label><select id="savings-edit-source" class="custom-select"><option value="jason">Jason</option><option value="joint">Joint</option></select></div>
             <div class="form-group"><label for="savings-edit-date">Date</label><div style="position: relative; display: flex; align-items: center;"><input type="date" id="savings-edit-date" required class="custom-input"></div></div>
             <div class="form-group"><label for="savings-edit-description">Description</label><input type="text" id="savings-edit-description" required class="custom-input"></div>
             <div class="form-group"><label for="savings-edit-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" min="0" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="savings-edit-amount" required class="custom-input"></div><small id="savings-edit-hint">Interest stays in Savings only. Deposit/Withdrawal edits update the checking mirror when it still exists.</small></div>
@@ -2492,10 +2606,6 @@
         </form>
     </dialog>
 
-    <dialog id="savings-day-dialog" class="glass-modal day-highlights-modal">
-        <div class="day-highlights-modal-header"><h3 id="savings-day-dialog-title">Savings Day Details</h3><button type="button" id="btn-close-savings-day" class="action-btn outline-btn">Close</button></div>
-        <div id="savings-day-dialog-content" class="highlights-list"></div>
-    </dialog>
     <!-- Bill Settings Modal (Bill Tracker) -->
     <dialog id="bill-settings-dialog" class="glass-modal">
         <form id="bill-settings-form" class="detail-form">
@@ -2536,7 +2646,8 @@
                     <label for="bill-settings-ownership">Expense Ownership</label>
                     <select id="bill-settings-ownership" class="custom-select" required>
                         <option value="joint">Joint Expense</option>
-                        <option value="personal">Personal Expense</option>
+                        <option value="jason">Jason's Expense</option>
+                        <option value="asia">Asia's Expense</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -2657,8 +2768,11 @@
                     <select id="bill-settings-source" class="custom-select" required>
                         <option value="none">No Source (budget only &mdash; won't post a charge anywhere)</option>
                         <option value="jointChecking">Joint Checking Account</option>
-                        <option value="personalChecking">Personal Checking Account</option>
-                        <optgroup label="Credit Cards" id="bill-settings-source-cc-optgroup"></optgroup>
+                        <option value="jasonChecking">Jason's Checking Account</option>
+                        <option value="asiaChecking">Asia's Checking Account</option>
+                        <optgroup label="Joint Cards" id="bill-settings-source-cc-optgroup-joint"></optgroup>
+                        <optgroup label="Asia's Cards" id="bill-settings-source-cc-optgroup-asia"></optgroup>
+                        <optgroup label="Jason's Cards" id="bill-settings-source-cc-optgroup-jason"></optgroup>
                     </select>
                 </div>
                 <div class="form-group">
@@ -2738,7 +2852,7 @@
     <!-- Jason's Payroll Configuration Dialog -->
     <dialog id="payroll-config-dialog" class="glass-modal" style="max-width: 680px; width: 90%;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); padding-bottom: 0.75rem; margin-bottom: 1.25rem;">
-            <h3 style="margin: 0; font-family: var(--font-heading); font-size: 1.25rem; color: #a5b4fc;">⚙️ Jason's Payroll Tracker</h3>
+            <h3 id="payroll-config-title" style="margin: 0; font-family: var(--font-heading); font-size: 1.25rem; color: #a5b4fc;">⚙️ Jason's Payroll Tracker</h3>
             <button type="button" class="close-btn" id="btn-close-payroll" style="background:none; border:none; color:var(--text-secondary); font-size:1.25rem; cursor:pointer;">&times;</button>
         </div>
         <form id="payroll-config-form" class="detail-form" style="display: flex; flex-direction: column; gap: 1rem;">
@@ -2748,9 +2862,52 @@
                  (unnecessary) or, for a native <input type="date">, squeezes it below its browser-
                  enforced minimum width (overflow/overlap into the next column). -->
             <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
-                <div class="form-group" style="flex: 0 1 170px;">
-                    <label for="payroll-first-date">1st Pay Date of Year (Friday)</label>
-                    <input type="date" id="payroll-first-date" required class="custom-input" style="width: 100%;">
+                <div class="form-group" style="flex: 0 1 160px;">
+                    <label for="payroll-frequency">Pay Frequency</label>
+                    <select id="payroll-frequency" class="custom-select" style="width: 100%;">
+                        <option value="biweekly">Bi-Weekly</option>
+                        <option value="semimonthly">Semi-Monthly</option>
+                    </select>
+                </div>
+                <!-- display:contents so these two fields flex-wrap alongside their siblings as if
+                     this wrapper weren't there — only exists so both can be shown/hidden together
+                     via one classList.toggle('hidden', ...) call. -->
+                <div id="payroll-biweekly-group" style="display: contents;">
+                    <div class="form-group" style="flex: 0 1 170px;">
+                        <label for="payroll-first-date">1st Pay Date of Year</label>
+                        <input type="date" id="payroll-first-date" required class="custom-input" style="width: 100%;">
+                    </div>
+                    <div class="form-group" style="flex: 0 1 150px;">
+                        <label for="payroll-day-of-week">Day of Week</label>
+                        <select id="payroll-day-of-week" class="custom-select" style="width: 100%;">
+                            <option value="0">Sunday</option>
+                            <option value="1">Monday</option>
+                            <option value="2">Tuesday</option>
+                            <option value="3">Wednesday</option>
+                            <option value="4">Thursday</option>
+                            <option value="5">Friday</option>
+                            <option value="6">Saturday</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="payroll-semimonthly-group" class="hidden" style="display: contents;">
+                    <div class="form-group" style="flex: 0 1 170px;">
+                        <label for="payroll-semi-day1">1st Paycheck Day</label>
+                        <select id="payroll-semi-day1" class="custom-select" style="width: 100%;">
+                            <option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option><option value="5">5th</option><option value="6">6th</option><option value="7">7th</option><option value="8">8th</option><option value="9">9th</option><option value="10">10th</option><option value="11">11th</option><option value="12">12th</option><option value="13">13th</option><option value="14">14th</option><option value="15">15th</option><option value="16">16th</option><option value="17">17th</option><option value="18">18th</option><option value="19">19th</option><option value="20">20th</option><option value="21">21st</option><option value="22">22nd</option><option value="23">23rd</option><option value="24">24th</option><option value="25">25th</option><option value="26">26th</option><option value="27">27th</option><option value="28">28th</option><option value="29">29th</option><option value="30">30th</option><option value="31">31st</option><option value="last">Last Day of Month</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 0 1 170px;">
+                        <label for="payroll-semi-day2">2nd Paycheck Day</label>
+                        <select id="payroll-semi-day2" class="custom-select" style="width: 100%;">
+                            <option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option><option value="5">5th</option><option value="6">6th</option><option value="7">7th</option><option value="8">8th</option><option value="9">9th</option><option value="10">10th</option><option value="11">11th</option><option value="12">12th</option><option value="13">13th</option><option value="14">14th</option><option value="15">15th</option><option value="16">16th</option><option value="17">17th</option><option value="18">18th</option><option value="19">19th</option><option value="20">20th</option><option value="21">21st</option><option value="22">22nd</option><option value="23">23rd</option><option value="24">24th</option><option value="25">25th</option><option value="26">26th</option><option value="27">27th</option><option value="28">28th</option><option value="29">29th</option><option value="30">30th</option><option value="31">31st</option><option value="last" selected>Last Day of Month</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 0 1 170px;">
+                        <label for="payroll-semi-start-date">First Paycheck On</label>
+                        <input type="date" id="payroll-semi-start-date" class="custom-input" style="width: 100%;">
+                        <small class="muted-text" style="font-size: 0.7rem;">No paychecks logged before this date. Leave blank for no limit.</small>
+                    </div>
                 </div>
                 <div class="form-group" style="flex: 0 1 150px;">
                     <label for="payroll-annual-salary">Annual Salary ($) <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(26 paychecks/yr)</span></label>
@@ -2787,8 +2944,8 @@
                         <label for="payroll-rate-2nd">2nd Paycheck</label>
                         <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-rate-2nd" class="custom-input" style="padding: 0.4rem; width: 100%;">
                     </div>
-                    <div class="form-group" style="flex: 0 1 120px;">
-                        <label for="payroll-rate-3rd">3rd Paycheck</label>
+                    <div class="form-group" id="payroll-rate-3rd-group" style="flex: 0 1 120px;">
+                        <label for="payroll-rate-3rd">3rd Paycheck <span style="font-size: 0.7rem; color: var(--text-secondary); font-weight: normal;">(Bi-Weekly only — some months have 3)</span></label>
                         <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="payroll-rate-3rd" class="custom-input" style="padding: 0.4rem; width: 100%;">
                     </div>
                 </div>
@@ -2895,6 +3052,37 @@
                     <!-- Additional deduction rows injected here -->
                 </div>
                 <p style="font-size:0.7rem; color:var(--text-secondary); margin:0.5rem 0 0;">Pre-tax here is treated like Medical/Dental/HSA/FSA above — exempt from federal AND Social Security/Medicare wages.</p>
+            </div>
+
+            <!-- Additional (unlimited, user-defined) Income Items -->
+            <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
+                <h4 style="margin: 0 0 0.5rem 0; font-family: var(--font-heading); font-size: 1rem; color: #a5b4fc;">Additional Income Items</h4>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem 0.6rem; align-items: end; margin-bottom: 0.75rem; border-bottom: 1px dashed var(--glass-border); padding-bottom: 0.75rem;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Label</label>
+                        <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" id="payroll-added-inc-label" placeholder="e.g. LTD Gross Up, Group Term Life" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:200px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Amount ($/check)</label>
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="payroll-added-inc-amount" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:100px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Type</label>
+                        <select id="payroll-added-inc-type" class="custom-select" style="padding:0.35rem; font-size:0.8rem; width:180px;">
+                            <option value="addition">Addition to Gross</option>
+                            <option value="inout">In/Out (taxed, not received)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <button type="button" class="action-btn solid-btn" id="btn-add-payroll-income" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; height: 34px;">+ Add</button>
+                    </div>
+                </div>
+
+                <div style="max-height: 120px; overflow-y: auto;" id="payroll-added-inc-list">
+                    <!-- Additional income rows injected here -->
+                </div>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0.5rem 0 0;">Both types add to taxable gross pay (federal, Social Security/Medicare, and 401(k)-eligible wages) every paycheck. "Addition to Gross" is real cash you actually receive (e.g. an LTD gross-up). "In/Out" is imputed income — it's taxed as if you received it, but the same amount is then subtracted back out of your net pay, since you never actually get the cash (e.g. employer-paid group term life above $50k coverage).</p>
             </div>
 
             <!-- Live Net Pay Preview -->
