@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-05 18:03';
+const BUILD_VERSION = '2026-08-10 18:12';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -53,8 +53,9 @@ function _createBlankState() {
         monthlyBills: {},
         manualTransfers: [],
         personalCalendar: {},
+        asiaCalendar: {},
         loans: [],
-        dashboardType: 'personal', // 'personal' or 'joint'
+        dashboardType: 'personal', // 'personal' (Jason), 'joint', or 'asia'
         viewMode: 'calendar',       // 'calendar' or 'list'
         listScope: 'month',         // 'month' or 'year'
         savingsCurrentAmount: 0,
@@ -64,6 +65,9 @@ function _createBlankState() {
         savingsListScope: 'month',
         savingsMetricsCollapsed: false,
         savingsYearSummaryCollapsed: false,
+        savingsPoolView: 'household', // 'household' or 'asia' — which Savings pool the Savings tab shows
+        asiaSavingsStartingBalance: 0,
+        asiaSavingsTransactions: [],
         deliveryYearSummaryCollapsed: false,
         deliveryYearSummaryDetailsExpanded: true,
         platformBreakdownCollapsed: false,
@@ -73,16 +77,25 @@ function _createBlankState() {
         // getJointStartingBalanceAnchor() and the checkpoint functions that consult them.
         personalStartingBalance: null,
         jointStartingBalance: null,
-        // Account Login URL + custom uploaded icon for the three accounts that aren't entries in
-        // state.loans[] (Personal/Joint checking, Savings) — everything else about them (starting
+        asiaStartingBalance: null,
+        // Account Login URL + custom uploaded icon for the four accounts that aren't entries in
+        // state.loans[] (Jason/Joint/Asia checking, Savings) — everything else about them (starting
         // balance, payroll) already had its own field above; these two are new, per explicit user
         // request, 2026-08-05, mirroring the loginUrl/icon pattern loans already have.
         personalLoginUrl: '',
         jointLoginUrl: '',
         savingsLoginUrl: '',
+        asiaLoginUrl: '',
         personalIcon: '',
         jointIcon: '',
-        savingsIcon: ''
+        savingsIcon: '',
+        asiaIcon: '',
+        // Asia's own Savings pool's login URL/icon — Phase 3 originally skipped these (only added
+        // asiaSavingsStartingBalance/asiaSavingsTransactions), leaving her Savings Account Settings
+        // dialog without the icon-upload/login-URL fields Jason's/Joint's/her own Checking settings
+        // all have. Per explicit user request, 2026-08-09: full parity.
+        asiaSavingsLoginUrl: '',
+        asiaSavingsIcon: ''
     };
 }
 
@@ -144,48 +157,161 @@ function shiftCalendarPeriod(year, month, offset) {
 // getJointRunningBalanceAtDate, so an uncached implementation re-derives the same month's paychecks,
 // delivery weeks, and bill allocations over and over. Cleared in saveDatabase().
 let _paycheckDatesCache = {};
+let _asiaPaycheckDatesCache = {};
+
+// Which person's payroll config the Payroll dialog is currently editing — set by
+// openPayrollConfigModal(target), read by every dialog-internal function below that used to
+// hardcode state.payrollConfig (Jason's). The balance-engine functions (getJasonPayrollAmount,
+// getAsiaPayrollAmount, etc.) intentionally do NOT use this — they read their own person's config
+// directly, since they aren't dialog state.
+let _payrollConfigTarget = 'jason'; // 'jason' | 'asia'
+function getActivePayrollConfig() {
+    return _payrollConfigTarget === 'asia' ? state.asiaPayrollConfig : state.payrollConfig;
+}
 let _personalTxPeriodCache = {};
 let _transferForJasonCache = {};
 let _transferForAsiaCache = {};
+// Keyed by "year-month" -> billTrackerSettingId -> that setting's SCHEDULED (not
+// yet-necessarily-posted) amount for that month, captured as a side effect of
+// syncBillTrackerBillsToAllMonths()'s own already-correct per-setting gating (one-time-only / First
+// Payment Date / End Date) and budget calculation — reused here rather than re-implementing those
+// gates a second time, which would risk the "two independent implementations of the same thing
+// silently disagreeing" bug class this app has been bitten by repeatedly. Per explicit user request,
+// 2026-08-09: the Bill Tracker's "Posting This Month" line should show what's SCHEDULED for the
+// month (matches what a user would expect a monthly budget total to mean), not just what has
+// already posted to the ledger as of today — a bill due later this month should count now, not stay
+// at $0 until its due date passes. Also backs the "scheduled this month only" list/card filter
+// (same request, same session) — keyed by month (not just today) so that filter tracks whichever
+// month is actually being navigated, not always the real current one. Reset at the top of every
+// syncBillTrackerBillsToAllMonths() call (which iterates every materialized month); a setting gated
+// out of a given month (before First Payment Date, after End Date, wrong one-time month) naturally
+// has no entry for that month key — reads default to 0/undefined, which is correct.
+let _billTrackerScheduledAmountsByMonth = {};
+
+// Resolves one semimonthly "day" config value (a plain 1-31 number, or the string 'last') to an
+// actual calendar date within the given year/month. A plain number is clamped down to that
+// month's real last day if it doesn't exist there (e.g. 31 in February resolves to the 28th, or
+// 29th in a leap year) — 'last' always resolves to that month's actual last day regardless of
+// length, which is the only way to land on 28/29/30/31 depending on the month, per explicit user
+// request. monthIndex0 is 0-based (0 = January).
+function resolveSemiMonthlyDayDate(year, monthIndex0, dayValue) {
+    const lastDayOfMonth = new Date(year, monthIndex0 + 1, 0).getDate();
+    const day = dayValue === 'last' ? lastDayOfMonth : Math.min(Math.max(1, Number(dayValue) || 1), lastDayOfMonth);
+    const mm = String(monthIndex0 + 1).padStart(2, '0');
+    const dd = String(day).padStart(2, '0');
+    return `${year}-${mm}-${dd}`;
+}
+
+// All semimonthly paycheck dates (2 per month, or 1 if both configured days resolve to the same
+// date in a given month) for a whole year, from cfg.semiMonthlyDay1/semiMonthlyDay2.
+function getSemiMonthlyDatesForYear(cfg, year) {
+    const dates = [];
+    for (let m = 0; m < 12; m++) {
+        const d1 = resolveSemiMonthlyDayDate(year, m, cfg.semiMonthlyDay1);
+        const d2 = resolveSemiMonthlyDayDate(year, m, cfg.semiMonthlyDay2);
+        dates.push(d1);
+        if (d2 !== d1) dates.push(d2);
+    }
+    // Gate out anything before the actual first paycheck of this schedule (inclusive — the anchor
+    // date itself IS a real paycheck) — without this, Semi-Monthly's two-fixed-days-a-month pattern
+    // has no starting point at all and would generate phantom paychecks for any past year queried,
+    // not just from whenever this pay schedule actually began. Unset (null) means no gate.
+    const filtered = cfg.semiMonthlyStartDate ? dates.filter(d => d >= cfg.semiMonthlyStartDate) : dates;
+    return filtered.sort();
+}
 
 function getPaycheckDatesForYear(year) {
     if (_paycheckDatesCache[year]) return _paycheckDatesCache[year];
-    const dates = [];
     const cfg = state.payrollConfig;
-    if (!cfg || !cfg.firstPayDate) return dates;
+    if (!cfg) return [];
 
-    // Parse firstPayDate
-    let current = new Date(cfg.firstPayDate + 'T12:00:00Z');
-    // Determine the year of the firstPayDate
-    const startYear = current.getUTCFullYear();
+    let dates;
+    if (cfg.payFrequency === 'semimonthly') {
+        dates = getSemiMonthlyDatesForYear(cfg, year);
+    } else {
+        dates = [];
+        if (!cfg.firstPayDate) return dates;
 
-    // Shift current to the target year
-    if (startYear > year) {
-        while (current.getUTCFullYear() > year) {
+        // Parse firstPayDate
+        let current = new Date(cfg.firstPayDate + 'T12:00:00Z');
+        // Determine the year of the firstPayDate
+        const startYear = current.getUTCFullYear();
+
+        // Shift current to the target year
+        if (startYear > year) {
+            while (current.getUTCFullYear() > year) {
+                current.setUTCDate(current.getUTCDate() - 14);
+            }
+        } else if (startYear < year) {
+            while (current.getUTCFullYear() < year) {
+                current.setUTCDate(current.getUTCDate() + 14);
+            }
+        }
+
+        // Back up to make sure we don't miss the first paychecks of the year
+        while (current.getUTCFullYear() === year) {
             current.setUTCDate(current.getUTCDate() - 14);
         }
-    } else if (startYear < year) {
-        while (current.getUTCFullYear() < year) {
+        current.setUTCDate(current.getUTCDate() + 14);
+
+        // Collect all paychecks falling in the target year
+        while (current.getUTCFullYear() === year) {
+            const yyyy = current.getUTCFullYear();
+            const mm = String(current.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(current.getUTCDate()).padStart(2, '0');
+            dates.push(`${yyyy}-${mm}-${dd}`);
             current.setUTCDate(current.getUTCDate() + 14);
         }
     }
 
-    // Back up to make sure we don't miss the first paychecks of the year
-    while (current.getUTCFullYear() === year) {
-        current.setUTCDate(current.getUTCDate() - 14);
-    }
-    current.setUTCDate(current.getUTCDate() + 14);
-
-    // Collect all paychecks falling in the target year
-    while (current.getUTCFullYear() === year) {
-        const yyyy = current.getUTCFullYear();
-        const mm = String(current.getUTCMonth() + 1).padStart(2, '0');
-        const dd = String(current.getUTCDate()).padStart(2, '0');
-        dates.push(`${yyyy}-${mm}-${dd}`);
-        current.setUTCDate(current.getUTCDate() + 14);
-    }
-
     _paycheckDatesCache[year] = dates;
+    return dates;
+}
+
+// Mirrors getPaycheckDatesForYear() above, but reads state.asiaPayrollConfig instead of
+// state.payrollConfig — Asia's paycheck cadence/config is independent of Jason's, so this must NOT
+// just call the function above with a different cache key; the underlying config read has to
+// change too, or her paychecks would silently follow his schedule.
+function getAsiaPaycheckDatesForYear(year) {
+    if (_asiaPaycheckDatesCache[year]) return _asiaPaycheckDatesCache[year];
+    const cfg = state.asiaPayrollConfig;
+    if (!cfg) return [];
+
+    let dates;
+    if (cfg.payFrequency === 'semimonthly') {
+        dates = getSemiMonthlyDatesForYear(cfg, year);
+    } else {
+        dates = [];
+        if (!cfg.firstPayDate) return dates;
+
+        let current = new Date(cfg.firstPayDate + 'T12:00:00Z');
+        const startYear = current.getUTCFullYear();
+
+        if (startYear > year) {
+            while (current.getUTCFullYear() > year) {
+                current.setUTCDate(current.getUTCDate() - 14);
+            }
+        } else if (startYear < year) {
+            while (current.getUTCFullYear() < year) {
+                current.setUTCDate(current.getUTCDate() + 14);
+            }
+        }
+
+        while (current.getUTCFullYear() === year) {
+            current.setUTCDate(current.getUTCDate() - 14);
+        }
+        current.setUTCDate(current.getUTCDate() + 14);
+
+        while (current.getUTCFullYear() === year) {
+            const yyyy = current.getUTCFullYear();
+            const mm = String(current.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(current.getUTCDate()).padStart(2, '0');
+            dates.push(`${yyyy}-${mm}-${dd}`);
+            current.setUTCDate(current.getUTCDate() + 14);
+        }
+    }
+
+    _asiaPaycheckDatesCache[year] = dates;
     return dates;
 }
 
@@ -200,6 +326,17 @@ function getNextPaycheckDateAfter(dateStr) {
     const year = Number(dateStr.slice(0, 4));
     const skipped = state.payrollConfig?.skippedPaychecks || [];
     const candidates = [...getPaycheckDatesForYear(year), ...getPaycheckDatesForYear(year + 1)]
+        .filter(d => d > dateStr && !skipped.includes(d))
+        .sort();
+    return candidates.length ? candidates[0] : null;
+}
+
+// Mirrors getNextPaycheckDateAfter() above, for Asia's own independent payroll config/schedule —
+// used by simulateAsiaCheckingAndAdjustTransfers()'s payday-shift logic, same as Jason's.
+function getNextAsiaPaycheckDateAfter(dateStr) {
+    const year = Number(dateStr.slice(0, 4));
+    const skipped = state.asiaPayrollConfig?.skippedPaychecks || [];
+    const candidates = [...getAsiaPaycheckDatesForYear(year), ...getAsiaPaycheckDatesForYear(year + 1)]
         .filter(d => d > dateStr && !skipped.includes(d))
         .sort();
     return candidates.length ? candidates[0] : null;
@@ -315,7 +452,11 @@ function computeAnnualFederalTax(adjustedAnnualWage, filingStatus, step2cChecked
 function calculatePaycheckBreakdown(grossThisPeriod, cfg) {
     const ded = cfg.deductions || {};
     const tax = cfg.taxProfile || {};
-    const payPeriods = cfg.payPeriodsPerYear || 26;
+    // Annualizing wages for federal withholding (IRS Pub 15-T) needs the REAL number of pay
+    // periods per year — 26 for biweekly, 24 for semimonthly (always exactly 2/month, unlike
+    // biweekly's occasional 3-paycheck month). Derived from payFrequency rather than a separately
+    // stored/passed field, so there's nothing that can drift out of sync with it.
+    const payPeriods = cfg.payFrequency === 'semimonthly' ? 24 : 26;
 
     // User-added custom deduction rows (unlimited) — "pretax" ones are treated like the named
     // Section 125 items above (medical/dental/HSA/FSA): exempt from both federal and FICA wages.
@@ -329,14 +470,34 @@ function calculatePaycheckBreakdown(grossThisPeriod, cfg) {
         .filter(item => item.taxTreatment !== 'pretax')
         .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
 
+    // Additional per-paycheck income items (unlimited, on top of base gross) — both types are
+    // taxable, so both inflate gross for federal/FICA wages. 'addition' (e.g. an LTD gross-up) is
+    // real cash the employee actually receives. 'inout' (e.g. employer-paid group term life above
+    // $50k) is imputed income: taxed as if received, but never actually paid out, so its total is
+    // subtracted back out of net pay below, after tax — see the inOutIncomeTotal subtraction at the
+    // bottom of this function.
+    const incomeItems = cfg.additionalIncomeItems || [];
+    const additionalIncomeTotal = incomeItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    const inOutIncomeTotal = incomeItems
+        .filter(item => item.type === 'inout')
+        .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    const grossWithAdditionalIncome = grossThisPeriod + additionalIncomeTotal;
+    // 401(k) deferral can only be taken against wages actually received in cash — 'inout' items are
+    // imputed (never paid out), so they're excluded from the 401(k)-eligible base even though they
+    // DO count for federal/FICA taxable wages just below. Confirmed against a real paystub: 8%
+    // traditional 401(k) landed on gross MINUS the $14.32 Group Term Life in/out line, not the full
+    // gross — using the full gross overstated the deferral (and, downstream, understated federal
+    // taxable wages) by the in/out amount's share.
+    const k401EligibleGross = grossWithAdditionalIncome - inOutIncomeTotal;
+
     const section125Total = (Number(ded.pretaxMedical) || 0) + (Number(ded.pretaxDental) || 0) +
         (Number(ded.pretaxHSA) || 0) + (Number(ded.pretaxFSA) || 0) + additionalPretaxTotal;
-    const traditional401k = grossThisPeriod * ((Number(ded.traditional401kPercent) || 0) / 100);
-    const roth401k = grossThisPeriod * ((Number(ded.roth401kPercent) || 0) / 100);
+    const traditional401k = k401EligibleGross * ((Number(ded.traditional401kPercent) || 0) / 100);
+    const roth401k = k401EligibleGross * ((Number(ded.roth401kPercent) || 0) / 100);
     const postTaxOther = (Number(ded.postTaxOther) || 0) + additionalPostTaxTotal;
 
-    const ficaWages = Math.max(0, grossThisPeriod - section125Total);
-    const federalTaxableWages = Math.max(0, grossThisPeriod - section125Total - traditional401k);
+    const ficaWages = Math.max(0, grossWithAdditionalIncome - section125Total);
+    const federalTaxableWages = Math.max(0, grossWithAdditionalIncome - section125Total - traditional401k);
 
     const annualWage = Math.max(0, federalTaxableWages * payPeriods + (Number(tax.otherIncome) || 0) - (Number(tax.otherDeductions) || 0));
     const tentativeAnnualTax = computeAnnualFederalTax(annualWage, tax.filingStatus || 'single', !!tax.step2cChecked);
@@ -351,11 +512,12 @@ function calculatePaycheckBreakdown(grossThisPeriod, cfg) {
         ? (ficaWages - additionalMedicareThresholdPerPeriod) * ADDITIONAL_MEDICARE_RATE
         : 0;
 
-    const netPay = grossThisPeriod - section125Total - traditional401k - roth401k - postTaxOther -
-        federalTax - socialSecurity - medicare - additionalMedicare;
+    const netPay = grossWithAdditionalIncome - section125Total - traditional401k - roth401k - postTaxOther -
+        federalTax - socialSecurity - medicare - additionalMedicare - inOutIncomeTotal;
 
     return {
-        gross: grossThisPeriod,
+        gross: grossWithAdditionalIncome,
+        additionalIncomeTotal, inOutIncomeTotal,
         section125Total, traditional401k, roth401k, postTaxOther,
         additionalPretaxTotal, additionalPostTaxTotal,
         ficaWages, federalTaxableWages,
@@ -643,7 +805,7 @@ function renderPayrollEstimatesList() {
     if (!listContainer) return;
 
     listContainer.innerHTML = '';
-    const estimates = state.payrollConfig.estimates || [];
+    const estimates = getActivePayrollConfig().estimates || [];
 
     if (estimates.length === 0) {
         listContainer.innerHTML = '<p class="muted-text" style="grid-column: 1 / -1; text-align: center; font-size: 0.85rem; padding: 0.5rem;">No projected pay increases added yet.</p>';
@@ -654,10 +816,16 @@ function renderPayrollEstimatesList() {
         const item = document.createElement('div');
         item.style = 'display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 4px;';
 
-        const typeStr = est.type === 'percent' ? `${est.value}% Increase` : `+$${Number(est.value).toLocaleString('en-US')} Fixed`;
+        // est.value can be genuinely absent (undefined) — a 401(k)-bump-only estimate, no raise
+        // attached at all — not just zero. Must not fall through to a raw ${est.value} interpolation
+        // (renders the literal string "undefined") or Number(undefined) (renders "NaN").
+        const hasEstValue = est.value !== undefined && est.value !== null && est.value !== '';
+        const typeStr = !hasEstValue
+            ? '401(k) bump only'
+            : (est.type === 'percent' ? `${est.value}% Increase` : `+$${Number(est.value).toLocaleString('en-US')} Fixed`);
         const recurStr = est.isRecurring ? ' (Recurring YoY)' : '';
         const k401Bump = est.k401BumpPercent === undefined ? 1 : Number(est.k401BumpPercent);
-        const k401Str = k401Bump > 0 ? `, +${k401Bump}% 401(k)` : '';
+        const k401Str = k401Bump > 0 ? (hasEstValue ? `, +${k401Bump}% 401(k)` : ` (+${k401Bump}%)`) : '';
         item.innerHTML = `
             <span><strong>${MONTH_NAMES[est.effectiveMonth]} ${est.effectiveYear}</strong>: ${typeStr}${k401Str}${recurStr}</span>
             <span style="display:flex; gap:4px;">
@@ -668,12 +836,14 @@ function renderPayrollEstimatesList() {
 
         item.querySelector('.edit-est-btn').addEventListener('click', (e) => {
             const id = e.currentTarget.dataset.id;
-            const target = state.payrollConfig.estimates.find(x => x.id === id);
+            const target = getActivePayrollConfig().estimates.find(x => x.id === id);
             if (!target) return;
 
             document.getElementById('payroll-est-month').value = target.effectiveMonth;
             document.getElementById('payroll-est-year').value = target.effectiveYear;
-            document.getElementById('payroll-est-val').value = target.value;
+            // target.value can be genuinely undefined (a 401(k)-bump-only estimate) — setting an
+            // <input>'s .value to undefined stores the literal string "undefined", not blank.
+            document.getElementById('payroll-est-val').value = (target.value === undefined || target.value === null) ? '' : target.value;
             document.getElementById('payroll-est-type').value = target.type;
             document.getElementById('payroll-est-recur').checked = !!target.isRecurring;
             document.getElementById('payroll-est-401k-bump').value = target.k401BumpPercent === undefined ? 1 : target.k401BumpPercent;
@@ -686,7 +856,8 @@ function renderPayrollEstimatesList() {
         item.querySelector('.delete-est-btn').addEventListener('click', (e) => {
             const id = e.currentTarget.dataset.id;
             if (id === payrollEstimateEditingId) exitPayrollEstimateEditMode();
-            state.payrollConfig.estimates = state.payrollConfig.estimates.filter(item => item.id !== id);
+            const cfg = getActivePayrollConfig();
+            cfg.estimates = cfg.estimates.filter(item => item.id !== id);
             saveDatabase();
             renderPayrollEstimatesList();
         });
@@ -704,7 +875,7 @@ function renderPayrollAddedDeductionsList() {
     if (!listContainer) return;
 
     listContainer.innerHTML = '';
-    const items = state.payrollConfig.deductions.additionalItems || [];
+    const items = getActivePayrollConfig().deductions.additionalItems || [];
 
     if (items.length === 0) {
         listContainer.innerHTML = '<p class="muted-text" style="text-align: center; font-size: 0.85rem; padding: 0.5rem;">No additional deductions added yet.</p>';
@@ -723,9 +894,47 @@ function renderPayrollAddedDeductionsList() {
 
         item.querySelector('.delete-added-ded-btn').addEventListener('click', (e) => {
             const id = e.currentTarget.dataset.id;
-            state.payrollConfig.deductions.additionalItems = state.payrollConfig.deductions.additionalItems.filter(i => i.id !== id);
+            const cfg = getActivePayrollConfig();
+            cfg.deductions.additionalItems = cfg.deductions.additionalItems.filter(i => i.id !== id);
             saveDatabase();
             renderPayrollAddedDeductionsList();
+            updatePayrollPreview();
+        });
+
+        listContainer.appendChild(item);
+    });
+}
+
+// Mirrors renderPayrollAddedDeductionsList() above, for the Additional Income Items list — same
+// "lives directly on state, mutated immediately on add/delete" convention.
+function renderPayrollAddedIncomeList() {
+    const listContainer = document.getElementById('payroll-added-inc-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '';
+    const items = getActivePayrollConfig().additionalIncomeItems || [];
+
+    if (items.length === 0) {
+        listContainer.innerHTML = '<p class="muted-text" style="text-align: center; font-size: 0.85rem; padding: 0.5rem;">No additional income items added yet.</p>';
+        return;
+    }
+
+    items.forEach(inc => {
+        const item = document.createElement('div');
+        item.style = 'display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 4px;';
+
+        const typeStr = inc.type === 'inout' ? 'In/Out' : 'Addition to Gross';
+        item.innerHTML = `
+            <span><strong>${escapeHTML(inc.label)}</strong>: $${(Number(inc.amount) || 0).toFixed(2)}/check (${typeStr})</span>
+            <button type="button" class="action-btn small-btn danger-btn delete-added-inc-btn" data-id="${inc.id}" style="padding: 2px 6px; font-size: 0.75rem;">Delete</button>
+        `;
+
+        item.querySelector('.delete-added-inc-btn').addEventListener('click', (e) => {
+            const id = e.currentTarget.dataset.id;
+            const cfg = getActivePayrollConfig();
+            cfg.additionalIncomeItems = cfg.additionalIncomeItems.filter(i => i.id !== id);
+            saveDatabase();
+            renderPayrollAddedIncomeList();
             updatePayrollPreview();
         });
 
@@ -738,15 +947,22 @@ function renderPayrollAddedDeductionsList() {
 // submit handler to save.
 function readPayrollFormAsConfig() {
     return {
+        payFrequency: document.getElementById('payroll-frequency').value === 'semimonthly' ? 'semimonthly' : 'biweekly',
+        semiMonthlyDay1: document.getElementById('payroll-semi-day1').value === 'last' ? 'last' : parseInt(document.getElementById('payroll-semi-day1').value) || 15,
+        semiMonthlyDay2: document.getElementById('payroll-semi-day2').value === 'last' ? 'last' : parseInt(document.getElementById('payroll-semi-day2').value) || 15,
+        semiMonthlyStartDate: document.getElementById('payroll-semi-start-date').value || null,
         grossBasePay: parseFloat(document.getElementById('payroll-gross-pay').value) || 0,
         stipendAmount: parseFloat(document.getElementById('payroll-stipend').value) || 0,
+        // Additional income items aren't form fields — they live directly on state (see
+        // renderPayrollAddedIncomeList()'s add/delete handlers), same convention as the Additional
+        // Deductions list's additionalItems below.
+        additionalIncomeItems: getActivePayrollConfig().additionalIncomeItems || [],
         hasDifferentRates: document.getElementById('payroll-custom-rates-toggle').checked,
         differentRates: {
             rate1st: parseFloat(document.getElementById('payroll-rate-1st').value) || 0,
             rate2nd: parseFloat(document.getElementById('payroll-rate-2nd').value) || 0,
             rate3rd: parseFloat(document.getElementById('payroll-rate-3rd').value) || 0
         },
-        payPeriodsPerYear: 26,
         taxProfile: {
             filingStatus: document.getElementById('payroll-filing-status').value,
             step2cChecked: document.getElementById('payroll-step2c').checked,
@@ -765,7 +981,7 @@ function readPayrollFormAsConfig() {
             postTaxOther: parseFloat(document.getElementById('payroll-posttax-other').value) || 0,
             // Additional deduction rows aren't form fields — they live directly on state (see
             // renderPayrollAddedDeductionsList()'s add/delete handlers) and get carried through here.
-            additionalItems: state.payrollConfig.deductions?.additionalItems || []
+            additionalItems: getActivePayrollConfig().deductions?.additionalItems || []
         }
     };
 }
@@ -791,9 +1007,13 @@ function updatePayrollPreview() {
     const row = (label, val) => `<div style="display:flex; justify-content:space-between;"><span style="color:var(--text-secondary);">${label}</span><span>${fmt(val)}</span></div>`;
     const totalRow = (val) => `<div style="display:flex; justify-content:space-between; font-weight:700; border-top:1px solid var(--glass-border); margin-top:0.25rem; padding-top:0.25rem;"><span>Net Pay</span><span>${fmt(val)}</span></div>`;
 
+    const inOutRow = regular.inOutIncomeTotal > 0
+        ? row('In/Out Income (taxed, not received)', -regular.inOutIncomeTotal)
+        : '';
+
     previewBody.innerHTML = `
         <div style="font-weight:600; margin-bottom:0.15rem;">Regular Paycheck (2nd/3rd of month)</div>
-        ${row('Gross Pay', regular.gross)}
+        ${row('Gross Pay (incl. additional income)', regular.gross)}
         ${row('Pre-tax Benefits', -regular.section125Total)}
         ${row('401(k) Traditional', -regular.traditional401k)}
         ${row('401(k) Roth', -regular.roth401k)}
@@ -801,9 +1021,10 @@ function updatePayrollPreview() {
         ${row('Social Security', -regular.socialSecurity)}
         ${row('Medicare', -(regular.medicare + regular.additionalMedicare))}
         ${row('Other Post-Tax', -regular.postTaxOther)}
+        ${inOutRow}
         ${totalRow(regular.netPay)}
         <div style="font-weight:600; margin:0.5rem 0 0.15rem;">1st Paycheck of Month (with stipend)</div>
-        ${row('Gross Pay (incl. stipend)', withStipend.gross)}
+        ${row('Gross Pay (incl. stipend + additional income)', withStipend.gross)}
         ${totalRow(withStipend.netPay)}
     `;
 }
@@ -855,6 +1076,10 @@ function _measureScrollbarWidth() {
 }
 
 async function init() {
+    // Set before anything else paints — avoids a flash of the wrong (zoom-based-media-query-era)
+    // layout between first paint and the first renderAppImmediate() call, which is what normally
+    // keeps this in sync afterward (see _syncMobileScreenClass()'s own comment).
+    _syncMobileScreenClass();
     const versionMarker = document.getElementById('build-version-marker');
     if (versionMarker) versionMarker.textContent = 'Build ' + BUILD_VERSION;
 
@@ -892,9 +1117,12 @@ async function init() {
 
     const todayStr = formatLocalDate(new Date());
     state.selectedDate = state.selectedDate || todayStr;
-    let d = state.selectedDate;
-    if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
-    document.getElementById('trans-date').value = d;
+    // #trans-date is a native <input type="date"> (see enhanceDateInput()) — its .value setter only
+    // accepts ISO yyyy-mm-dd and silently clears to '' on anything else (confirmed live, 2026-08-07).
+    // The mm/dd/yyyy conversion this used to do here was dead weight left over from before the field
+    // was type="date" — it silently blanked the field on every load, so a fresh page never actually
+    // had a starting date in Quick Add until the user picked one themselves.
+    document.getElementById('trans-date').value = state.selectedDate;
     document.getElementById('trans-date').dataset.isoDate = state.selectedDate;
 
     updateSegmentedControlsUI();
@@ -1157,6 +1385,7 @@ function saveDatabase(skipAutoSync) {
     _deliveryEarningsIndex = null;
     _cardBalanceEstimatesCache = {};
     _paycheckDatesCache = {};
+    _asiaPaycheckDatesCache = {};
     _personalTxPeriodCache = {};
     _transferForJasonCache = {};
     _transferForAsiaCache = {};
@@ -1169,6 +1398,12 @@ function saveDatabase(skipAutoSync) {
     _jointMonthFullContributionCache = {};
     _jointDynamicCheckpointCache = {};
     _jointContinuousBalanceCache = {};
+    _asiaTxPeriodCache = {};
+    _sortedAsiaCalendarKeysCache = null;
+    _asiaMonthFullContributionCache = {};
+    _asiaMonthStartCheckpointCache = {};
+    _asiaRunningBalanceCache = {};
+    _asiaAdjustedTransferCache = {};
 
     // Every kind of edit (financial data, UI preferences, anything else) already ends in a call to
     // saveDatabase() — rather than wiring an explicit sync call into every single edit site
@@ -1259,6 +1494,66 @@ function sanitizeStoredEncoding(value, seen = new WeakSet()) {
     });
     return changes;
 }
+// Shared default shape for a person's payroll config (Jason's state.payrollConfig, Asia's
+// state.asiaPayrollConfig) — each person gets their own independent object (never a shared
+// reference), but both start from this identical structure.
+function _createDefaultPayrollConfigShape() {
+    return {
+        // 'biweekly' (every 14 days, anchored to firstPayDate) or 'semimonthly' (two fixed calendar
+        // days per month, semiMonthlyDay1/semiMonthlyDay2). Defaults to 'biweekly' so every existing
+        // saved config keeps behaving exactly as it always has — see getPaycheckDatesForYear().
+        payFrequency: 'biweekly',
+        firstPayDate: '2026-01-02',
+        // Each day is either a plain 1-31 calendar day (clamped to that month's actual last day if
+        // the month is shorter — e.g. 31 in February resolves to the 28th/29th) or the string
+        // 'last', meaning "always this month's actual last day" regardless of length — the only way
+        // to get 28/29/30/31 depending on the month/leap year, per explicit user request.
+        semiMonthlyDay1: 15,
+        semiMonthlyDay2: 'last',
+        // Semi-Monthly only — the date of the actual first paycheck under this schedule. Unlike
+        // Bi-Weekly's firstPayDate (which anchors the 14-day cadence itself), Semi-Monthly's two
+        // calendar days repeat identically every month forever with no inherent starting point — so
+        // without this, switching to Semi-Monthly would generate phantom paychecks for every past
+        // month/year queried, not just from whenever this pay schedule actually began. null means
+        // no gate (matches pre-this-feature behavior) — see getSemiMonthlyDatesForYear().
+        semiMonthlyStartDate: null,
+        grossBasePay: 0,
+        stipendAmount: 0,
+        hasDifferentRates: false,
+        differentRates: {
+            rate1st: 0,
+            rate2nd: 0,
+            rate3rd: 0
+        },
+        estimates: [],
+        skippedPaychecks: [],
+        // Unlimited user-defined per-paycheck income items ON TOP of grossBasePay/stipendAmount —
+        // every one is added to taxable gross (federal, FICA, and 401(k)-eligible wages) every
+        // paycheck. 'addition' is real cash the employee actually receives (e.g. an LTD gross-up).
+        // 'inout' is imputed income (e.g. employer-paid group term life above $50k coverage) — taxed
+        // as if received, but its amount is subtracted back out of net pay in
+        // calculatePaycheckBreakdown() since it was never actually paid out in cash.
+        additionalIncomeItems: [],
+        taxProfile: {
+            filingStatus: 'single',
+            step2cChecked: false,
+            dependentsAmount: 0,
+            otherIncome: 0,
+            otherDeductions: 0,
+            extraWithholding: 0
+        },
+        deductions: {
+            pretaxMedical: 0,
+            pretaxDental: 0,
+            pretaxHSA: 0,
+            pretaxFSA: 0,
+            traditional401kPercent: 0,
+            roth401kPercent: 0,
+            postTaxOther: 0,
+            additionalItems: []
+        }
+    };
+}
 function migrateDatabase() {
     const encodingFixes = sanitizeStoredEncoding(state);
 
@@ -1297,6 +1592,11 @@ function migrateDatabase() {
     if (state.currentMonth === undefined) { state.currentMonth = 'Jul'; migrated = true; }
     if (state.activeTab === undefined) { state.activeTab = 'dashboard'; migrated = true; }
     if (state.personalMinimumBuffer === undefined) { state.personalMinimumBuffer = 0; migrated = true; }
+    if (state.asiaMinimumBuffer === undefined) { state.asiaMinimumBuffer = 0; migrated = true; }
+    if (state.asiaCalendar === undefined) { state.asiaCalendar = {}; migrated = true; }
+    if (state.asiaStartingBalance === undefined) { state.asiaStartingBalance = null; migrated = true; }
+    if (state.asiaLoginUrl === undefined) { state.asiaLoginUrl = ''; migrated = true; }
+    if (state.asiaIcon === undefined) { state.asiaIcon = ''; migrated = true; }
     if (state.dashboardType === undefined) { state.dashboardType = 'personal'; migrated = true; }
     if (state.viewMode === undefined) { state.viewMode = 'calendar'; migrated = true; }
     if (state.listScope === undefined) { state.listScope = 'month'; migrated = true; }
@@ -1307,6 +1607,11 @@ function migrateDatabase() {
     if (!['month', 'year'].includes(state.savingsListScope)) { state.savingsListScope = 'month'; migrated = true; }
     if (state.savingsMetricsCollapsed === undefined) { state.savingsMetricsCollapsed = false; migrated = true; }
     if (state.savingsYearSummaryCollapsed === undefined) { state.savingsYearSummaryCollapsed = false; migrated = true; }
+    if (!['household', 'asia'].includes(state.savingsPoolView)) { state.savingsPoolView = 'household'; migrated = true; }
+    if (!Number.isFinite(Number(state.asiaSavingsStartingBalance))) { state.asiaSavingsStartingBalance = 0; migrated = true; }
+    if (!Array.isArray(state.asiaSavingsTransactions)) { state.asiaSavingsTransactions = []; migrated = true; }
+    if (state.asiaSavingsLoginUrl === undefined) { state.asiaSavingsLoginUrl = ''; migrated = true; }
+    if (state.asiaSavingsIcon === undefined) { state.asiaSavingsIcon = ''; migrated = true; }
     if (!state.recurringChargeTemplates) { state.recurringChargeTemplates = {}; migrated = true; }
     if (!state.allocationTemplates) { state.allocationTemplates = {}; migrated = true; }
     if (!state.allocationRecurrenceSkips) { state.allocationRecurrenceSkips = {}; migrated = true; }
@@ -1428,6 +1733,9 @@ function migrateDatabase() {
         Object.keys(state.personalCalendar || {}).forEach(key => {
             state.personalCalendar[key] = dedupeLedgerArray(state.personalCalendar[key]);
         });
+        Object.keys(state.asiaCalendar || {}).forEach(key => {
+            state.asiaCalendar[key] = dedupeLedgerArray(state.asiaCalendar[key]);
+        });
         state.jointRegister = dedupeLedgerArray(state.jointRegister);
         Object.values(state.cardCalendars || {}).forEach(calendar => {
             Object.keys(calendar || {}).forEach(key => {
@@ -1509,6 +1817,9 @@ function migrateDatabase() {
             };
             Object.keys(state.personalCalendar || {}).forEach(key => {
                 state.personalCalendar[key] = dedupeMortgageLedgerArray(state.personalCalendar[key]);
+            });
+            Object.keys(state.asiaCalendar || {}).forEach(key => {
+                state.asiaCalendar[key] = dedupeMortgageLedgerArray(state.asiaCalendar[key]);
             });
             state.jointRegister = dedupeMortgageLedgerArray(state.jointRegister);
             Object.values(state.cardCalendars || {}).forEach(calendar => {
@@ -1604,6 +1915,9 @@ function migrateDatabase() {
             Object.keys(state.personalCalendar || {}).forEach(key => {
                 state.personalCalendar[key] = dedupeBillTrackerLedgerArray(state.personalCalendar[key]);
             });
+            Object.keys(state.asiaCalendar || {}).forEach(key => {
+                state.asiaCalendar[key] = dedupeBillTrackerLedgerArray(state.asiaCalendar[key]);
+            });
             state.jointRegister = dedupeBillTrackerLedgerArray(state.jointRegister);
             Object.values(state.cardCalendars || {}).forEach(calendar => {
                 Object.keys(calendar || {}).forEach(key => {
@@ -1689,6 +2003,9 @@ function migrateDatabase() {
             };
             Object.keys(state.personalCalendar || {}).forEach(key => {
                 state.personalCalendar[key] = pruneStaleOccurrences(state.personalCalendar[key]);
+            });
+            Object.keys(state.asiaCalendar || {}).forEach(key => {
+                state.asiaCalendar[key] = pruneStaleOccurrences(state.asiaCalendar[key]);
             });
             state.jointRegister = pruneStaleOccurrences(state.jointRegister);
             Object.values(state.cardCalendars || {}).forEach(calendar => {
@@ -1788,6 +2105,9 @@ function migrateDatabase() {
         Object.keys(state.personalCalendar || {}).forEach(key => {
             state.personalCalendar[key] = (state.personalCalendar[key] || []).filter(tx => !isOrphanedSeasonalCharge(tx));
         });
+        Object.keys(state.asiaCalendar || {}).forEach(key => {
+            state.asiaCalendar[key] = (state.asiaCalendar[key] || []).filter(tx => !isOrphanedSeasonalCharge(tx));
+        });
         state.jointRegister = (state.jointRegister || []).filter(tx => !isOrphanedSeasonalCharge(tx));
         Object.values(state.cardCalendars || {}).forEach(calendar => {
             Object.keys(calendar || {}).forEach(key => {
@@ -1853,6 +2173,7 @@ function migrateDatabase() {
             return kept;
         };
         Object.keys(state.personalCalendar || {}).forEach(key => { state.personalCalendar[key] = dedupeList(state.personalCalendar[key]); });
+        Object.keys(state.asiaCalendar || {}).forEach(key => { state.asiaCalendar[key] = dedupeList(state.asiaCalendar[key]); });
         state.jointRegister = dedupeList(state.jointRegister);
         Object.values(state.cardCalendars || {}).forEach(calendar => {
             Object.keys(calendar || {}).forEach(key => { calendar[key] = dedupeList(calendar[key]); });
@@ -1870,43 +2191,32 @@ function migrateDatabase() {
     if (state.ccSelectedDate === undefined) { state.ccSelectedDate = '2026-07-14'; migrated = true; }
 
     if (state.payrollConfig === undefined) {
-        state.payrollConfig = {
-            firstPayDate: '2026-01-02',
-            grossBasePay: 0,
-            stipendAmount: 0,
-            hasDifferentRates: false,
-            differentRates: {
-                rate1st: 0,
-                rate2nd: 0,
-                rate3rd: 0
-            },
-            estimates: [],
-            skippedPaychecks: [],
-            taxProfile: {
-                filingStatus: 'single',
-                step2cChecked: false,
-                dependentsAmount: 0,
-                otherIncome: 0,
-                otherDeductions: 0,
-                extraWithholding: 0
-            },
-            deductions: {
-                pretaxMedical: 0,
-                pretaxDental: 0,
-                pretaxHSA: 0,
-                pretaxFSA: 0,
-                traditional401kPercent: 0,
-                roth401kPercent: 0,
-                postTaxOther: 0,
-                additionalItems: []
-            }
-        };
+        state.payrollConfig = _createDefaultPayrollConfigShape();
+        migrated = true;
+    }
+    if (state.asiaPayrollConfig === undefined) {
+        state.asiaPayrollConfig = _createDefaultPayrollConfigShape();
         migrated = true;
     }
     if (state.payrollConfig.skippedPaychecks === undefined) {
         state.payrollConfig.skippedPaychecks = [];
         migrated = true;
     }
+    if (state.asiaPayrollConfig.skippedPaychecks === undefined) {
+        state.asiaPayrollConfig.skippedPaychecks = [];
+        migrated = true;
+    }
+    // Pay Frequency (biweekly/semimonthly), added 2026-08-06 — every existing saved config predates
+    // this field, so default it to 'biweekly' (the only mode that ever existed before), which keeps
+    // getPaycheckDatesForYear()'s existing firstPayDate-anchored math completely unchanged for
+    // anyone who doesn't explicitly switch to semimonthly.
+    [state.payrollConfig, state.asiaPayrollConfig].forEach(cfg => {
+        if (cfg.payFrequency === undefined) { cfg.payFrequency = 'biweekly'; migrated = true; }
+        if (cfg.semiMonthlyDay1 === undefined) { cfg.semiMonthlyDay1 = 15; migrated = true; }
+        if (cfg.semiMonthlyDay2 === undefined) { cfg.semiMonthlyDay2 = 'last'; migrated = true; }
+        if (cfg.semiMonthlyStartDate === undefined) { cfg.semiMonthlyStartDate = null; migrated = true; }
+        if (cfg.additionalIncomeItems === undefined) { cfg.additionalIncomeItems = []; migrated = true; }
+    });
     // Migrating from the old flat-net-pay model (a manually-estimated "Base Net Pay" field) to a
     // real gross-to-net calculator: the old baseNetPay was already NET, so it can't be mathematically
     // converted into a gross figure — carry its number over as a starting point in the new field (the
@@ -1965,10 +2275,10 @@ function migrateDatabase() {
         migrated = true;
     }
     if (!state.billTrackerSorts) {
-        state.billTrackerSorts = { joint: { key: 'account', direction: 'asc' }, personal: { key: 'dueDay', direction: 'asc' }, allocations: { key: 'name', direction: 'asc' } };
+        state.billTrackerSorts = { joint: { key: 'account', direction: 'asc' }, jason: { key: 'dueDay', direction: 'asc' }, allocations: { key: 'name', direction: 'asc' } };
         migrated = true;
     }
-    if (!['all', 'joint', 'personal'].includes(state.billTrackerOwnershipFilter)) {
+    if (!['all', 'joint', 'jason', 'asia'].includes(state.billTrackerOwnershipFilter)) {
         state.billTrackerOwnershipFilter = 'all';
         migrated = true;
     }
@@ -2053,6 +2363,16 @@ function migrateDatabase() {
             txList.forEach(tx => {
                 if (!tx.id) {
                     tx.id = 'p-' + Math.random().toString(36).substr(2, 9);
+                    idAssigned = true;
+                }
+            });
+        }
+    }
+    if (state.asiaCalendar) {
+        for (const [key, txList] of Object.entries(state.asiaCalendar)) {
+            txList.forEach(tx => {
+                if (!tx.id) {
+                    tx.id = 'a-' + Math.random().toString(36).substr(2, 9);
                     idAssigned = true;
                 }
             });
@@ -2247,38 +2567,66 @@ function migrateDatabase() {
         (state.loans || []).forEach(l => { loanById[l.id] = l; });
         let movedSourceCount = 0;
         const isAccountPaymentTx = (tx) => !!tx.payoffTargetId && (tx.isAutomaticCardPayment || !!tx.linkedPaymentId);
+        // 3-way as of Phase 4b (Asia ownership on Loans/Credit Cards) — was joint-vs-not-joint only,
+        // which would have silently misrouted an Asia-owned card's checking leg into Jason's
+        // personalCalendar instead of asiaCalendar.
+        const resolveTarget = (loan) => loan.paymentSource === 'joint' ? 'joint' : loan.paymentSource === 'asia' ? 'asia' : 'jason';
 
-        // Pull every misrouted tx OUT of personalCalendar (should be in jointRegister instead).
-        const toMoveToJoint = [];
+        // Pull every misrouted tx OUT of each of the three ledgers, sorted into per-target buckets.
+        const toMove = { joint: [], jason: [], asia: [] };
+
         Object.keys(state.personalCalendar || {}).forEach(key => {
             const list = state.personalCalendar[key] || [];
             state.personalCalendar[key] = list.filter(tx => {
                 if (!isAccountPaymentTx(tx)) return true;
                 const loan = loanById[tx.payoffTargetId];
-                if (!loan || (loan.paymentSource || 'personal') !== 'joint') return true;
-                toMoveToJoint.push(tx);
+                if (!loan) return true;
+                const target = resolveTarget(loan);
+                if (target === 'jason') return true;
+                toMove[target].push(tx);
                 return false;
             });
         });
-        toMoveToJoint.forEach(tx => {
-            state.jointRegister.push({ ...tx, name: tx.name || tx.description, type: tx.type || 'expense' });
-            movedSourceCount++;
-        });
 
-        // And the reverse: pull every misrouted tx OUT of jointRegister (should be in personalCalendar).
-        const toMoveToPersonal = [];
         state.jointRegister = (state.jointRegister || []).filter(tx => {
             if (!isAccountPaymentTx(tx)) return true;
             const loan = loanById[tx.payoffTargetId];
-            if (!loan || (loan.paymentSource || 'personal') === 'joint') return true;
-            toMoveToPersonal.push(tx);
+            if (!loan) return true;
+            const target = resolveTarget(loan);
+            if (target === 'joint') return true;
+            toMove[target].push(tx);
             return false;
         });
-        toMoveToPersonal.forEach(tx => {
+
+        Object.keys(state.asiaCalendar || {}).forEach(key => {
+            const list = state.asiaCalendar[key] || [];
+            state.asiaCalendar[key] = list.filter(tx => {
+                if (!isAccountPaymentTx(tx)) return true;
+                const loan = loanById[tx.payoffTargetId];
+                if (!loan) return true;
+                const target = resolveTarget(loan);
+                if (target === 'asia') return true;
+                toMove[target].push(tx);
+                return false;
+            });
+        });
+
+        toMove.joint.forEach(tx => {
+            state.jointRegister.push({ ...tx, name: tx.name || tx.description, type: tx.type || 'expense' });
+            movedSourceCount++;
+        });
+        toMove.jason.forEach(tx => {
             const dateObj = new Date(tx.date + 'T00:00:00');
             const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
             if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
             state.personalCalendar[key].push({ ...tx, description: tx.description || tx.name });
+            movedSourceCount++;
+        });
+        toMove.asia.forEach(tx => {
+            const dateObj = new Date(tx.date + 'T00:00:00');
+            const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+            state.asiaCalendar[key].push({ ...tx, description: tx.description || tx.name });
             movedSourceCount++;
         });
 
@@ -2477,6 +2825,16 @@ function migrateDatabase() {
             });
         });
     }
+    if (state.asiaCalendar) {
+        Object.values(state.asiaCalendar).forEach(list => {
+            (list || []).forEach(tx => {
+                if (typeof tx.amount === 'number' && !Number.isInteger(tx.amount * 100)) {
+                    tx.amount = (tx.amount < 0 ? -1 : 1) * (Math.round(Math.abs(tx.amount) * 100) / 100);
+                    migrated = true;
+                }
+            });
+        });
+    }
     if (Array.isArray(state.jointRegister)) {
         state.jointRegister.forEach(tx => {
             if (typeof tx.amount === 'number' && !Number.isInteger(tx.amount * 100)) {
@@ -2522,6 +2880,52 @@ function migrateDatabase() {
     if (!state.skippedTransfersRemoved20260801) {
         state.skippedTransfers = [];
         state.skippedTransfersRemoved20260801 = true;
+        migrated = true;
+    }
+
+    // One-time rename: the ownership/funding-source enum value 'personal' -> 'jason' everywhere it's
+    // used as a stored ownership/payment-source tag (bill splitter items, bill tracker settings,
+    // materialized monthly bills, loan/card paymentSource, ledger tx owner on personalCalendar/
+    // cardCalendars/jointRegister, savings transferSource, seasonal-expense chargeSource, payment-plan
+    // ownership) — per explicit user request, 2026-08-10, ahead of adding a real third 'asia' value to
+    // this same axis (Phase 4 of the Asia rollout). The UI has said "Jason" everywhere since Phase 1;
+    // this brings the internal identifiers into line so 'jason' sits alongside 'joint'/'asia' as a
+    // real, distinct value rather than an implicit "not personal, not joint" fallback. Deliberately
+    // does NOT touch state.dashboardType (stays 'personal' internally, unchanged since Phase 1) or any
+    // other purely-internal array-routing parameter (e.g. the `origin`/`listType` args threaded
+    // through removeCheckingTransferMirror/syncCheckingTransferMirror/wireListRowDragDrop) that only
+    // ever selects which in-memory array to touch and is never itself persisted.
+    if (!state.ownershipPersonalRenamedToJason20260810) {
+        const renameVal = (obj, field, from, to) => { if (obj && obj[field] === from) obj[field] = to; };
+        (state.billTrackerSettings || []).forEach(s => {
+            renameVal(s, 'ownership', 'personal', 'jason');
+            renameVal(s, 'source', 'personalChecking', 'jasonChecking');
+        });
+        (state.loans || []).forEach(l => {
+            renameVal(l, 'paymentSource', 'personal', 'jason');
+            renameVal(l, 'payoffSource', 'personal', 'jason');
+            renameVal(l, 'owner', 'personal', 'jason');
+            (l.paymentPlans || []).forEach(p => renameVal(p, 'ownership', 'personal', 'jason'));
+        });
+        Object.values(state.monthlyBills || {}).forEach(month => {
+            ['cycle1st', 'cycle15th'].forEach(cycle => {
+                ((month[cycle] || {}).bills || []).forEach(b => {
+                    renameVal(b, 'ownership', 'personal', 'jason');
+                    renameVal(b, 'paymentSource', 'personalChecking', 'jasonChecking');
+                });
+            });
+        });
+        Object.values(state.personalCalendar || {}).forEach(list => (list || []).forEach(tx => renameVal(tx, 'owner', 'personal', 'jason')));
+        Object.values(state.cardCalendars || {}).forEach(card => Object.values(card || {}).forEach(list => (list || []).forEach(tx => renameVal(tx, 'owner', 'personal', 'jason'))));
+        (state.jointRegister || []).forEach(tx => renameVal(tx, 'owner', 'personal', 'jason'));
+        (state.savingsTransactions || []).forEach(tx => renameVal(tx, 'transferSource', 'personal', 'jason'));
+        (state.seasonalExpenses || []).forEach(e => renameVal(e, 'chargeSource', 'personal', 'jason'));
+        if (state.billTrackerSorts && state.billTrackerSorts.personal && !state.billTrackerSorts.jason) {
+            state.billTrackerSorts.jason = state.billTrackerSorts.personal;
+            delete state.billTrackerSorts.personal;
+        }
+        if (state.billTrackerOwnershipFilter === 'personal') state.billTrackerOwnershipFilter = 'jason';
+        state.ownershipPersonalRenamedToJason20260810 = true;
         migrated = true;
     }
 
@@ -2587,7 +2991,7 @@ function isDynamicTxId(id) {
     const s = String(id);
     return s.startsWith('xfer-1st-') || s.startsWith('xfer-15th-') ||
            s.startsWith('joint-xfer-jason-') || s.startsWith('joint-xfer-asia-') ||
-           s.startsWith('dynamic-paycheck-') || s.startsWith('dynamic-delivery-') ||
+           s.startsWith('dynamic-paycheck-') || s.startsWith('dynamic-asia-paycheck-') || s.startsWith('dynamic-delivery-') ||
            s.startsWith('deferred-xfer-') || s.startsWith('split-');
 }
 
@@ -2653,6 +3057,27 @@ function reconcileSplitPiecesWithLiveTotal(liveTotal, ovr) {
     const last = reconciled[reconciled.length - 1];
     last.amount = Math.round(((Number(last.amount) || 0) + delta) * 100) / 100;
     return reconciled;
+}
+
+// Resolves the TRUE total for a split-active dynamic joint-transfer group: the live Bill Splitter
+// amount by default (so reconcileSplitPiecesWithLiveTotal above keeps auto-tracking budget changes,
+// per its own comment) — UNLESS the user directly typed a custom amount into the anchor's own Amount
+// field while pieces existed (see the #edit-tx-amount 'change' listener in setupEventListeners(),
+// which sets ovr.totalManuallySet), in which case the frozen ovr.amount IS the true total and must
+// never be silently overridden back toward the live calculation. Confirmed real bug, 2026-08-09: every
+// render site below this that shows or posts a split group's amounts (the joint contribution figure,
+// the personal-side simulation's own anchor posting AND its splitPiecesByDate, the hover tooltip) had
+// its own inline "hasSplit ? liveTotal : frozen" that always picked liveTotal once ANY split existed,
+// with no way to know a total had been manually set — so a user-typed custom split total got silently
+// replaced by reconcileSplitPiecesWithLiveTotal's drift math the very next render, dumping the entire
+// (often enormous) difference between their chosen total and the real Bill Splitter obligation onto
+// whichever split piece happened to be last in the array. Passing THIS resolved total into
+// reconcileSplitPiecesWithLiveTotal instead of the raw live one makes that delta compute to exactly
+// zero whenever totalManuallySet is set (frozenTotal inside it reads the same ovr.amount this already
+// returns), so every call site needs only this one swap, not a second manuallySet check of its own.
+function resolveDynamicTransferGroupTotal(ovr, liveTotal) {
+    if (ovr?.totalManuallySet && ovr.amount !== undefined) return Math.abs(ovr.amount);
+    return liveTotal;
 }
 
 // Adds a new piece of `newAmount` on `newDate`, peeling it off the MOST RECENTLY ADDED piece in
@@ -2761,14 +3186,14 @@ function navigateToDeliveryWeek(targetDateStr) {
 // but searches indefinitely forward (not bounded to one billing cycle) since a shown-below-buffer
 // day's remainder may not clear the buffer again until a later paycheck/cycle. Returns null if
 // nothing within the search horizon works.
-function suggestRemainderTransferDate(fromDateStr, remainderAmount) {
+function suggestRemainderTransferDate(fromDateStr, remainderAmount, isAsia) {
     if (!(remainderAmount > 0.005)) return null;
-    const buffer = getPersonalMinimumBuffer();
+    const buffer = isAsia ? getAsiaMinimumBuffer() : getPersonalMinimumBuffer();
     const cursor = new Date(fromDateStr + 'T00:00:00');
     for (let i = 0; i < 60; i++) {
         cursor.setDate(cursor.getDate() + 1);
         const dateStr = formatLocalDate(cursor);
-        const balance = getPersonalAdjustedRunningBalanceAtDate(dateStr);
+        const balance = isAsia ? getAsiaAdjustedRunningBalanceAtDate(dateStr) : getPersonalAdjustedRunningBalanceAtDate(dateStr);
         if (balance - remainderAmount >= buffer) return dateStr;
     }
     return null;
@@ -2821,25 +3246,40 @@ function renderSplitEditorRows() {
     if (!container || !remainingText) return;
     if (!_splitEditorState) { container.innerHTML = ''; remainingText.textContent = ''; return; }
 
-    container.innerHTML = _splitEditorState.pieces.map(p => `
-        <div class="form-row split-editor-row" data-piece-id="${p.id}" style="align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+    // Running-balance preview per row — per explicit user request, 2026-08-09, so a split date that
+    // would drop Jason's checking below the minimum buffer is visible before it's even saved (dates
+    // are already auto-saved live by the time this renders, so the preview always reflects reality,
+    // not a guess — see getSplitRowBalancePreview()'s own comment).
+    container.innerHTML = _splitEditorState.pieces.map(p => {
+        const preview = getSplitRowBalancePreview(p.date);
+        const balanceText = formatSplitRowBalanceText(preview);
+        return `
+        <div class="form-row split-editor-row" data-piece-id="${p.id}" style="align-items:center; gap:0.5rem; margin-bottom:0.5rem; flex-wrap:wrap;">
             <input type="date" class="custom-input split-row-date" value="${p.date}" style="flex:1;">
             <div class="input-prefix-wrapper" style="flex:1;"><span class="input-prefix">$</span><input type="number" step="0.01" class="custom-input split-row-amount" value="${p.amount.toFixed(2)}"></div>
+            ${balanceText ? `<span class="muted-text split-row-balance${preview?.belowBuffer ? ' negative' : ''}" style="flex-basis:100%; font-size:0.8rem;">${escapeHTML(balanceText)}</span>` : ''}
             <button type="button" class="action-btn small-btn danger-btn split-row-remove">Remove</button>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     const anchorAmount = computeSplitAnchorAmount(_splitEditorState.totalAmount, _splitEditorState.pieces);
     remainingText.textContent = `Remaining on original date: $${anchorAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-    // While any split pieces exist, the main amount field is read-only and always mirrors the
-    // derived anchor remainder — the group's total never changes here, only how it's distributed
-    // across dates (via adding/editing/removing pieces above), per the confirmed design.
+    // The main amount field always mirrors the derived anchor remainder (totalAmount minus every
+    // piece) — but per explicit user request, 2026-08-09, it's directly EDITABLE even while pieces
+    // exist, not just when the split is empty. Typing a new value here doesn't touch any piece; it
+    // adjusts the GROUP TOTAL so the anchor lands on exactly what was typed (see the #edit-tx-amount
+    // 'change' listener below) — the reverse of how adding/editing a piece already works (piece
+    // changes, anchor absorbs the difference; this is anchor changes, total absorbs the difference,
+    // pieces stay fixed).
     const amountField = document.getElementById('edit-tx-amount');
     if (amountField) {
-        const hasPieces = _splitEditorState.pieces.length > 0;
-        amountField.disabled = hasPieces;
-        if (hasPieces) amountField.value = anchorAmount.toFixed(2);
+        amountField.disabled = false;
+        // Always resync — after any add/edit/remove above, or after the total itself was just
+        // adjusted to match a typed anchor value (see the 'change' listener), this keeps the field
+        // showing the true current derived remainder rather than stale prior input.
+        amountField.value = anchorAmount.toFixed(2);
     }
 
     container.querySelectorAll('.split-editor-row').forEach(row => {
@@ -2873,24 +3313,115 @@ function renderSplitEditorRows() {
             if (piece) {
                 piece.date = e.target.value;
                 persistSplitEditorState();
+                // Re-render (unlike amount's own 'change' handler this was previously skipped for
+                // date, but the new balance-preview column needs to refresh to this row's new date).
+                renderSplitEditorRows();
             }
         });
     });
 }
 
+// Resolves an anchor's CURRENT effective date — the explicit override if one is set, else whatever
+// simulateJasonCheckingAndAdjustTransfers actually decided (which can auto-shift off the natural
+// 1st/15th to avoid dropping Jason's checking below its buffer — see the payday-shift comments
+// elsewhere in this file). Needed because openDynamicTxEditor's top Date field must show the
+// ANCHOR's own date even when the dialog was opened by clicking one of its SPLIT PIECES instead (a
+// different date entirely) — see its own comment for why unifying these two entry points matters.
+function getAnchorEffectiveDate(anchorId) {
+    const ovr = (state.dynamicOverrides || {})[anchorId];
+    if (ovr?.date) return ovr.date;
+    const m = anchorId.match(/^(?:joint-xfer-jason-|xfer-)(1st|15th)-(\d{4})-([A-Za-z]+)$/);
+    if (!m) return null;
+    const [, cycle, yearStr, monthShort] = m;
+    const xferId = `xfer-${cycle}-${yearStr}-${monthShort}`;
+    const sim = getSimulatedTransferAdjustmentsForMonth(Number(yearStr), monthShort);
+    const found = Object.entries(sim.transfersByDate || {}).find(([, arr]) => arr.some(a => a.dynId === xferId));
+    if (found) return found[0];
+    return `${yearStr}-${String(MONTH_ORDER.indexOf(monthShort) + 1).padStart(2, '0')}-${cycle === '1st' ? '01' : '15'}`;
+}
+
+// Safe, read-only preview of Jason's personal-checking running balance immediately AFTER a transfer
+// posts on `dateStr` — used by the Split Transfer editor (both the anchor's own date field and each
+// piece's row) to show threshold exposure live, per explicit user request, 2026-08-09 ("list what the
+// running balance would be for the date entered... so I can see if splitting to that date will take
+// me below the set threshold"). Reads the ALREADY-SAVED state rather than running a separate
+// speculative simulation — every field in this editor auto-saves on change (see
+// persistSplitEditorState()/the anchor date/amount listeners in setupEventListeners()), so by the
+// time this is called the balance calculation already reflects whatever was just edited. Wrapped
+// defensively — getPersonalAdjustedRunningBalanceAtDate() can throw for a never-visited month (a
+// separate, already-flagged pre-existing bug, see spawn_task from 2026-08-09) and a broken balance
+// preview shouldn't take down the whole editor with it.
+function getSplitRowBalancePreview(dateStr) {
+    if (!dateStr) return null;
+    try {
+        const nextDateObj = new Date(dateStr + 'T00:00:00');
+        nextDateObj.setDate(nextDateObj.getDate() + 1);
+        const balance = getPersonalAdjustedRunningBalanceAtDate(formatLocalDate(nextDateObj));
+        const buffer = getPersonalMinimumBuffer();
+        return { balance, belowBuffer: balance < buffer };
+    } catch (err) {
+        return null;
+    }
+}
+
+function formatSplitRowBalanceText(preview) {
+    if (!preview) return '';
+    const amt = `$${preview.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return preview.belowBuffer ? `Bal after: ${amt} ⚠️ below buffer` : `Bal after: ${amt}`;
+}
+
+// Refreshes the anchor's Date-field hint (natural cycle date + live balance preview) and the
+// "Reset to Natural Date" button's visibility — called on dialog open and again after every live
+// auto-save of the anchor's own date, so it always reflects what's actually persisted.
+function updateAnchorDateHint(anchorId) {
+    const hint = document.getElementById('edit-tx-anchor-date-hint');
+    const resetBtn = document.getElementById('btn-reset-anchor-date');
+    if (!hint || !resetBtn) return;
+    const m = anchorId.match(/^(?:joint-xfer-jason-|xfer-)(1st|15th)-(\d{4})-([A-Za-z]+)$/);
+    if (!m) { hint.classList.add('hidden'); resetBtn.classList.add('hidden'); return; }
+    const [, cycle, yearStr, monthShort] = m;
+    const naturalDate = `${yearStr}-${String(MONTH_ORDER.indexOf(monthShort) + 1).padStart(2, '0')}-${cycle === '1st' ? '01' : '15'}`;
+    const currentDate = document.getElementById('edit-tx-date').value;
+    const balanceText = formatSplitRowBalanceText(getSplitRowBalancePreview(currentDate));
+    const isOverridden = currentDate && currentDate !== naturalDate;
+    hint.innerHTML = isOverridden
+        ? `Natural date: ${escapeHTML(formatDateDisplay(naturalDate))}${balanceText ? ' — ' + escapeHTML(balanceText) : ''}`
+        : (balanceText ? escapeHTML(balanceText) : '');
+    hint.classList.toggle('hidden', !hint.textContent);
+    resetBtn.classList.toggle('hidden', !isOverridden);
+}
+
 // Open a lightweight edit/delete dialog for dynamic transactions. `parentDynId` is set only when
-// editing one date of an already-split transfer (not the anchor) — see the split-piece-vs-anchor
-// branch below.
+// entering via a SPLIT PIECE row rather than the anchor itself — clicking either one opens the exact
+// same unified group editor (anchor's own date/amount up top, every split piece listed below, each
+// with its own live running-balance preview), per explicit user request, 2026-08-09: "I want to be
+// able to edit all entries related to a split transfer no matter if I click on the original or the
+// split date transfer." `focusPieceId` remembers which specific row was actually clicked so it can
+// be scrolled to/highlighted once the group renders.
 function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDynId) {
     if (!state.dynamicOverrides) state.dynamicOverrides = {};
-    const existing = state.dynamicOverrides[txId] || {};
-    const desc = existing.description || currentDesc;
+    const isAnchorGroupId = id => /^(?:joint-xfer-jason-|xfer-)(1st|15th)-\d{4}-[A-Za-z]+$/.test(id);
+    const anchorId = (parentDynId && isAnchorGroupId(parentDynId)) ? parentDynId : txId;
+    const focusPieceId = (parentDynId && isAnchorGroupId(parentDynId)) ? txId : null;
+    // Entering via a piece means the top Date/Description fields must show the ANCHOR's own values,
+    // not the clicked piece's — currentDesc/currentAmount/txDate as passed in describe the PIECE
+    // (whose own default description is the distinct 'Xfer to Joint (Split)', hardcoded in
+    // simulateJasonCheckingAndAdjustTransfers — using it here as the ANCHOR's fallback would mislabel
+    // it as a split piece even when un-overridden). 'Xfer to Joint (Dynamic)' matches the anchor's
+    // own actual default description elsewhere in this file. (Amount doesn't need re-deriving here:
+    // renderSplitEditorRows() below always overwrites the Amount field with the anchor's true derived
+    // remainder whenever any pieces exist, which is guaranteed true whenever focusPieceId is set —
+    // you can't click a piece that doesn't exist.)
+    const effectiveTxId = anchorId;
+    const effectiveTxDate = focusPieceId ? (getAnchorEffectiveDate(anchorId) || txDate) : txDate;
+    const existing = state.dynamicOverrides[effectiveTxId] || {};
+    const desc = existing.description || (focusPieceId ? 'Xfer to Joint (Dynamic)' : currentDesc);
     const amt = (existing.amount !== undefined) ? existing.amount : currentAmount;
 
     const dialog = document.getElementById('edit-tx-dialog');
-    document.getElementById('edit-tx-id').value = txId;
-    document.getElementById('edit-tx-date-orig').value = txDate;
-    document.getElementById('edit-tx-date').value = txDate;
+    document.getElementById('edit-tx-id').value = effectiveTxId;
+    document.getElementById('edit-tx-date-orig').value = effectiveTxDate;
+    document.getElementById('edit-tx-date').value = effectiveTxDate;
     document.getElementById('edit-tx-mode').value = 'dynamic-override';
     document.getElementById('edit-tx-modal-title').textContent = 'Edit / Delete Dynamic Transaction';
     document.getElementById('btn-save-edit-tx').textContent = 'Save Override';
@@ -2906,8 +3437,13 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
     document.getElementById('edit-payment-plan-group').classList.add('hidden');
 
     // Revert to Original — shown whenever this occurrence has ANY departure from pure calculation
-    // (an amount override, a delete, or a split), so there's always an obvious way back.
-    const hasAnyOverride = existing.amount !== undefined || existing.deleted === true
+    // (a date override, an amount override, a delete, or a split), so there's always an obvious way
+    // back. Previously missed a date-only override (no amount/delete/split) — a real gap, since the
+    // old date-change submit path could set ONLY `date` on an occurrence, leaving no way to revert it
+    // short of guessing. The anchor itself now also gets its own narrower "Reset to Natural Date"
+    // (see updateAnchorDateHint()/btn-reset-anchor-date) for undoing just a date override without
+    // also wiping amount/split — this button remains the all-of-it fallback for every dynamic type.
+    const hasAnyOverride = existing.date !== undefined || existing.amount !== undefined || existing.deleted === true
         || (Array.isArray(existing.splitPieces) && existing.splitPieces.length > 0);
     document.getElementById('btn-revert-edit-tx')?.classList.toggle('hidden', !hasAnyOverride);
 
@@ -2917,14 +3453,21 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
     // Purely informational: a suggested override amount and a suggested remainder date, both
     // click-to-fill, never auto-applied.
     const suggestionsBox = document.getElementById('edit-tx-threshold-suggestions');
-    const transferMatch = txId.match(/^(?:joint-xfer-(?:jason|asia)|xfer)-(1st|15th)-(\d{4})-([A-Za-z]+)$/);
+    const transferMatch = effectiveTxId.match(/^(?:joint-xfer-(jason|asia)|xfer)-(1st|15th)-(\d{4})-([A-Za-z]+)$/);
     if (suggestionsBox && transferMatch) {
-        const [, cycle, yearStr, monthShort] = transferMatch;
+        const [, personMatch, cycle, yearStr, monthShort] = transferMatch;
+        // joint-xfer-asia-* -> Asia's own info/buffer/balance; joint-xfer-jason-*/plain xfer-* (the
+        // latter has no captured person, viewed on Jason's own checking calendar) -> Jason's, as
+        // before. Phase 2 gave Asia's side real belowThreshold/balanceAfter data of her own — this
+        // used to unconditionally read Jason's xfer-* info and buffer regardless of which chip was
+        // actually being edited.
+        const isAsia = personMatch === 'asia';
         const year = Number(yearStr);
-        const xferId = `xfer-${cycle}-${year}-${monthShort}`;
-        const info = getAdjustedTransferAmountsForMonth(year, monthShort)[xferId];
+        const info = isAsia
+            ? getSimulatedAsiaTransferAdjustmentsForMonth(year, monthShort).transfers[`joint-xfer-asia-${cycle}-${year}-${monthShort}`]
+            : getAdjustedTransferAmountsForMonth(year, monthShort)[`xfer-${cycle}-${year}-${monthShort}`];
         if (info && info.belowThreshold) {
-            const buffer = getPersonalMinimumBuffer();
+            const buffer = isAsia ? getAsiaMinimumBuffer() : getPersonalMinimumBuffer();
             const suggestedAmount = Math.max(0, info.amount + info.balanceAfter - buffer);
             const remainder = Math.max(0, info.amount - suggestedAmount);
             const fmt = v => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -2933,7 +3476,7 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
             if (useSuggestedBtn) useSuggestedBtn.onclick = () => { document.getElementById('edit-tx-amount').value = suggestedAmount.toFixed(2); };
             const dateTextEl = document.getElementById('edit-tx-suggested-date-text');
             if (remainder > 0.005) {
-                const suggestedDate = suggestRemainderTransferDate(txDate, remainder);
+                const suggestedDate = suggestRemainderTransferDate(effectiveTxDate, remainder, isAsia);
                 dateTextEl.textContent = suggestedDate
                     ? `Consider transferring the remaining ${fmt(remainder)} on ${formatDateDisplay(suggestedDate)} instead.`
                     : `Remaining ${fmt(remainder)} — no day found in the next 60 days that would stay above the buffer.`;
@@ -2950,64 +3493,61 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
 
     // Split Transfer — only for the anchor occurrence of Jason's side of a dynamic joint transfer
     // (xfer-*/joint-xfer-jason-*, not Asia's side, which has no personal-checking buffer concept
-    // driving a need to split). A split PIECE's own editor shows a notice instead, with amount/date
-    // editable and "Delete" repurposed to remove just that date.
+    // driving a need to split). Clicking a split PIECE resolves to this SAME anchor-group view
+    // (anchorId/focusPieceId computed above) rather than a separate disconnected mini-editor — see
+    // this function's own top comment.
     const splitSection = document.getElementById('edit-tx-split-section');
-    const pieceNotice = document.getElementById('edit-tx-piece-notice');
-    document.getElementById('edit-tx-parent-dyn-id').value = parentDynId || '';
-    if (parentDynId) {
-        document.getElementById('edit-tx-mode').value = 'dynamic-split-piece';
-        document.getElementById('edit-tx-modal-title').textContent = 'Edit Split Transfer Date';
-        // Shown here too — for a split piece it's equivalent to "Remove This Date" (see the click
-        // handler), giving the same "Revert to Original" affordance every other dynamic tx has.
-        document.getElementById('btn-revert-edit-tx')?.classList.remove('hidden');
-        splitSection?.classList.add('hidden');
-        pieceNotice?.classList.remove('hidden');
-        _splitEditorState = null;
-    } else {
-        pieceNotice?.classList.add('hidden');
-        const isJasonAnchor = /^(?:joint-xfer-jason-|xfer-)(1st|15th)-\d{4}-[A-Za-z]+$/.test(txId);
-        if (isJasonAnchor && splitSection) {
-            splitSection.classList.remove('hidden');
-            let totalAmount = Math.abs(amt);
-            let pieces = (Array.isArray(existing.splitPieces) ? existing.splitPieces : []).map(p => ({ ...p }));
-            const hasSplit = Array.isArray(existing.splitPieces) && existing.splitPieces.length;
-            let driftReconciled = false;
-            if (hasSplit) {
-                // A split's total always tracks the LIVE calculated Bill Splitter amount, not
-                // whatever was frozen the last time the split was edited — any growth/shrinkage
-                // since then flows to the most-recently-added piece (see
-                // reconcileSplitPiecesWithLiveTotal), never the anchor. Detected via `!==` since
-                // that helper returns the same array reference when there's nothing to reconcile.
-                const cycleMatch = txId.match(/(1st|15th)-(\d{4})-([A-Za-z]+)$/);
-                if (cycleMatch) {
-                    const [, cycle, yearStr, monthShort] = cycleMatch;
-                    const liveTotal = getCalculatedTransferForJason(Number(yearStr), monthShort, cycle);
-                    const reconciledPieces = reconcileSplitPiecesWithLiveTotal(liveTotal, existing);
-                    if (reconciledPieces !== existing.splitPieces) {
-                        totalAmount = liveTotal;
-                        pieces = reconciledPieces.map(p => ({ ...p }));
-                        driftReconciled = true;
-                    }
+    const isJasonAnchor = isAnchorGroupId(effectiveTxId);
+    if (isJasonAnchor && splitSection) {
+        splitSection.classList.remove('hidden');
+        let totalAmount = Math.abs(amt);
+        let pieces = (Array.isArray(existing.splitPieces) ? existing.splitPieces : []).map(p => ({ ...p }));
+        const hasSplit = Array.isArray(existing.splitPieces) && existing.splitPieces.length;
+        let driftReconciled = false;
+        if (hasSplit) {
+            // A split's total always tracks the LIVE calculated Bill Splitter amount, not
+            // whatever was frozen the last time the split was edited — any growth/shrinkage
+            // since then flows to the most-recently-added piece (see
+            // reconcileSplitPiecesWithLiveTotal), never the anchor. Detected via `!==` since
+            // that helper returns the same array reference when there's nothing to reconcile.
+            const cycleMatch = effectiveTxId.match(/(1st|15th)-(\d{4})-([A-Za-z]+)$/);
+            if (cycleMatch) {
+                const [, cycle, yearStr, monthShort] = cycleMatch;
+                // resolveDynamicTransferGroupTotal() makes this a no-op (reconciledPieces === existing.splitPieces)
+                // whenever the user has directly typed a custom total (existing.totalManuallySet) — see its own comment.
+                const liveTotal = resolveDynamicTransferGroupTotal(existing, getCalculatedTransferForJason(Number(yearStr), monthShort, cycle));
+                const reconciledPieces = reconcileSplitPiecesWithLiveTotal(liveTotal, existing);
+                if (reconciledPieces !== existing.splitPieces) {
+                    totalAmount = liveTotal;
+                    pieces = reconciledPieces.map(p => ({ ...p }));
+                    driftReconciled = true;
                 }
             }
-            _splitEditorState = { totalAmount, dynId: txId, pieces };
-            // Persist the reconciliation immediately (mirrors persistSplitEditorState) so the
-            // balance walk, badges, and tooltips agree with what this dialog shows the moment the
-            // drift is detected, not just while it happens to stay open.
-            if (driftReconciled) persistSplitEditorState();
-            document.getElementById('edit-tx-split-rows-container')?.classList.toggle('hidden', _splitEditorState.pieces.length === 0);
-            // Default the new-split date field to this occurrence's own date (already the right
-            // month/cycle) instead of leaving it blank — an empty date input opens its native picker
-            // on whatever month the browser defaults to (often the real current month), which is
-            // rarely the month actually being viewed/edited and was a real source of wrong-month splits.
-            const newDateInput = document.getElementById('edit-tx-split-new-date');
-            if (newDateInput) newDateInput.value = txDate;
-            renderSplitEditorRows();
-        } else {
-            splitSection?.classList.add('hidden');
-            _splitEditorState = null;
         }
+        _splitEditorState = { totalAmount, dynId: effectiveTxId, pieces };
+        // Persist the reconciliation immediately (mirrors persistSplitEditorState) so the
+        // balance walk, badges, and tooltips agree with what this dialog shows the moment the
+        // drift is detected, not just while it happens to stay open.
+        if (driftReconciled) persistSplitEditorState();
+        document.getElementById('edit-tx-split-rows-container')?.classList.toggle('hidden', _splitEditorState.pieces.length === 0);
+        // Default the new-split date field to this occurrence's own date (already the right
+        // month/cycle) instead of leaving it blank — an empty date input opens its native picker
+        // on whatever month the browser defaults to (often the real current month), which is
+        // rarely the month actually being viewed/edited and was a real source of wrong-month splits.
+        const newDateInput = document.getElementById('edit-tx-split-new-date');
+        if (newDateInput) newDateInput.value = effectiveTxDate;
+        updateAnchorDateHint(effectiveTxId);
+        renderSplitEditorRows();
+        // Scroll to and briefly highlight whichever row was actually clicked, if it was a piece —
+        // the anchor's own fields are always at the top of the dialog already, nothing to scroll to.
+        if (focusPieceId) {
+            const focusRow = document.querySelector(`.split-editor-row[data-piece-id="${CSS.escape(focusPieceId)}"]`);
+            focusRow?.classList.add('split-row-focused');
+            focusRow?.scrollIntoView({ block: 'nearest' });
+        }
+    } else {
+        splitSection?.classList.add('hidden');
+        _splitEditorState = null;
     }
 
     const goDeliveryBtn = document.getElementById('btn-go-to-delivery-log');
@@ -3055,6 +3595,12 @@ function applyStartingBalanceReset(account, dateStr, amount) {
         // recurring schedule, not a logged list) — suppressing their generation there is the only lever.
         state.deliveryEarnings = (state.deliveryEarnings || []).filter(rec => _deliveryEarningsDateKey(rec.date) > dateStr);
         state.personalStartingBalance = { date: dateStr, amount };
+    } else if (account === 'asia') {
+        // No delivery/gig-income equivalent on Asia's side (Phase 1 scope) — just the ledger itself.
+        Object.keys(state.asiaCalendar).forEach(key => {
+            state.asiaCalendar[key] = (state.asiaCalendar[key] || []).filter(tx => tx.date > dateStr);
+        });
+        state.asiaStartingBalance = { date: dateStr, amount };
     } else {
         state.jointRegister = (state.jointRegister || []).filter(tx => tx.date > dateStr);
         state.jointStartingBalance = { date: dateStr, amount };
@@ -3552,8 +4098,24 @@ function parseFormula(value) {
     return parseFloat(trimmed) || 0;
 }
 
+// Screen-based, not viewport-based — per explicit user request, 2026-08-09, after browser zoom on a
+// real desktop (which only shrinks the CSS viewport, window.innerWidth/matchMedia, never
+// window.screen.width) was flipping the whole app into mobile layout. window.screen.width reflects
+// the actual display's resolution in CSS pixels and is unaffected by the page's own zoom level, so a
+// zoomed-in desktop window stays in desktop mode while a genuinely small device (or a real narrow
+// window on it) still gets mobile layout.
 function isMobileViewport() {
-    return window.matchMedia('(max-width: 900px)').matches;
+    return window.screen.width <= 900;
+}
+
+// Keeps the CSS-facing `.is-mobile-screen` class on <body> in sync with isMobileViewport() — every
+// former `@media (max-width: 900px)` rule in index.css was converted to a `body.is-mobile-screen`
+// selector so the stylesheet shares the same screen-based (not zoom-based) determination as the JS
+// side above, rather than reverting to viewport-width via a plain media query. Called on every render
+// (idempotent) plus the resize listener in setupEventListeners(), since window.screen.width can
+// genuinely change (moving the window to a different monitor, real device orientation change).
+function _syncMobileScreenClass() {
+    document.body.classList.toggle('is-mobile-screen', isMobileViewport());
 }
 
 // Whether tap-to-open-popup (vs. inline click-to-edit) is the right interaction model for a
@@ -3635,13 +4197,22 @@ let _driveSyncBaselineEstablished = false;
 // incident described above — the literal "never push a null/0/placeholder state" fail-safe.
 let _freshResetStateSnapshot = null;
 
-// HARD LOCK — added 2026-07-27, re-affirmed then reversed 2026-08-01. Currently OFF (false): the
-// user's "disconnect everything" request earlier today has been superseded by a new explicit
-// request to reconnect and default Auto Sync back to ON (see the comment above). Left in place,
-// rather than deleted, as a one-line way to hard-disable Auto Sync globally again in the future if
-// a serious sync bug reappears — flip to `true` and it overrides every consumer of
-// getAutoSyncEnabled() regardless of the session-kill-switch state above.
+// HARD LOCK — added 2026-07-27, re-affirmed then reversed 2026-08-01, re-affirmed again
+// 2026-08-06 (Asia's Checking feature just landed and the user wants to verify it thoroughly
+// before this device syncs with anyone else's copy). Flipped back to `false` 2026-08-10 per
+// explicit user request, after the full Joint/Jason/Asia ownership rollout (Phases 1-4b) was
+// verified live against real data across multiple sessions.
 const AUTO_SYNC_HARD_LOCKED_OFF = false;
+
+// HARD LOCK — added 2026-08-06, per explicit user request while verifying the newly-landed Asia's
+// Checking feature: no pull and no push, automatic OR manual, until this is flipped back to
+// `false`. Broader than AUTO_SYNC_HARD_LOCKED_OFF above (which only ever blocked the *automatic*
+// push-after-edit path) — this blocks pullStateFromDrive()/pushStateToDrive() at the very top,
+// before either function does anything else, so it also covers the once-per-load startup pull in
+// init() and the manual Pull/Push buttons in Sync Settings. Flipped back to `false` 2026-08-10
+// alongside AUTO_SYNC_HARD_LOCKED_OFF above, per explicit user request — the Asia rollout is
+// verified and the user wants this device syncing with Google Drive again.
+const SYNC_COMPLETELY_DISABLED = false;
 
 // Disables (not just unchecks) both checkboxes whenever getAutoSyncEnabled() can't currently return
 // true no matter what the checkbox shows — baseline not established yet, OR this session's kill
@@ -3721,6 +4292,11 @@ async function _fetchWithTimeout(url, options) {
 // unchanged from the Sheets-based design — only what happens at the actual network boundary did.
 
 async function pullStateFromDrive(respectAutoSyncToggle = false) {
+    if (SYNC_COMPLETELY_DISABLED) {
+        logSystem('Pull from Google Drive skipped — sync is completely disabled (SYNC_COMPLETELY_DISABLED in app.js).');
+        showSyncStatusFlag('error', 'Sync is disabled — see Sync Settings.');
+        return false;
+    }
     const url = getSyncWebAppUrl();
     if (!url) return false;
     if (_syncPullInProgress) return false; // already running (e.g. the once-per-load auto-pull)
@@ -3817,6 +4393,11 @@ let _syncPullInProgress = false;
 // longer establish baseline from that case, see pullStateFromDrive's own comment) has a deliberate,
 // one-time way to seed the file instead of being permanently deadlocked.
 async function pushStateToDrive(forceFirstPush = false) {
+    if (SYNC_COMPLETELY_DISABLED) {
+        logSystem('Push to Google Drive skipped — sync is completely disabled (SYNC_COMPLETELY_DISABLED in app.js).');
+        showSyncStatusFlag('error', 'Sync is disabled — see Sync Settings.');
+        return;
+    }
     const url = getSyncWebAppUrl();
     if (!url) return;
     // Fail-safe: refuse outright rather than ever push a local state that hasn't been confirmed
@@ -4854,7 +5435,14 @@ function setupEventListeners() {
     document.getElementById('personal-trans-type').addEventListener('change', updateQuickAddFormFields);
     document.getElementById('contribution-direction').addEventListener('change', updateQuickAddFormFields);
     document.getElementById('personal-joint-direction').addEventListener('change', updateQuickAddFormFields);
+    document.getElementById('asia-trans-type').addEventListener('change', updateQuickAddFormFields);
+    document.getElementById('asia-joint-direction').addEventListener('change', updateQuickAddFormFields);
 
+    document.querySelectorAll('#savings-pool-toggle [data-savings-pool]').forEach(btn => btn.addEventListener('click', () => {
+        state.savingsPoolView = btn.dataset.savingsPool === 'asia' ? 'asia' : 'household';
+        saveDatabase();
+        renderApp();
+    }));
     document.querySelectorAll('[data-savings-mode]').forEach(btn => btn.addEventListener('click', () => {
         state.savingsViewMode = btn.dataset.savingsMode;
         saveDatabase();
@@ -4899,7 +5487,9 @@ function setupEventListeners() {
     // re-render whichever one is currently active, same live-filter behavior as the Card Ledger's
     // search box.
     document.getElementById('list-view-master-search')?.addEventListener('input', debounce(() => {
-        if (state.dashboardType === 'joint') renderJointList(); else renderPersonalList();
+        if (state.dashboardType === 'joint') renderJointList();
+        else if (state.dashboardType === 'asia') renderAsiaList();
+        else renderPersonalList();
     }, 300));
     document.getElementById('btn-reset-savingslist-filters')?.addEventListener('click', () => {
         resetTableFiltersAndSort('savingsList', () => { state.savingsListSort = { key: 'date', direction: 'asc' }; }, renderSavingsTab);
@@ -4912,7 +5502,17 @@ function setupEventListeners() {
     const updateSavingsEntryForm = () => {
         const entryType = document.getElementById('savings-entry-type').value; // deposit | withdrawal | interest
         const isInterest = entryType === 'interest';
-        const sourceLabel = document.getElementById('savings-transfer-source').value === 'joint' ? 'Joint' : 'Personal';
+        // Keep the action buttons' active-state in sync with #savings-entry-type regardless of what
+        // changed it — a click (see the listener below) or the submit handler's own form.reset()
+        // afterward, which silently restores the hidden input to its declared 'deposit' default
+        // without touching these classes on its own.
+        document.querySelectorAll('#savings-entry-type-group .direction-btn').forEach(b => {
+            b.classList.remove('active-charge', 'active-deposit', 'active-interest');
+            if (b.dataset.savingsEntryType === entryType) {
+                b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : 'active-deposit'));
+            }
+        });
+        const sourceLabel = document.getElementById('savings-transfer-source').value === 'joint' ? 'Joint' : (state.savingsPoolView === 'asia' ? 'Asia' : 'Jason');
         document.getElementById('savings-entry-amount-label').textContent = 'Amount';
         document.getElementById('savings-transfer-source-group').classList.toggle('hidden', isInterest);
         document.getElementById('savings-entry-hint').textContent = isInterest
@@ -4929,7 +5529,19 @@ function setupEventListeners() {
             document.getElementById('savings-transfer-date').value = `${state.currentYear}-${String(monthIndex + 1).padStart(2, '0')}-${lastDay}`;
         }
     };
-    document.getElementById('savings-entry-type').addEventListener('change', updateSavingsEntryForm);
+    // Deposit/Withdrawal/Interest action buttons (replaces the old <select>, per explicit user
+    // request, 2026-08-07) — #savings-entry-type is still the real value every other read site
+    // (updateSavingsEntryForm above, the submit handler below) already reads, this just sets it via
+    // click instead of via a <select>'s native 'change' event. Withdrawal reuses active-charge's red
+    // (money leaving Savings, posts negative) and Deposit reuses active-deposit's green (money
+    // entering Savings, posts positive); Interest gets its own active-interest blue since it isn't
+    // tied to a checking account like the other two.
+    document.querySelectorAll('#savings-entry-type-group .direction-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('savings-entry-type').value = btn.dataset.savingsEntryType;
+            updateSavingsEntryForm();
+        });
+    });
     document.getElementById('savings-transfer-source').addEventListener('change', updateSavingsEntryForm);
 
     // Reachable in both Calendar and List view, on any device — openMobileQuickAddModal() has no
@@ -4973,9 +5585,15 @@ function setupEventListeners() {
         currentValue: state.savingsIcon, defaultEmoji: '💰', label: 'Savings'
     });
     document.getElementById('btn-open-savings-account-settings').addEventListener('click', () => {
-        document.getElementById('savings-current-amount').value = getSavingsStartingBalance().toFixed(2);
-        document.getElementById('savings-settings-login-url').value = state.savingsLoginUrl || '';
-        savingsIconEditor.set(state.savingsIcon);
+        const isAsiaPool = state.savingsPoolView === 'asia';
+        document.getElementById('savings-balance-dialog-title').textContent = isAsiaPool ? "Asia's Savings Account Settings" : "Jason's Savings Account Settings";
+        // Icon/Login URL now have full parity with the household pool (Jason's/Joint's/her own
+        // Checking settings already had these) — was hidden entirely for Asia's pool since Phase 3
+        // only added asiaSavingsStartingBalance/asiaSavingsTransactions. Per explicit user request,
+        // 2026-08-09.
+        document.getElementById('savings-current-amount').value = (isAsiaPool ? getAsiaSavingsStartingBalance() : getSavingsStartingBalance()).toFixed(2);
+        document.getElementById('savings-settings-login-url').value = (isAsiaPool ? state.asiaSavingsLoginUrl : state.savingsLoginUrl) || '';
+        savingsIconEditor.set(isAsiaPool ? state.asiaSavingsIcon : state.savingsIcon);
         document.getElementById('savings-balance-dialog').showModal();
     });
     document.getElementById('btn-cancel-savings-balance').addEventListener('click', () => document.getElementById('savings-balance-dialog').close());
@@ -4983,10 +5601,16 @@ function setupEventListeners() {
         event.preventDefault();
         const amount = Number(document.getElementById('savings-current-amount').value);
         if (!Number.isFinite(amount)) return;
-        state.savingsStartingBalance = amount;
-        state.savingsCurrentAmount = amount;
-        state.savingsLoginUrl = document.getElementById('savings-settings-login-url').value.trim();
-        state.savingsIcon = savingsIconEditor.get();
+        if (state.savingsPoolView === 'asia') {
+            state.asiaSavingsStartingBalance = amount;
+            state.asiaSavingsLoginUrl = document.getElementById('savings-settings-login-url').value.trim();
+            state.asiaSavingsIcon = savingsIconEditor.get();
+        } else {
+            state.savingsStartingBalance = amount;
+            state.savingsCurrentAmount = amount;
+            state.savingsLoginUrl = document.getElementById('savings-settings-login-url').value.trim();
+            state.savingsIcon = savingsIconEditor.get();
+        }
         saveDatabase();
         document.getElementById('savings-balance-dialog').close();
         renderApp();
@@ -4998,45 +5622,52 @@ function setupEventListeners() {
         removeId: 'btn-account-settings-icon-remove', previewId: 'account-settings-icon-preview',
         currentValue: '', defaultEmoji: '🏠', label: 'Checking'
     });
-    // Consolidated Personal/Joint Account Settings — Starting Balance (optional, only when both date
-    // + amount are filled), Account Login URL, custom Icon, and (Personal only) a way into the full
-    // Payroll dialog. Replaces the old separate "Starting Balance"/"Payroll" header buttons. Per
-    // explicit user request, 2026-08-05.
+    // Consolidated Personal/Joint/Asia Account Settings — Starting Balance (optional, only when both
+    // date + amount are filled), Account Login URL, custom Icon, and (Personal/Asia only, both have
+    // their own payroll config) a way into the full Payroll dialog. Replaces the old separate
+    // "Starting Balance"/"Payroll" header buttons. Per explicit user request, 2026-08-05 (extended to
+    // Asia 2026-08-06). Lookup table instead of a binary ternary so a third (or future fourth)
+    // account is a data addition, not a re-plumb of every call site.
+    const ACCOUNT_SETTINGS_MAP = {
+        personal: { title: "Jason's Checking Settings", loginKey: 'personalLoginUrl', iconKey: 'personalIcon', label: "Jason's Checking", showPayroll: true },
+        joint: { title: 'Joint Checking Settings', loginKey: 'jointLoginUrl', iconKey: 'jointIcon', label: 'Joint Checking', showPayroll: false },
+        asia: { title: "Asia's Checking Settings", loginKey: 'asiaLoginUrl', iconKey: 'asiaIcon', label: "Asia's Checking", showPayroll: true }
+    };
+    const resolveAccountSettingsAccount = () => {
+        const val = document.getElementById('account-settings-account').value;
+        return ACCOUNT_SETTINGS_MAP[val] ? val : 'personal';
+    };
     const populateAccountSettingsDialog = () => {
-        const account = document.getElementById('account-settings-account').value === 'joint' ? 'joint' : 'personal';
-        const isJoint = account === 'joint';
-        document.getElementById('account-settings-title').textContent = isJoint ? 'Joint Checking Settings' : 'Personal Checking Settings';
-        document.getElementById('account-settings-login-url').value = (isJoint ? state.jointLoginUrl : state.personalLoginUrl) || '';
-        accountSettingsIconEditor.set(isJoint ? state.jointIcon : state.personalIcon);
-        document.getElementById('account-settings-payroll-group').classList.toggle('hidden', isJoint);
+        const account = resolveAccountSettingsAccount();
+        const cfg = ACCOUNT_SETTINGS_MAP[account];
+        document.getElementById('account-settings-title').textContent = cfg.title;
+        document.getElementById('account-settings-login-url').value = state[cfg.loginKey] || '';
+        accountSettingsIconEditor.set(state[cfg.iconKey]);
+        document.getElementById('account-settings-payroll-group').classList.toggle('hidden', !cfg.showPayroll);
         document.getElementById('starting-balance-date').value = '';
         document.getElementById('starting-balance-amount').value = '';
     };
     document.getElementById('btn-open-account-settings').addEventListener('click', () => {
-        document.getElementById('account-settings-account').value = state.dashboardType === 'joint' ? 'joint' : 'personal';
+        document.getElementById('account-settings-account').value = ACCOUNT_SETTINGS_MAP[state.dashboardType] ? state.dashboardType : 'personal';
         populateAccountSettingsDialog();
         document.getElementById('account-settings-dialog').showModal();
     });
     document.getElementById('account-settings-account').addEventListener('change', populateAccountSettingsDialog);
     document.getElementById('btn-account-settings-open-payroll').addEventListener('click', () => {
         document.getElementById('account-settings-dialog').close();
-        window.openPayrollConfigModal();
+        window.openPayrollConfigModal(resolveAccountSettingsAccount());
     });
     const auditBtn = document.getElementById('btn-open-integrity-audit');
     if (auditBtn) auditBtn.addEventListener('click', showIntegrityAuditModal);
     document.getElementById('btn-cancel-account-settings').addEventListener('click', () => document.getElementById('account-settings-dialog').close());
     document.getElementById('account-settings-form').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const account = document.getElementById('account-settings-account').value === 'joint' ? 'joint' : 'personal';
+        const account = resolveAccountSettingsAccount();
+        const acctCfg = ACCOUNT_SETTINGS_MAP[account];
         const loginUrl = document.getElementById('account-settings-login-url').value.trim();
         const iconDataUrl = accountSettingsIconEditor.get();
-        if (account === 'joint') {
-            state.jointLoginUrl = loginUrl;
-            state.jointIcon = iconDataUrl;
-        } else {
-            state.personalLoginUrl = loginUrl;
-            state.personalIcon = iconDataUrl;
-        }
+        state[acctCfg.loginKey] = loginUrl;
+        state[acctCfg.iconKey] = iconDataUrl;
 
         // Starting Balance reset is optional here (blank by default) — only run the destructive
         // wipe-and-reset when the user actually filled both fields in. Per explicit user request,
@@ -5047,7 +5678,7 @@ function setupEventListeners() {
         const amount = Number(document.getElementById('starting-balance-amount').value);
         const wantsBalanceReset = !!dateStr && Number.isFinite(amount) && document.getElementById('starting-balance-amount').value !== '';
         if (wantsBalanceReset) {
-            const accountLabel = account === 'joint' ? 'Joint Checking' : 'Personal Checking';
+            const accountLabel = acctCfg.label;
             if (!confirm(`Reset ${accountLabel} to $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} as of ${formatDateDisplay(dateStr)}?\n\nEvery transaction dated before ${formatDateDisplay(dateStr)} will be permanently deleted and the running balance for all earlier dates will read $0. This cannot be undone.`)) return;
             applyStartingBalanceReset(account, dateStr, amount);
             saveDatabase(true); // skipAutoSync — pushing the deletion is handled explicitly below, awaited, before this closes
@@ -5247,21 +5878,11 @@ function setupEventListeners() {
         saveDatabase();
         renderDeliveryTab();
     });
-    document.getElementById('savings-balance-form').addEventListener('submit', event => {
-        event.preventDefault();
-        const amount = Number(document.getElementById('savings-current-amount').value);
-        if (!Number.isFinite(amount)) return;
-        state.savingsStartingBalance = amount;
-        state.savingsCurrentAmount = amount;
-        saveDatabase();
-        document.getElementById('savings-balance-dialog').close();
-        renderApp();
-        logSuccess(`Savings starting balance updated to $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}.`);
-    });
     document.getElementById('savings-transfer-form').addEventListener('submit', event => {
         event.preventDefault();
+        const pool = getActiveSavingsPool();
         const entryType = document.getElementById('savings-entry-type').value; // deposit | withdrawal | interest
-        const source = document.getElementById('savings-transfer-source').value === 'joint' ? 'joint' : 'personal';
+        const source = document.getElementById('savings-transfer-source').value === 'joint' ? 'joint' : pool.defaultSource;
         const date = document.getElementById('savings-transfer-date').value;
         const description = document.getElementById('savings-transfer-description').value.trim();
         // The field always takes a plain positive amount now — direction comes from Entry Type, not
@@ -5271,8 +5892,8 @@ function setupEventListeners() {
         const rawAmount = Math.abs(Number(document.getElementById('savings-transfer-amount').value));
         const signedAmount = entryType === 'withdrawal' ? -rawAmount : rawAmount;
         const added = entryType === 'interest'
-            ? addSavingsInterest(date, description, rawAmount)
-            : addLinkedSavingsTransfer(date, description, signedAmount, source);
+            ? pool.addInterest(date, description, rawAmount)
+            : pool.addTransfer(date, description, signedAmount, source);
         if (!added) return;
         saveDatabase();
         event.currentTarget.reset();
@@ -5281,17 +5902,26 @@ function setupEventListeners() {
         renderApp();
         logSuccess(entryType === 'interest'
             ? `Interest of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added to Savings on ${formatDateDisplay(date)}.`
-            : `${entryType === 'withdrawal' ? 'Withdrawal' : 'Deposit'} of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added between Savings and ${source === 'joint' ? 'Joint' : 'Personal'} on ${formatDateDisplay(date)}.`);
+            : `${entryType === 'withdrawal' ? 'Withdrawal' : 'Deposit'} of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added between Savings and ${source === 'joint' ? 'Joint' : (pool.isAsia ? 'Asia' : 'Jason')} on ${formatDateDisplay(date)}.`);
     });
 
-    document.getElementById('savings-edit-type').addEventListener('change', (e) => {
-        document.getElementById('savings-edit-source-group').classList.toggle('hidden', e.target.value === 'interest');
+    // Deposit/Withdrawal/Interest action buttons (replaces the old <select>, for consistency with
+    // the "Add Savings Entry" form's toggle — per explicit user request, 2026-08-09). Mirrors the
+    // #savings-entry-type-group listener above: #savings-edit-type stays the real value every other
+    // read site (openSavingsEditDialog, the submit handler) already reads. updateSavingsEditTypeButtons
+    // itself lives at top level (not here) since openSavingsEditDialog — which also needs to sync the
+    // buttons when it populates the dialog for an existing entry — is defined outside this function.
+    document.querySelectorAll('#savings-edit-type-group .direction-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('savings-edit-type').value = btn.dataset.savingsEntryType;
+            updateSavingsEditTypeButtons();
+        });
     });
     document.getElementById('btn-cancel-savings-edit').addEventListener('click', () => document.getElementById('savings-edit-dialog').close());
-    document.getElementById('btn-close-savings-day').addEventListener('click', () => document.getElementById('savings-day-dialog').close());
     document.getElementById('savings-edit-form').addEventListener('submit', event => {
         event.preventDefault();
-        const tx = (state.savingsTransactions || []).find(item => item.id === document.getElementById('savings-edit-id').value);
+        const pool = getActiveSavingsPool();
+        const tx = pool.transactions.find(item => item.id === document.getElementById('savings-edit-id').value);
         if (!tx) return;
         const oldKind = tx.kind || 'transfer';
         // Entry Type is 3 UI options (deposit/withdrawal/interest) but only 2 stored kinds
@@ -5299,19 +5929,19 @@ function setupEventListeners() {
         // Per explicit user request, 2026-08-04.
         const newEntryType = document.getElementById('savings-edit-type').value;
         const newKind = newEntryType === 'interest' ? 'interest' : 'transfer';
-        const newSource = document.getElementById('savings-edit-source').value === 'joint' ? 'joint' : 'personal';
+        const newSource = document.getElementById('savings-edit-source').value === 'joint' ? 'joint' : pool.defaultSource;
         const rawAmount = Math.abs(Number(document.getElementById('savings-edit-amount').value));
         const amount = newEntryType === 'withdrawal' ? -rawAmount : rawAmount;
         const date = document.getElementById('savings-edit-date').value;
         const description = document.getElementById('savings-edit-description').value.trim();
         if (!date || !description || !Number.isFinite(rawAmount) || rawAmount === 0) return;
         if (oldKind === 'transfer' && newKind === 'interest') {
-            const mirror = findSavingsCheckingMirror(tx.transferId);
+            const mirror = pool.isAsia ? findAsiaSavingsCheckingMirror(tx.transferId) : findSavingsCheckingMirror(tx.transferId);
             if (mirror) mirror.list.splice(mirror.list.indexOf(mirror.tx), 1);
             tx.personalMirrorDetached = true;
         }
         if (oldKind === 'interest' && newKind === 'transfer') {
-            tx.transferId = tx.transferId || 'savings-xfer-' + Math.random().toString(36).substr(2, 9);
+            tx.transferId = tx.transferId || (pool.isAsia ? 'asia-savings-xfer-' : 'savings-xfer-') + Math.random().toString(36).substr(2, 9);
             tx.personalMirrorDetached = false;
         }
         tx.kind = newKind;
@@ -5320,17 +5950,21 @@ function setupEventListeners() {
         tx.date = date;
         tx.description = description;
         tx.amount = amount;
-        if (newKind === 'transfer') syncSavingsCheckingMirror(tx, oldKind === 'interest');
+        if (newKind === 'transfer') {
+            if (pool.isAsia) syncAsiaSavingsCheckingMirror(tx, oldKind === 'interest');
+            else syncSavingsCheckingMirror(tx, oldKind === 'interest');
+        }
         saveDatabase();
         document.getElementById('savings-edit-dialog').close();
         renderApp();
         logSuccess(`Updated savings ${newEntryType}: ${description}.`);
     });
     document.getElementById('btn-delete-savings-edit').addEventListener('click', () => {
+        const pool = getActiveSavingsPool();
         const id = document.getElementById('savings-edit-id').value;
-        const tx = (state.savingsTransactions || []).find(item => item.id === id);
-        if (!tx || !confirm(`Delete "${tx.description}" from Savings? The Personal ledger will not be changed.`)) return;
-        deleteSavingsTransaction(id);
+        const tx = pool.transactions.find(item => item.id === id);
+        if (!tx || !confirm(`Delete "${tx.description}" from Savings? ${pool.ledgerName} will not be changed.`)) return;
+        pool.deleteTx(id);
         saveDatabase();
         document.getElementById('savings-edit-dialog').close();
         renderApp();
@@ -5921,17 +6555,25 @@ function setupEventListeners() {
                 const totalAmt = jasonAmt + asiaAmt;
                 if (totalAmt === 0) return;
                 const transferId = jasonAmt !== 0 ? 'checking-xfer-' + Math.random().toString(36).substr(2, 9) : '';
+                const asiaTransferId = asiaAmt !== 0 ? 'checking-xfer-' + Math.random().toString(36).substr(2, 9) : '';
                 const nowStamp = Date.now();
                 createdTxId = 'j-' + Math.random().toString(36).substr(2, 9);
                 state.jointRegister.push({
                     id: createdTxId, type: direction === 'withdrawal' ? 'withdrawal' : 'contribution', name: descInput,
-                    jason: jasonAmt, asia: asiaAmt, amount: totalAmt, date: dateInput, transferId, createdAt: nowStamp,
+                    jason: jasonAmt, asia: asiaAmt, amount: totalAmt, date: dateInput, transferId, asiaTransferId, createdAt: nowStamp,
                     contributionDirection: direction, contributionRecipient: direction === 'withdrawal' ? recipient : ''
                 });
                 if (jasonAmt !== 0) state.personalCalendar[key].push({
                     id: 'p-' + Math.random().toString(36).substr(2, 9), date: dateInput, description: descInput,
                     amount: -jasonAmt, transferId, createdAt: nowStamp
                 });
+                if (asiaAmt !== 0) {
+                    if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+                    state.asiaCalendar[key].push({
+                        id: 'a-' + Math.random().toString(36).substr(2, 9), date: dateInput, description: descInput,
+                        amount: -asiaAmt, transferId: asiaTransferId, createdAt: nowStamp
+                    });
+                }
                 logSystem(`Added joint ${direction} on ${formatDateDisplay(dateInput)}: ${descInput} (Jason: $${jasonAmt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}, Asia: $${asiaAmt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
             } else {
                 const rawAmount = parseFloat(document.getElementById('trans-amount').value);
@@ -5950,6 +6592,80 @@ function setupEventListeners() {
                 });
 
                 logSystem(`Added joint ${amountInput >= 0 ? 'income' : 'expense'} on ${formatDateDisplay(dateInput)}: ${descInput} (${amountInput >= 0 ? '+' : '-'}$${Math.abs(amountInput).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
+            }
+        } else if (state.dashboardType === 'asia') {
+            // Asia's checking — Phase 3 adds the same Savings Transfer / Joint Transfer sub-types
+            // Jason's branch above has, mirroring that logic exactly (her own #asia-type-group
+            // markup, her own asiaSavingsTransactions pool, her own asiaTransferId leg on the joint
+            // row per the Phase 2 convention — see computeAsiaTransferSplitPlacements()/
+            // addLinkedAsiaSavingsTransfer() for the parallel functions this calls).
+            const rawAmount = parseFloat(document.getElementById('trans-amount').value);
+            if (isNaN(rawAmount)) return;
+            const transDir = document.getElementById('trans-direction').value || 'charge';
+            const amountInput = transDir === 'charge' ? -Math.abs(rawAmount) : Math.abs(rawAmount);
+            const asiaType = document.getElementById('asia-trans-type').value;
+            if (asiaType === 'savings-transfer') {
+                if (amountInput === 0 || !addLinkedAsiaSavingsTransfer(dateInput, descInput, -amountInput, 'asia')) return;
+                logSystem(`Added linked savings transfer on ${formatDateDisplay(dateInput)}: Asia ${amountInput >= 0 ? '+' : '-'}$${Math.abs(amountInput).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}, Savings ${amountInput <= 0 ? '+' : '-'}$${Math.abs(amountInput).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`);
+            } else if (asiaType === 'joint-transfer') {
+                const direction = document.getElementById('asia-joint-direction').value;
+                const amount = Math.abs(amountInput);
+                if (amount === 0) return;
+                const splitProtect = direction === 'deposit' && document.getElementById('asia-joint-split-protect').checked;
+
+                if (splitProtect) {
+                    const { placements, remaining } = computeAsiaTransferSplitPlacements(dateInput, amount);
+                    if (remaining > 0.005) {
+                        alert(`Can't fit the full $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} transfer into this billing cycle without Asia's checking dropping below the $${getAsiaMinimumBuffer().toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} minimum buffer — $${remaining.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} has nowhere to go before the cycle ends. No transfer was added; try a smaller amount, a different date, or adjust the minimum buffer in Payroll Config.`);
+                        return;
+                    }
+                    const nowStamp = Date.now();
+                    if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+                    placements.forEach((p, i) => {
+                        const pieceLabel = placements.length > 1 ? ` (Split ${i + 1}/${placements.length})` : '';
+                        const asiaTransferId = 'checking-xfer-' + Math.random().toString(36).substr(2, 9);
+                        const jId = 'j-' + Math.random().toString(36).substr(2, 9);
+                        const aId = 'a-' + Math.random().toString(36).substr(2, 9);
+                        if (!createdTxId) createdTxId = aId;
+                        state.jointRegister.push({
+                            id: jId, type: 'contribution', name: descInput + pieceLabel,
+                            jason: 0, asia: p.amount, amount: p.amount, date: p.date, asiaTransferId, createdAt: nowStamp + i,
+                            contributionDirection: direction, contributionRecipient: ''
+                        });
+                        // Every placement falls within dateInput's own month (see
+                        // computeAsiaTransferSplitPlacements's getCycleBoundsForDate bound) — `key`
+                        // (already ensureYearMonthInitialized'd above) covers all of them.
+                        state.asiaCalendar[key].push({
+                            id: aId, date: p.date, description: descInput + pieceLabel,
+                            amount: -p.amount, transferId: asiaTransferId, createdAt: nowStamp + i
+                        });
+                    });
+                    const summary = placements.map(p => `${formatDateDisplay(p.date)}: $${p.amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`).join(', ');
+                    logSystem(`Added split Asia-joint transfer (deposit) totaling $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}: ${descInput} [${summary}]`);
+                } else {
+                    const asiaAmt = direction === 'deposit' ? amount : -amount;
+                    const asiaTransferId = 'checking-xfer-' + Math.random().toString(36).substr(2, 9);
+                    const nowStamp = Date.now();
+                    const jId = 'j-' + Math.random().toString(36).substr(2, 9);
+                    const aId = 'a-' + Math.random().toString(36).substr(2, 9);
+                    createdTxId = aId;
+                    state.jointRegister.push({
+                        id: jId, type: 'contribution', name: descInput,
+                        jason: 0, asia: asiaAmt, amount: asiaAmt, date: dateInput, asiaTransferId, createdAt: nowStamp,
+                        contributionDirection: direction, contributionRecipient: direction === 'withdrawal' ? 'asia' : ''
+                    });
+                    if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+                    state.asiaCalendar[key].push({
+                        id: aId, date: dateInput, description: descInput,
+                        amount: -asiaAmt, transferId: asiaTransferId, createdAt: nowStamp
+                    });
+                    logSystem(`Added Asia-joint transfer (${direction}) on ${formatDateDisplay(dateInput)}: ${descInput} (Asia ${-asiaAmt >= 0 ? '+' : '-'}$${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}, Joint ${asiaAmt >= 0 ? '+' : '-'}$${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
+                }
+            } else {
+                if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+                createdTxId = 'a-' + Math.random().toString(36).substr(2, 9);
+                state.asiaCalendar[key].push({ id: createdTxId, date: dateInput, description: descInput, amount: amountInput, createdAt: Date.now() });
+                logSystem(`Added Asia transaction on ${formatDateDisplay(dateInput)}: ${descInput} ($${amountInput.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
             }
         } else {
             // Credit card transaction
@@ -6326,7 +7042,7 @@ function setupEventListeners() {
 
     // Bill Splitter item form
     const updateBillFormVisibility = () => {
-        const isPersonal = document.getElementById('bill-ownership').value === 'personal';
+        const isPersonal = document.getElementById('bill-ownership').value === 'jason';
         const isActual = document.getElementById('bill-entry-type').value === 'actual';
         const sameAmount = document.getElementById('bill-same-payment').checked;
         if (isPersonal) {
@@ -6436,7 +7152,7 @@ function setupEventListeners() {
 
         const name = document.getElementById('bill-name').value.trim();
         const ownership = document.getElementById('bill-ownership').value || 'joint';
-        const isPersonalExpense = ownership === 'personal';
+        const isPersonalExpense = ownership === 'jason';
         const cycle = isPersonalExpense ? '1st' : document.getElementById('bill-cycle').value;
         const cycleKey = cycle === '15th' ? 'cycle15th' : 'cycle1st';
         const budgetFrequency = isPersonalExpense ? 'monthly' : document.getElementById('bill-budget-frequency').value;
@@ -6453,8 +7169,8 @@ function setupEventListeners() {
         const occurrencePaymentAmount = entryType === 'actual' ? (samePaymentAmount ? frequencyAmount : enteredPayment) : 0;
         const paymentAmount = entryType === 'actual' ? occurrencePaymentAmount * previewOccurrences : 0;
         const dueDay = entryType === 'actual' ? (parseInt(document.getElementById('bill-due-day').value) || (cycle === '1st' ? 1 : 15)) : 0;
-        const paymentSource = ownership === 'personal'
-            ? 'personalChecking'
+        const paymentSource = ownership === 'jason'
+            ? 'jasonChecking'
             : (document.getElementById('bill-payment-source').value || 'jointChecking');
         const isRecurring = document.getElementById('bill-recurring').checked || chargeFrequency !== 'monthly';
         // Start/End are full calendar dates; recurringStartMonth/recurringEndMonth are derived from
@@ -7262,6 +7978,10 @@ function setupEventListeners() {
     });
 
     document.getElementById('btn-test-connection').addEventListener('click', async () => {
+        if (SYNC_COMPLETELY_DISABLED) {
+            logSystem('Test Connection skipped — sync is completely disabled (SYNC_COMPLETELY_DISABLED in app.js).');
+            return;
+        }
         const url = getSyncWebAppUrl();
         if (!url) { logError('No Web App URL configured. Save one above first.'); return; }
         logSystem('Connecting to Apps Script Web App...');
@@ -7507,7 +8227,7 @@ function setupEventListeners() {
         resetBillSplitterForm();
         const ownership = state.billTrackerOwnership || 'joint';
         document.getElementById('bill-ownership').value = ownership;
-        if (ownership === 'personal') document.getElementById('bill-payment-source').value = 'personalChecking';
+        if (ownership === 'jason') document.getElementById('bill-payment-source').value = 'jasonChecking';
         document.getElementById('bill-ownership').dispatchEvent(new Event('change'));
         document.getElementById('joint-bill-dialog').showModal();
     });
@@ -7522,8 +8242,8 @@ function setupEventListeners() {
         renderBillsTab();
     }));
     document.getElementById('bill-ownership').addEventListener('change', () => {
-        if (document.getElementById('bill-ownership').value === 'personal') {
-            document.getElementById('bill-payment-source').value = 'personalChecking';
+        if (document.getElementById('bill-ownership').value === 'jason') {
+            document.getElementById('bill-payment-source').value = 'jasonChecking';
         }
         updateBillFormVisibility();
     });
@@ -7689,7 +8409,7 @@ function setupEventListeners() {
         document.getElementById('seasonal-end-date').value = '';
         document.getElementById('seasonal-frequency').value = 'yearly';
         document.getElementById('seasonal-frequency-group').classList.add('hidden');
-        document.getElementById('seasonal-charge-source').value = 'personal';
+        document.getElementById('seasonal-charge-source').value = 'jason';
         document.getElementById('seasonal-charge-group').classList.add('hidden');
         document.getElementById('seasonal-dialog').showModal();
     });
@@ -7812,7 +8532,7 @@ function setupEventListeners() {
         document.getElementById('loan-purchase-promo-rate').value = '0';
         document.getElementById('loan-purchase-promo-exp').value = '';
         document.getElementById('loan-payment-strategy').value = 'none';
-        document.getElementById('loan-payment-source').value = 'personal';
+        document.getElementById('loan-payment-source').value = 'jason';
         document.getElementById('loan-login-url').value = '';
         document.getElementById('loan-is-store-card').checked = false;
         document.getElementById('loan-store-name').value = '';
@@ -7864,7 +8584,7 @@ function setupEventListeners() {
         document.getElementById('loan-consolidation-fields').classList.add('hidden');
         document.getElementById('loan-consolidation-transfer-date').value = formatLocalDate(new Date());
         document.getElementById('loan-consolidation-cashout').value = '0';
-        document.getElementById('loan-consolidation-cashout-dest').value = 'personal';
+        document.getElementById('loan-consolidation-cashout-dest').value = 'jason';
         document.getElementById('loan-consolidation-cashout-dest-group').classList.add('hidden');
         populateLoanConsolidationAccountList();
 
@@ -7909,6 +8629,18 @@ function setupEventListeners() {
             if (type === 'loan') renderLoansTab(); else renderCreditCardsTab();
         });
     });
+    // Ownership filter (Joint/Jason/Asia/All) — mirrors #billtracker-ownership-filter exactly.
+    // Shared single state.debtOwnershipFilter across both Loans and Credit Cards pages (not
+    // per-type like sort/hide-zero above), so the two segmented controls always agree with each
+    // other rather than tracking two independent filters for the same underlying concept.
+    document.querySelectorAll('#debt-ownership-filter-loan .segment-btn, #debt-ownership-filter-credit .segment-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.debtOwnershipFilter = btn.dataset.debtOwnership;
+            saveDatabase();
+            renderLoansTab();
+            renderCreditCardsTab();
+        });
+    });
     [['loan', 'btn-toggle-loan-summary'], ['credit', 'btn-toggle-credit-summary']].forEach(([type, buttonId]) => {
         document.getElementById(buttonId)?.addEventListener('click', () => {
             const collapsedState = getDebtSummaryCollapsed();
@@ -7950,7 +8682,7 @@ function setupEventListeners() {
         const dateOrig = document.getElementById('edit-tx-date-orig').value;
         const editDate = document.getElementById('edit-tx-date').value;
         const editDesc = document.getElementById('edit-tx-desc').value;
-        const duplicateCardId = state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' ? state.dashboardType : '');
+        const duplicateCardId = state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' && state.dashboardType !== 'asia' ? state.dashboardType : '');
         if (duplicateCardId) {
             document.getElementById('edit-tx-mode').value = 'duplicate';
             document.getElementById('edit-tx-modal-title').textContent = 'Add Duplicate Transaction';
@@ -8001,6 +8733,26 @@ function setupEventListeners() {
             });
 
             logSystem(`Duplicated personal transaction on ${formatDateDisplay(editDate)}: ${editDesc}`);
+        } else if (state.dashboardType === 'asia') {
+            const amountInput = parseFloat(document.getElementById('edit-tx-amount').value);
+            if (isNaN(amountInput)) return;
+
+            const dateObj = new Date(editDate + 'T00:00:00');
+            const y = dateObj.getFullYear();
+            const monthShort = MONTH_ORDER[dateObj.getMonth()];
+            const key = `${y}-${monthShort}`;
+
+            ensureYearMonthInitialized(y, monthShort);
+            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+
+            state.asiaCalendar[key].push({
+                id: 'a-' + Math.random().toString(36).substr(2, 9),
+                date: editDate,
+                description: `${editDesc} (Copy)`,
+                amount: amountInput
+            });
+
+            logSystem(`Duplicated Asia transaction on ${formatDateDisplay(editDate)}: ${editDesc}`);
         } else if (state.dashboardType === 'joint') {
             // Joint transaction duplication
             const id = document.getElementById('edit-tx-id').value;
@@ -8067,23 +8819,11 @@ function setupEventListeners() {
     // one guaranteed way back from any override, delete, or split state.
     document.getElementById('btn-revert-edit-tx')?.addEventListener('click', () => {
         const id = document.getElementById('edit-tx-id').value;
-        const editMode = document.getElementById('edit-tx-mode').value;
-        // For a split piece's own editor, "Revert to Original" means the same thing "Delete"/"Remove
-        // This Date" already does — undo just this date, merging its amount into whichever piece
-        // came before it (or the anchor) — not clear the whole group's overrides.
-        if (editMode === 'dynamic-split-piece') {
-            const parentDynId = document.getElementById('edit-tx-parent-dyn-id').value;
-            if (!confirm('Remove this date from the split? Its amount merges back into the previous date in the group.')) return;
-            const parentOvr = (state.dynamicOverrides || {})[parentDynId] || {};
-            const pieces = removeSplitPiece(parentOvr.splitPieces || [], id);
-            saveDynamicTransferSplit(parentDynId, pieces);
-            saveDatabase();
-            document.getElementById('edit-tx-dialog').close();
-            renderApp();
-            logSystem(`Removed split date ${id} from ${parentDynId}`);
-            return;
-        }
-        if (!id || !confirm('Revert this occurrence to its original, un-overridden calculated amount and date? This clears any override, split, or delete on it.')) return;
+        // Removing just ONE date from an active split (anchor's own date, or a single piece) no
+        // longer goes through this button — the anchor has its own narrower "Reset to Natural Date"
+        // (btn-reset-anchor-date) and each piece row has its own "Remove" button, both of which only
+        // touch that one date instead of the whole group. This button stays the all-of-it fallback.
+        if (!id || !confirm('Revert this occurrence to its original, un-overridden calculated amount and date? This clears any override, split, or delete on it — including every split date.')) return;
         if (state.dynamicOverrides) delete state.dynamicOverrides[id];
         const linkedId = getLinkedDynamicTxId(id);
         if (linkedId && state.dynamicOverrides) delete state.dynamicOverrides[linkedId];
@@ -8155,27 +8895,92 @@ function setupEventListeners() {
     document.getElementById('edit-tx-split-new-date')?.addEventListener('change', () => tryAddSplitRowFromInputs(true));
     document.getElementById('edit-tx-split-new-amount')?.addEventListener('change', () => tryAddSplitRowFromInputs(true));
 
+    // Anchor's own Date/Amount fields (#edit-tx-date/#edit-tx-amount are shared by every edit-tx-
+    // dialog mode, hence the _splitEditorState.dynId===id guard) auto-save live, same as every split
+    // piece row already does — per explicit user request, 2026-08-09, so the anchor's date can be
+    // changed without needing the form's Save button (which previously took a divergent early-return
+    // path for this exact case — see the submit handler's own comment). Only fires while a Jason-
+    // anchor's group editor is open; every other dynamic-override type (paycheck, delivery, Asia's
+    // own joint-transfer anchor) is untouched and still saves via the submit handler as before.
+    document.getElementById('edit-tx-date')?.addEventListener('change', (e) => {
+        if (!_splitEditorState) return;
+        const id = document.getElementById('edit-tx-id').value;
+        if (_splitEditorState.dynId !== id) return;
+        const newDate = e.target.value;
+        if (!newDate) return;
+        saveDynamicTxOverride(id, { date: newDate, deleted: false });
+        saveDatabase();
+        updateAnchorDateHint(id);
+        renderSplitEditorRows();
+        logSuccess(`Moved original transfer date to ${formatDateDisplay(newDate)}`);
+    });
+    document.getElementById('edit-tx-amount')?.addEventListener('change', (e) => {
+        if (!_splitEditorState) return;
+        const id = document.getElementById('edit-tx-id').value;
+        if (_splitEditorState.dynId !== id) return;
+        const newAmt = parseFloat(e.target.value);
+        if (!Number.isFinite(newAmt) || newAmt < 0) return;
+        const isOutflow = id.startsWith('xfer-');
+        // Directly typing an amount here always sets the ANCHOR's own remainder to exactly what was
+        // typed, never a piece — per explicit user request, 2026-08-09, this now works even while
+        // pieces exist (previously the field was disabled/read-only whenever any pieces existed at
+        // all). Pieces themselves are edited via their own row's amount field, unchanged. Since the
+        // anchor is always derived as totalAmount minus every piece (computeSplitAnchorAmount), the
+        // only way to land the anchor on a specific typed value without moving any piece is to solve
+        // for totalAmount backward: totalAmount = typedAnchorAmount + sum(pieces) — the mirror image
+        // of how adding/editing a PIECE already works (piece changes, anchor absorbs the difference;
+        // this is anchor changes, the group total absorbs the difference, pieces stay exactly where
+        // they were).
+        const piecesSum = _splitEditorState.pieces.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        _splitEditorState.totalAmount = Math.round((newAmt + piecesSum) * 100) / 100;
+        // Also pins the CURRENTLY DISPLAYED date as an explicit override, not just the amount —
+        // confirmed real bug, 2026-08-09: an occurrence with no date override yet (most commonly one
+        // that had been deleted, which always displays at its natural date with no `date` key ever
+        // written) got its date silently RE-DERIVED from scratch by the payday-auto-shift logic the
+        // instant a real amount was saved, since simulateJasonCheckingAndAdjustTransfers only honors
+        // an override's date when one is actually present. A user editing just the amount here has
+        // no way to know the date they're looking at was never actually locked in — it silently
+        // landed somewhere else entirely (a different day, sometimes a different month), reading
+        // exactly like the transaction had vanished. Per explicit user request: manual overrides
+        // (anything saved from this dialog) must supersede the dynamic payday shift outright.
+        saveDynamicTxOverride(id, {
+            date: document.getElementById('edit-tx-date').value,
+            amount: isOutflow ? -_splitEditorState.totalAmount : _splitEditorState.totalAmount,
+            deleted: false,
+            // Marks this group's total as the user's own explicit choice from here on — see
+            // resolveDynamicTransferGroupTotal()'s own comment for why this is essential once pieces
+            // exist: without it, reconcileSplitPiecesWithLiveTotal() (called from several render
+            // sites, not just this dialog) silently overwrote the just-typed total back toward the
+            // live Bill Splitter amount on the very next render, dumping the entire difference onto
+            // whichever split piece happened to be last — confirmed real bug, 2026-08-09.
+            totalManuallySet: true
+        });
+        if (_splitEditorState.pieces.length) saveDynamicTransferSplit(id, _splitEditorState.pieces);
+        saveDatabase();
+        updateAnchorDateHint(id);
+        renderSplitEditorRows();
+    });
+    // Undoes ONLY the anchor's own date override (keeping amount/split pieces intact) — narrower
+    // than "Revert to Original" below, which wipes the whole occurrence. Per explicit user request,
+    // 2026-08-09: changing the original transfer's date back shouldn't require also losing its split.
+    document.getElementById('btn-reset-anchor-date')?.addEventListener('click', () => {
+        if (!_splitEditorState) return;
+        const id = document.getElementById('edit-tx-id').value;
+        if (_splitEditorState.dynId !== id) return;
+        saveDynamicTxOverride(id, { date: undefined });
+        saveDatabase();
+        const naturalDate = getAnchorEffectiveDate(id);
+        if (naturalDate) document.getElementById('edit-tx-date').value = naturalDate;
+        updateAnchorDateHint(id);
+        renderSplitEditorRows();
+        logSuccess(`Reset original transfer date to its natural cycle date`);
+    });
+
     // Delete transaction from edit dialog
     document.getElementById('btn-delete-edit-tx').addEventListener('click', () => {
         const id = document.getElementById('edit-tx-id').value;
         const dateOrig = document.getElementById('edit-tx-date-orig').value;
         const editMode = document.getElementById('edit-tx-mode').value;
-
-        // "Delete" on a split piece's own editor means "remove this date" — its amount merges back
-        // into whichever piece came immediately before it in the group (or the anchor).
-        if (editMode === 'dynamic-split-piece') {
-            const parentDynId = document.getElementById('edit-tx-parent-dyn-id').value;
-            if (confirm('Remove this date from the split? Its amount merges back into the previous date in the group.')) {
-                const parentOvr = (state.dynamicOverrides || {})[parentDynId] || {};
-                const pieces = removeSplitPiece(parentOvr.splitPieces || [], id);
-                saveDynamicTransferSplit(parentDynId, pieces);
-                saveDatabase();
-                document.getElementById('edit-tx-dialog').close();
-                renderApp();
-                logSystem(`Removed split date ${id} from ${parentDynId}`);
-            }
-            return;
-        }
 
         // Handle dynamic transaction override delete
         if (editMode === 'dynamic-override') {
@@ -8277,8 +9082,21 @@ function setupEventListeners() {
                     const removedTx = state.jointRegister.splice(idx, 1)[0];
                     removed = { ...removedTx, description: removedTx.description || removedTx.name };
                     removeCheckingTransferMirror(removedTx, 'joint');
+                    removeAsiaCheckingTransferMirror(removedTx, 'joint');
                     logSystem(`Deleted joint transaction: ${removed.description} ($${Math.abs(removed.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
                 }
+            }
+        } else if (state.dashboardType === 'asia') {
+            const dateObj = new Date(dateOrig + 'T00:00:00');
+            const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+            const list = state.asiaCalendar[key] || [];
+            const idx = list.findIndex(tx => tx.id === id);
+            if (idx > -1) {
+                const tx = list[idx];
+                if (!confirm(`Delete "${tx.description}" (${tx.amount < 0 ? '-' : '+'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}) on ${formatDateDisplay(tx.date)}? This cannot be undone.`)) return;
+                removed = list.splice(idx, 1)[0];
+                removeAsiaCheckingTransferMirror(removed, 'asia');
+                logSystem(`Deleted Asia transaction: ${removed.description} ($${removed.amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
             }
         } else {
             const cardId = state.dashboardType;
@@ -8389,37 +9207,35 @@ function setupEventListeners() {
         const dateOrig = document.getElementById('edit-tx-date-orig').value;
         const editMode = document.getElementById('edit-tx-mode').value;
 
-        // Handle a split piece's own save (amount and/or date edit) — the anchor absorbs the
-        // difference via editSplitPiece's rebalancing, not a direct amount override.
-        if (editMode === 'dynamic-split-piece') {
-            const parentDynId = document.getElementById('edit-tx-parent-dyn-id').value;
-            const newAmt = parseFloat(document.getElementById('edit-tx-amount').value);
-            const newDate = document.getElementById('edit-tx-date').value;
-            const parentOvr = (state.dynamicOverrides || {})[parentDynId] || {};
-            const m = parentDynId.match(/^(?:joint-xfer-jason-|xfer-)(1st|15th)-(\d{4})-([A-Za-z]+)$/);
-            if (!m) return;
-            const [, cycle, yearStr, monthShort] = m;
-            const totalAmount = (parentOvr.amount !== undefined ? Math.abs(parentOvr.amount) : getCalculatedTransferForJason(Number(yearStr), monthShort, cycle));
-            try {
-                let pieces = editSplitPiece(totalAmount, parentOvr.splitPieces || [], id, newAmt);
-                pieces = pieces.map(p => p.id === id ? { ...p, date: newDate } : p);
-                saveDynamicTransferSplit(parentDynId, pieces);
-            } catch (err) {
-                alert(err.message);
-                return;
-            }
-            saveDatabase();
-            document.getElementById('edit-tx-dialog').close();
-            renderAppImmediate();
-            document.body.offsetHeight;
-            window.scrollTo(0, scrollPos);
-            logSuccess(`Updated split date ${id}`);
-            return;
-        }
-
         // Handle dynamic transaction override save
         if (editMode === 'dynamic-override') {
             const newDesc = document.getElementById('edit-tx-desc').value.trim();
+
+            // Anchor-of-a-split-group session (with or without any pieces yet — _splitEditorState is
+            // set for every Jason-anchor open, see openDynamicTxEditor()): the anchor's own date and
+            // amount, and every split piece's date/amount, already auto-saved LIVE as each was
+            // edited (see the #edit-tx-date/#edit-tx-amount 'change' listeners below and
+            // persistSplitEditorState()) — per explicit user request, 2026-08-09, specifically so the
+            // anchor's date can be changed without losing an active split. This replaces the old
+            // "date changed -> divergent early-return" branch below for this case, which used to skip
+            // straight to saveDatabase()+close without ever reaching the description save beneath it.
+            // Only the description is still submit-time-only here (nothing else auto-saves a text
+            // field's every keystroke) and needs writing before close. Also (re-)pins the displayed
+            // date explicitly on every save, even one that never touched the date field at all (e.g.
+            // description-only) — see the matching comment on #edit-tx-amount's own 'change' listener
+            // for why an occurrence with no date override yet can otherwise silently relocate itself
+            // via the payday-auto-shift the moment ANY save on it goes through.
+            if (_splitEditorState && _splitEditorState.dynId === id) {
+                saveDynamicTxOverride(id, { date: document.getElementById('edit-tx-date').value, description: newDesc || undefined, deleted: false });
+                saveDatabase();
+                document.getElementById('edit-tx-dialog').close();
+                renderAppImmediate();
+                document.body.offsetHeight;
+                window.scrollTo(0, scrollPos);
+                logSuccess(`Updated ${id}`);
+                return;
+            }
+
             const newAmt = parseFloat(document.getElementById('edit-tx-amount').value);
             const newDate = document.getElementById('edit-tx-date').value;
             const origDate = document.getElementById('edit-tx-date-orig').value;
@@ -8431,8 +9247,11 @@ function setupEventListeners() {
                     // Lightweight date override — stays a dynamic, override-flagged occurrence
                     // (badge shows "Overridden Joint Transfer", tooltip shows the original 1st/15th
                     // date) instead of materializing into a disconnected, unbadged real transaction.
-                    // Same pattern dynamic-delivery-* already used (see moveTransaction()).
-                    saveDynamicTxOverride(id, { date: newDate });
+                    // Same pattern dynamic-delivery-* already used (see moveTransaction()). Also
+                    // saves the description here — previously dropped on this path (a real gap: any
+                    // description edit made in the same session as a date change on a non-split
+                    // dynamic tx, e.g. Asia's own joint-transfer anchor, silently never saved).
+                    saveDynamicTxOverride(id, { date: newDate, description: newDesc || undefined });
                     saveDatabase();
                     document.getElementById('edit-tx-dialog').close();
                     renderApp();
@@ -8447,22 +9266,18 @@ function setupEventListeners() {
                 return;
             }
 
-            const hasActiveSplit = _splitEditorState && _splitEditorState.dynId === id && _splitEditorState.pieces.length > 0;
-            // While a split is active, the saved override `amount` must stay the GROUP TOTAL (what
-            // the balance walk/computeSplitAnchorAmount expects to derive the anchor's remainder
-            // from) — not the disabled amount field's displayed anchor-remainder value, which would
-            // double-subtract the pieces on every subsequent read.
-            const amountToSave = hasActiveSplit ? _splitEditorState.totalAmount : Math.abs(newAmt);
             saveDynamicTxOverride(id, {
                 description: newDesc || undefined,
-                amount: isOutflow ? -amountToSave : amountToSave,
-                deleted: false
+                amount: isOutflow ? -Math.abs(newAmt) : Math.abs(newAmt),
+                deleted: false,
+                // Pins the displayed date explicitly for joint-transfer types only (Asia's own
+                // anchor, or a non-split Jason anchor reached some other way) — see the matching
+                // comment on the split-editor's #edit-tx-amount 'change' listener for why an
+                // occurrence with no date override yet can otherwise silently relocate itself via
+                // the payday-auto-shift the instant a real amount gets saved on it. Not applied to
+                // paycheck/delivery/deferred-xfer, which have no such auto-shift concept at all.
+                ...(isJointTransferDynamicTx({ isSplitterDynamic: true, id }) ? { date: newDate || origDate } : {})
             });
-            // Persist any Split Transfer changes made in this same dialog session (item 3 of the
-            // Phase 2 plan) — _splitEditorState is only non-null when this id is a Jason-side anchor.
-            if (_splitEditorState && _splitEditorState.dynId === id) {
-                saveDynamicTransferSplit(id, _splitEditorState.pieces);
-            }
             saveDatabase();
             document.getElementById('edit-tx-dialog').close();
             renderAppImmediate();
@@ -8482,7 +9297,7 @@ function setupEventListeners() {
         const isRecurring = document.getElementById('edit-tx-recurring').checked;
         const recurringDay = parseInt(document.getElementById('edit-tx-recurring-day').value) || 0;
         const recurringEnabled = newKind === 'charge' && isRecurring;
-        const duplicateCardId = state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' ? state.dashboardType : '');
+        const duplicateCardId = state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' && state.dashboardType !== 'asia' ? state.dashboardType : '');
 
         if (editMode === 'duplicate' && duplicateCardId) {
             const duplicateAmount = parseFloat(document.getElementById('edit-tx-amount').value);
@@ -8651,7 +9466,13 @@ function setupEventListeners() {
                 syncCheckingTransferMirror(tx, 'personal');
                 syncCheckingPaymentToCard(tx);
 
-                if (origKey !== targetKey) {
+                // If this is a savings-transfer mirror and its Checking Account field was switched to
+                // Joint, switchSavingsTransferAccount() already relocated it into jointRegister as a
+                // fresh object (via the savings-side entry's own transferSource + sync function) — tx
+                // is now stale/detached from personalCalendar entirely, so the same-list month-bucket
+                // move below must be skipped or list.indexOf(tx) (now -1) would splice the wrong row.
+                const movedAccount = tx.savingsTransfer && switchSavingsTransferAccount(tx, document.getElementById('edit-tx-savings-account')?.value);
+                if (!movedAccount && origKey !== targetKey) {
                     const idx = list.indexOf(tx);
                     list.splice(idx, 1);
                     ensureYearMonthInitialized(targetDateObj.getFullYear(), MONTH_ORDER[targetDateObj.getMonth()]);
@@ -8690,6 +9511,11 @@ function setupEventListeners() {
                         removeCheckingTransferMirror(tx, 'joint');
                         tx.transferId = '';
                     }
+                    if (asiaAmt !== 0 && !tx.asiaTransferId) tx.asiaTransferId = 'checking-xfer-' + Math.random().toString(36).substr(2, 9);
+                    if (asiaAmt === 0 && tx.asiaTransferId) {
+                        removeAsiaCheckingTransferMirror(tx, 'joint');
+                        tx.asiaTransferId = '';
+                    }
                 } else {
                     const editDir = document.getElementById('edit-trans-direction')?.value || 'charge';
                     const rawAmt = parseFloat(document.getElementById('edit-tx-amount').value);
@@ -8698,8 +9524,47 @@ function setupEventListeners() {
                     }
                 }
                 syncCheckingTransferMirror(tx, 'joint');
+                syncAsiaCheckingTransferMirror(tx);
                 syncCheckingPaymentToCard(tx);
+                // jointRegister is a flat array (no month-bucket move to guard against, unlike the
+                // personal/asia branches) — if the Checking Account field was switched away from
+                // Joint, this just relocates tx out of jointRegister into the right pool's calendar.
+                if (tx.savingsTransfer) switchSavingsTransferAccount(tx, document.getElementById('edit-tx-savings-account')?.value);
                 logSystem(`Updated joint transaction: ${newDesc} (${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
+            }
+        } else if (state.dashboardType === 'asia') {
+            // Phase 1 scope: plain manual transaction only — no automatic-payment/linkedBillId/card-
+            // sync concepts apply to Asia's checking yet (see Jason's branch above for those, once
+            // Phase 2/4 add the equivalent to her side).
+            const editDir = document.getElementById('edit-trans-direction')?.value || 'charge';
+            const rawAmt = parseFloat(document.getElementById('edit-tx-amount').value);
+            if (isNaN(rawAmt)) { alert('Enter a valid amount before saving.'); return; }
+            const newAmt = editDir === 'charge' ? -Math.abs(rawAmt) : Math.abs(rawAmt);
+
+            const origDateObj = new Date(dateOrig + 'T00:00:00');
+            const origKey = `${origDateObj.getFullYear()}-${MONTH_ORDER[origDateObj.getMonth()]}`;
+            const targetDateObj = new Date(newDate + 'T00:00:00');
+            const targetKey = `${targetDateObj.getFullYear()}-${MONTH_ORDER[targetDateObj.getMonth()]}`;
+
+            const list = state.asiaCalendar[origKey] || [];
+            const tx = list.find(t => t.id === id);
+            if (tx) {
+                tx.date = newDate;
+                tx.description = newDesc;
+                tx.amount = newAmt;
+                syncAsiaCheckingTransferMirror(tx, 'asia');
+                // See the matching comment in the personal branch above — switchSavingsTransferAccount()
+                // fully relocates tx out of asiaCalendar when moved to Joint, so the same-list month-
+                // bucket move below must be skipped in that case.
+                const movedAccount = tx.savingsTransfer && switchSavingsTransferAccount(tx, document.getElementById('edit-tx-savings-account')?.value);
+                if (!movedAccount && origKey !== targetKey) {
+                    const idx = list.indexOf(tx);
+                    list.splice(idx, 1);
+                    ensureYearMonthInitialized(targetDateObj.getFullYear(), MONTH_ORDER[targetDateObj.getMonth()]);
+                    if (!state.asiaCalendar[targetKey]) state.asiaCalendar[targetKey] = [];
+                    state.asiaCalendar[targetKey].push(tx);
+                }
+                logSystem(`Updated Asia transaction: ${newDesc} ($${newAmt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
             }
         } else {
             // Credit Card fallback
@@ -8849,14 +9714,27 @@ function setupEventListeners() {
     // Payroll Settings" button and (if present) a direct trigger can reach it. Per explicit user
     // request, 2026-08-05: Payroll used to have its own separate header button; it now only opens
     // from inside the consolidated Account Settings dialog.
-    window.openPayrollConfigModal = function() {
-        const config = state.payrollConfig;
-        document.getElementById('payroll-gross-pay').value = config.grossBasePay || 0;
-        document.getElementById('payroll-annual-salary').value = ((Number(config.grossBasePay) || 0) * 26).toFixed(2);
-        document.getElementById('payroll-stipend').value = config.stipendAmount || 0;
+    window.openPayrollConfigModal = function(target) {
+        _payrollConfigTarget = target === 'asia' ? 'asia' : 'jason';
+        const titleEl = document.getElementById('payroll-config-title');
+        if (titleEl) titleEl.textContent = _payrollConfigTarget === 'asia' ? "⚙️ Asia's Payroll Tracker" : "⚙️ Jason's Payroll Tracker";
+        const config = getActivePayrollConfig();
+        const isSemi = config.payFrequency === 'semimonthly';
+        document.getElementById('payroll-frequency').value = isSemi ? 'semimonthly' : 'biweekly';
+        document.getElementById('payroll-biweekly-group').classList.toggle('hidden', isSemi);
+        document.getElementById('payroll-semimonthly-group').classList.toggle('hidden', !isSemi);
+        const annualHint = document.querySelector('label[for="payroll-annual-salary"] span');
+        if (annualHint) annualHint.textContent = `(${isSemi ? 24 : 26} paychecks/yr)`;
         document.getElementById('payroll-first-date').value = config.firstPayDate || '2026-01-02';
+        document.getElementById('payroll-day-of-week').value = String(new Date((config.firstPayDate || '2026-01-02') + 'T00:00:00').getDay());
+        document.getElementById('payroll-semi-day1').value = String(config.semiMonthlyDay1 ?? 15);
+        document.getElementById('payroll-semi-day2').value = String(config.semiMonthlyDay2 ?? 'last');
+        document.getElementById('payroll-semi-start-date').value = config.semiMonthlyStartDate || '';
+        document.getElementById('payroll-gross-pay').value = config.grossBasePay || 0;
+        document.getElementById('payroll-annual-salary').value = ((Number(config.grossBasePay) || 0) * (isSemi ? 24 : 26)).toFixed(2);
+        document.getElementById('payroll-stipend').value = config.stipendAmount || 0;
         const minBufferEl = document.getElementById('payroll-minimum-buffer');
-        if (minBufferEl) minBufferEl.value = getPersonalMinimumBuffer();
+        if (minBufferEl) minBufferEl.value = _payrollConfigTarget === 'asia' ? getAsiaMinimumBuffer() : getPersonalMinimumBuffer();
 
         // Custom check rates check
         const hasCustom = !!config.hasDifferentRates;
@@ -8890,6 +9768,7 @@ function setupEventListeners() {
         exitPayrollEstimateEditMode();
         renderPayrollEstimatesList();
         renderPayrollAddedDeductionsList();
+        renderPayrollAddedIncomeList();
         updatePayrollPreview();
 
         document.getElementById('payroll-config-dialog').showModal();
@@ -8901,19 +9780,60 @@ function setupEventListeners() {
         updatePayrollPreview();
     });
 
-    // Annual Salary and Gross Pay per Paycheck are two views of the same number (÷26) — keep them
-    // in sync so a raise can be entered either way. Only the per-paycheck field is actually saved;
-    // annual is a pure display/entry convenience recomputed from it. Programmatic .value writes
-    // don't re-fire 'input', so this can't loop, and since these listeners are attached directly to
-    // the fields (target phase) they run before the delegated form listener below (bubble phase),
-    // so the preview always sees the freshly-synced pair.
+    // Annual Salary and Gross Pay per Paycheck are two views of the same number (÷ pay periods per
+    // year) — keep them in sync so a raise can be entered either way. Only the per-paycheck field is
+    // actually saved; annual is a pure display/entry convenience recomputed from it. Programmatic
+    // .value writes don't re-fire 'input', so this can't loop, and since these listeners are
+    // attached directly to the fields (target phase) they run before the delegated form listener
+    // below (bubble phase), so the preview always sees the freshly-synced pair.
+    const currentFormPayPeriods = () => document.getElementById('payroll-frequency').value === 'semimonthly' ? 24 : 26;
     document.getElementById('payroll-gross-pay').addEventListener('input', (e) => {
         const gross = parseFloat(e.target.value);
-        if (!isNaN(gross)) document.getElementById('payroll-annual-salary').value = (gross * 26).toFixed(2);
+        if (!isNaN(gross)) document.getElementById('payroll-annual-salary').value = (gross * currentFormPayPeriods()).toFixed(2);
     });
     document.getElementById('payroll-annual-salary').addEventListener('input', (e) => {
         const annual = parseFloat(e.target.value);
-        if (!isNaN(annual)) document.getElementById('payroll-gross-pay').value = (annual / 26).toFixed(2);
+        if (!isNaN(annual)) document.getElementById('payroll-gross-pay').value = (annual / currentFormPayPeriods()).toFixed(2);
+    });
+
+    // Pay Frequency toggle — shows the matching panel (Bi-Weekly's First Pay Date + Day of Week, or
+    // Semi-Monthly's two day pickers), relabels the Annual Salary hint to the real period count, and
+    // re-syncs Annual Salary from the still-accurate per-paycheck Gross Pay (not the other way
+    // around — the per-paycheck figure is the one the user is less likely to have just been mid-way
+    // through typing).
+    const payrollAnnualHint = document.querySelector('label[for="payroll-annual-salary"] span');
+    document.getElementById('payroll-frequency').addEventListener('change', (e) => {
+        const isSemi = e.target.value === 'semimonthly';
+        document.getElementById('payroll-biweekly-group').classList.toggle('hidden', isSemi);
+        document.getElementById('payroll-semimonthly-group').classList.toggle('hidden', !isSemi);
+        if (payrollAnnualHint) payrollAnnualHint.textContent = `(${isSemi ? 24 : 26} paychecks/yr)`;
+        const gross = parseFloat(document.getElementById('payroll-gross-pay').value);
+        if (!isNaN(gross)) document.getElementById('payroll-annual-salary').value = (gross * currentFormPayPeriods()).toFixed(2);
+        updatePayrollPreview();
+    });
+
+    // Day of Week (Bi-Weekly only) — a pure convenience over First Pay Date, not an independent
+    // anchor (a weekday alone can't disambiguate which of the two alternating weeks is a pay week).
+    // Picking a weekday snaps First Pay Date to the nearest date (within 3 days either direction,
+    // preferring forward on an exact tie) that actually falls on it, so the two fields never
+    // silently disagree about which day of the week paychecks land on.
+    document.getElementById('payroll-day-of-week').addEventListener('change', (e) => {
+        const targetDow = parseInt(e.target.value);
+        const dateInput = document.getElementById('payroll-first-date');
+        const current = dateInput.value ? new Date(dateInput.value + 'T00:00:00') : new Date();
+        const currentDow = current.getDay();
+        let delta = targetDow - currentDow;
+        if (delta > 3) delta -= 7;
+        if (delta < -3) delta += 7;
+        current.setDate(current.getDate() + delta);
+        dateInput.value = formatLocalDate(current);
+        updatePayrollPreview();
+    });
+    // Keep Day of Week in sync the other direction too — editing First Pay Date directly should
+    // update the dropdown to match, not leave it silently describing the old date.
+    document.getElementById('payroll-first-date').addEventListener('change', (e) => {
+        if (!e.target.value) return;
+        document.getElementById('payroll-day-of-week').value = String(new Date(e.target.value + 'T00:00:00').getDay());
     });
 
     // Live net-pay preview recalculates on any relevant field change (delegated to the form so it
@@ -8940,19 +9860,38 @@ function setupEventListeners() {
             const month = document.getElementById('payroll-est-month').value;
             const year = parseInt(document.getElementById('payroll-est-year').value);
             const type = document.getElementById('payroll-est-type').value;
-            const val = parseFloat(document.getElementById('payroll-est-val').value);
+            // The rate-value field is genuinely OPTIONAL — leaving it blank means "no pay-rate
+            // change, only apply the 401(k) bump below." Root cause of a real reported bug: forcing
+            // a fake near-zero value (e.g. 0.00001) through here as a workaround got stored as a
+            // real 'fixed'-type rate — which REPLACES the pay rate outright once triggered (see the
+            // sortedEstimates.forEach in getJasonPayrollAmount/getAsiaPayrollAmount), silently
+            // zeroing out every paycheck from the effective date forward. A genuinely blank/absent
+            // value is already treated as a no-op by that same code for both percent and fixed
+            // types — the fix is letting the value truly stay blank instead of coercing it to a
+            // number at all.
+            const valRaw = document.getElementById('payroll-est-val').value.trim();
+            const hasVal = valRaw !== '';
+            const val = hasVal ? parseFloat(valRaw) : undefined;
             const k401BumpInput = parseFloat(document.getElementById('payroll-est-401k-bump').value);
             const k401BumpPercent = isNaN(k401BumpInput) ? 1 : k401BumpInput;
 
-            if (!month || isNaN(year) || isNaN(val) || val <= 0) {
-                alert('Please enter valid raise estimate fields.');
+            if (!month || isNaN(year)) {
+                alert('Please select a valid effective month and year.');
+                return;
+            }
+            if (hasVal && (isNaN(val) || val <= 0)) {
+                alert('Enter a valid positive raise amount, or leave it blank to apply only a 401(k) bump.');
+                return;
+            }
+            if (!hasVal && k401BumpPercent === 0) {
+                alert('Enter a raise amount, a 401(k) bump percentage, or both — as entered this estimate would do nothing.');
                 return;
             }
 
             const isRecurring = document.getElementById('payroll-est-recur').checked;
 
             if (payrollEstimateEditingId) {
-                const target = state.payrollConfig.estimates.find(x => x.id === payrollEstimateEditingId);
+                const target = getActivePayrollConfig().estimates.find(x => x.id === payrollEstimateEditingId);
                 if (target) {
                     target.effectiveMonth = month;
                     target.effectiveYear = year;
@@ -8963,8 +9902,9 @@ function setupEventListeners() {
                 }
                 exitPayrollEstimateEditMode();
             } else {
-                state.payrollConfig.estimates = state.payrollConfig.estimates || [];
-                state.payrollConfig.estimates.push({
+                const cfg = getActivePayrollConfig();
+                cfg.estimates = cfg.estimates || [];
+                cfg.estimates.push({
                     id: 'est-' + Math.random().toString(36).substr(2, 9),
                     effectiveMonth: month,
                     effectiveYear: year,
@@ -9002,8 +9942,9 @@ function setupEventListeners() {
                 return;
             }
 
-            state.payrollConfig.deductions.additionalItems = state.payrollConfig.deductions.additionalItems || [];
-            state.payrollConfig.deductions.additionalItems.push({
+            const cfg = getActivePayrollConfig();
+            cfg.deductions.additionalItems = cfg.deductions.additionalItems || [];
+            cfg.deductions.additionalItems.push({
                 id: 'ded-' + Math.random().toString(36).substr(2, 9),
                 label: label,
                 amount: amount,
@@ -9019,21 +9960,60 @@ function setupEventListeners() {
         });
     }
 
+    // Add additional income item trigger — mirrors btn-add-payroll-deduction above.
+    const btnAddPayrollIncome = document.getElementById('btn-add-payroll-income');
+    if (btnAddPayrollIncome) {
+        btnAddPayrollIncome.addEventListener('click', () => {
+            const label = document.getElementById('payroll-added-inc-label').value.trim();
+            const amount = parseFloat(document.getElementById('payroll-added-inc-amount').value);
+            const type = document.getElementById('payroll-added-inc-type').value;
+
+            if (!label || isNaN(amount) || amount <= 0) {
+                alert('Please enter a label and a valid amount for the income item.');
+                return;
+            }
+
+            const cfg = getActivePayrollConfig();
+            cfg.additionalIncomeItems = cfg.additionalIncomeItems || [];
+            cfg.additionalIncomeItems.push({
+                id: 'inc-' + Math.random().toString(36).substr(2, 9),
+                label: label,
+                amount: amount,
+                type: type
+            });
+
+            document.getElementById('payroll-added-inc-label').value = '';
+            document.getElementById('payroll-added-inc-amount').value = '';
+
+            renderPayrollAddedIncomeList();
+            updatePayrollPreview();
+        });
+    }
+
     // Save payroll configuration submit
     document.getElementById('payroll-config-form').addEventListener('submit', (e) => {
         e.preventDefault();
 
         const minBufferEl = document.getElementById('payroll-minimum-buffer');
-        if (minBufferEl) state.personalMinimumBuffer = Math.max(0, parseFloat(minBufferEl.value) || 0);
+        if (minBufferEl) {
+            const bufferVal = Math.max(0, parseFloat(minBufferEl.value) || 0);
+            if (_payrollConfigTarget === 'asia') state.asiaMinimumBuffer = bufferVal;
+            else state.personalMinimumBuffer = bufferVal;
+        }
 
         const formCfg = readPayrollFormAsConfig();
-        state.payrollConfig.grossBasePay = formCfg.grossBasePay;
-        state.payrollConfig.stipendAmount = formCfg.stipendAmount;
-        state.payrollConfig.firstPayDate = document.getElementById('payroll-first-date').value;
-        state.payrollConfig.hasDifferentRates = formCfg.hasDifferentRates;
-        state.payrollConfig.differentRates = formCfg.differentRates;
-        state.payrollConfig.taxProfile = formCfg.taxProfile;
-        state.payrollConfig.deductions = formCfg.deductions;
+        const cfg = getActivePayrollConfig();
+        cfg.payFrequency = formCfg.payFrequency;
+        cfg.semiMonthlyDay1 = formCfg.semiMonthlyDay1;
+        cfg.semiMonthlyDay2 = formCfg.semiMonthlyDay2;
+        cfg.semiMonthlyStartDate = formCfg.semiMonthlyStartDate;
+        cfg.grossBasePay = formCfg.grossBasePay;
+        cfg.stipendAmount = formCfg.stipendAmount;
+        cfg.firstPayDate = document.getElementById('payroll-first-date').value;
+        cfg.hasDifferentRates = formCfg.hasDifferentRates;
+        cfg.differentRates = formCfg.differentRates;
+        cfg.taxProfile = formCfg.taxProfile;
+        cfg.deductions = formCfg.deductions;
 
         saveDatabase();
         document.getElementById('payroll-config-dialog').close();
@@ -9429,6 +10409,7 @@ function updateGlobalTogglesPlacement() {
         'cycle-filter-container',
         'cc-view-toggle',
         'cc-scope-toggle',
+        'savings-pool-toggle',
         'savings-header-view-toggle',
         'savings-header-scope-toggle',
         'bills-metrics-cycle-toggle',
@@ -9466,6 +10447,14 @@ function updateGlobalTogglesPlacement() {
                     if (id === 'cc-scope-toggle' && state.ccViewMode === 'list') { shouldBeVisible = true; targetHost = hostRight; }
                 }
             } else if (activeTab === 'savings') {
+                // Same dedicated identity-toggle slot the Checking dashboard's Jason/Joint/Asia
+                // toggle uses (right under the page title, always visible regardless of scroll) —
+                // per explicit user request, 2026-08-09: was buried inside the Savings Metrics card
+                // further down the page, easy to lose track of which pool was selected.
+                if (id === 'savings-pool-toggle') {
+                    shouldBeVisible = true;
+                    targetHost = hostIdentity;
+                }
                 if (id === 'savings-header-view-toggle') {
                     shouldBeVisible = true;
                     targetHost = hostRight;
@@ -9657,6 +10646,13 @@ function updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans) {
 }
 
 function renderAppImmediate() {
+    // Idempotent — safe to call on every render. Keeps the CSS-facing `.is-mobile-screen` body class
+    // in sync with isMobileViewport()'s own (now screen-based, not zoom-based) determination — every
+    // former `@media (max-width: 900px)` rule in index.css was converted to `body.is-mobile-screen`
+    // per explicit user request, 2026-08-09, so that zooming in on a desktop browser (which only
+    // shrinks the CSS viewport, not window.screen.width) no longer flips the whole app into mobile
+    // layout the way a real @media query always would have.
+    _syncMobileScreenClass();
     // Idempotent — safe to call on every render. Guarantees header-button visibility (Payroll,
     // Starting Balance, the date selector, etc.) is correct after the very first paint too, not just
     // after a tab switch or toggle click explicitly calls updateTabTitles() itself. Without this, a
@@ -9838,6 +10834,8 @@ function refreshOpenDayHighlightsDialog() {
         const source = document.getElementById('cc-today-highlights-list');
         const content = document.getElementById('day-highlights-dialog-content');
         content.replaceChildren(...Array.from(source.childNodes));
+    } else if (dialog.dataset.refreshKind === 'savings') {
+        renderSavingsDayHighlights(targetDate);
     }
 }
 
@@ -9939,7 +10937,7 @@ function syncSavingsCheckingMirror(tx, createIfMissing = false) {
     }
 }
 
-function addLinkedSavingsTransfer(date, description, savingsAmount, source = 'personal') {
+function addLinkedSavingsTransfer(date, description, savingsAmount, source = 'jason') {
     const amount = Number(savingsAmount);
     if (!date || !description || !Number.isFinite(amount) || amount === 0) return false;
     state.savingsTransactions = state.savingsTransactions || [];
@@ -9951,7 +10949,7 @@ function addLinkedSavingsTransfer(date, description, savingsAmount, source = 'pe
         kind: 'transfer',
         transferId: 'savings-xfer-' + Math.random().toString(36).substr(2, 9),
         savingsTransfer: true,
-        transferSource: source === 'joint' ? 'joint' : 'personal',
+        transferSource: source === 'joint' ? 'joint' : 'jason',
         personalMirrorDetached: false,
         createdAt: Date.now()
     };
@@ -9979,28 +10977,225 @@ function addSavingsInterest(date, description, amount) {
 function deleteSavingsTransaction(id) {
     const index = (state.savingsTransactions || []).findIndex(tx => tx.id === id);
     if (index < 0) return null;
-    return state.savingsTransactions.splice(index, 1)[0];
+    const removed = state.savingsTransactions.splice(index, 1)[0];
+    // Deleting from the Savings side used to leave the linked checking-side mirror behind as an
+    // orphaned phantom transaction (the reverse of the checking-side deletion cascade fixed
+    // 2026-08-07) — confirmed real bug via user report, same day. A transfer's mirror can only ever
+    // exist if it still has a transferId (an 'interest' entry never had one to begin with).
+    if (removed.transferId) {
+        const mirror = findSavingsCheckingMirror(removed.transferId);
+        if (mirror) mirror.list.splice(mirror.list.indexOf(mirror.tx), 1);
+    }
+    return removed;
+}
+
+// Asia's own Savings pool — a fully separate tracker from the household one above (own starting
+// balance, own transaction list, own running balance), fundable from Asia's own checking OR Joint
+// (never Jason's checking). Mirrors the household Savings functions 1:1 rather than sharing state,
+// per explicit user request, Phase 3, 2026-08-07. getSavingsToday()/getSavingsPeriodBounds() are
+// pure date math with no pool dependency, so they're reused directly — no Asia-specific copies.
+function getAsiaSavingsTransactionsForPeriod(year, month, scope = 'month') {
+    const { start, end } = getSavingsPeriodBounds(year, month, scope);
+    return (state.asiaSavingsTransactions || [])
+        .filter(tx => tx.date >= start && tx.date <= end)
+        .sort((a, b) => a.date.localeCompare(b.date) || String(a.id).localeCompare(String(b.id)));
+}
+
+function getAsiaSavingsStartingBalance() {
+    return Number(state.asiaSavingsStartingBalance) || 0;
+}
+
+function getAsiaSavingsProjectedBalanceAtDate(date, inclusive = true) {
+    return (state.asiaSavingsTransactions || [])
+        .filter(tx => inclusive ? tx.date <= date : tx.date < date)
+        .reduce((balance, tx) => balance + Number(tx.amount || 0), getAsiaSavingsStartingBalance());
+}
+
+// Searches Asia's own checking (asiaCalendar) and Joint (jointRegister) for an Asia-savings
+// transfer's mirror — mirrors findSavingsCheckingMirror() above. Asia-savings transferIds are
+// always prefixed 'asia-savings-xfer-' (see addLinkedAsiaSavingsTransfer below), which is what lets
+// the shared removeCheckingTransferMirror()/syncCheckingTransferMirror() functions tell an
+// Asia-savings joint mirror apart from a household-savings one without a second boolean flag.
+function findAsiaSavingsCheckingMirror(transferId) {
+    let match = null;
+    Object.entries(state.asiaCalendar || {}).some(([key, list]) => {
+        const tx = list.find(item => item.transferId === transferId && item.savingsTransfer);
+        if (!tx) return false;
+        match = { source: 'asia', key, list, tx };
+        return true;
+    });
+    if (match) return match;
+    const jointIndex = state.jointRegister.findIndex(item => item.transferId === transferId && item.savingsTransfer);
+    if (jointIndex > -1) match = { source: 'joint', key: null, list: state.jointRegister, tx: state.jointRegister[jointIndex] };
+    return match;
+}
+
+function syncAsiaSavingsCheckingMirror(tx, createIfMissing = false) {
+    if (!tx?.transferId) return;
+    const existing = findAsiaSavingsCheckingMirror(tx.transferId);
+    if ((tx.kind || 'transfer') === 'interest') {
+        if (existing) existing.list.splice(existing.list.indexOf(existing.tx), 1);
+        return;
+    }
+    if (!existing && (tx.personalMirrorDetached || !createIfMissing)) return;
+    const targetSource = tx.transferSource === 'joint' ? 'joint' : 'asia';
+    const mirrorAmount = -Number(tx.amount || 0);
+
+    if (existing && existing.source !== targetSource) existing.list.splice(existing.list.indexOf(existing.tx), 1);
+    const stillExisting = existing && existing.source === targetSource ? existing : null;
+
+    if (targetSource === 'joint') {
+        const mirror = stillExisting?.tx || {
+            id: 'j-' + Math.random().toString(36).substr(2, 9),
+            transferId: tx.transferId,
+            savingsTransfer: true
+        };
+        mirror.date = tx.date;
+        mirror.description = tx.description;
+        mirror.name = tx.description;
+        mirror.amount = mirrorAmount;
+        mirror.type = mirrorAmount < 0 ? 'expense' : 'income';
+        mirror.savingsTransfer = true;
+        if (!stillExisting) state.jointRegister.push(mirror);
+    } else {
+        const dateObj = new Date(tx.date + 'T00:00:00');
+        const month = MONTH_ORDER[dateObj.getMonth()];
+        const targetKey = `${dateObj.getFullYear()}-${month}`;
+        ensureYearMonthInitialized(dateObj.getFullYear(), month);
+        if (!state.asiaCalendar[targetKey]) state.asiaCalendar[targetKey] = [];
+        const mirror = stillExisting?.tx || {
+            id: 'a-' + Math.random().toString(36).substr(2, 9),
+            transferId: tx.transferId,
+            savingsTransfer: true
+        };
+        mirror.date = tx.date;
+        mirror.description = tx.description;
+        mirror.amount = mirrorAmount;
+        mirror.savingsTransfer = true;
+        if (stillExisting && stillExisting.key !== targetKey) stillExisting.list.splice(stillExisting.list.indexOf(stillExisting.tx), 1);
+        if (!stillExisting || stillExisting.key !== targetKey) state.asiaCalendar[targetKey].push(mirror);
+    }
+}
+
+function addLinkedAsiaSavingsTransfer(date, description, savingsAmount, source = 'asia') {
+    const amount = Number(savingsAmount);
+    if (!date || !description || !Number.isFinite(amount) || amount === 0) return false;
+    state.asiaSavingsTransactions = state.asiaSavingsTransactions || [];
+    const tx = {
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date,
+        description,
+        amount,
+        kind: 'transfer',
+        transferId: 'asia-savings-xfer-' + Math.random().toString(36).substr(2, 9),
+        savingsTransfer: true,
+        transferSource: source === 'joint' ? 'joint' : 'asia',
+        personalMirrorDetached: false,
+        createdAt: Date.now()
+    };
+    state.asiaSavingsTransactions.push(tx);
+    syncAsiaSavingsCheckingMirror(tx, true);
+    return true;
+}
+
+function addAsiaSavingsInterest(date, description, amount) {
+    const interestAmount = Number(amount);
+    if (!date || !description || !Number.isFinite(interestAmount) || interestAmount === 0) return false;
+    state.asiaSavingsTransactions = state.asiaSavingsTransactions || [];
+    state.asiaSavingsTransactions.push({
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date,
+        description,
+        amount: interestAmount,
+        kind: 'interest',
+        savingsTransfer: false,
+        createdAt: Date.now()
+    });
+    return true;
+}
+
+function deleteAsiaSavingsTransaction(id) {
+    const index = (state.asiaSavingsTransactions || []).findIndex(tx => tx.id === id);
+    if (index < 0) return null;
+    const removed = state.asiaSavingsTransactions.splice(index, 1)[0];
+    // See the matching comment in deleteSavingsTransaction() above.
+    if (removed.transferId) {
+        const mirror = findAsiaSavingsCheckingMirror(removed.transferId);
+        if (mirror) mirror.list.splice(mirror.list.indexOf(mirror.tx), 1);
+    }
+    return removed;
+}
+
+function moveAsiaSavingsTransaction(id, targetDate) {
+    const tx = (state.asiaSavingsTransactions || []).find(item => item.id === id);
+    if (!tx || tx.date === targetDate) return;
+    tx.date = targetDate;
+    syncAsiaSavingsCheckingMirror(tx, false);
+    saveDatabase();
+    renderApp();
+    logSuccess(`Moved savings entry to ${targetDate}: ${tx.description}`);
+}
+
+// Which Savings pool (Household or Asia's own, Phase 3) the Savings tab currently shows — a single
+// shared set of DOM containers is reused for both (a toggle, not side-by-side display), the same
+// "one shared container, contextual by pool" pattern the Jason/Joint/Asia checking dashboard uses,
+// rather than duplicating the calendar/list/year-summary markup and render functions per pool (which
+// would reopen exactly the "two independent implementations of the same running-balance logic
+// silently disagreeing" bug class this app has been bitten by before — see getJointContinuousBalancesThroughMonth()'s history).
+function getActiveSavingsPool() {
+    const isAsia = state.savingsPoolView === 'asia';
+    return {
+        isAsia,
+        transactions: isAsia ? (state.asiaSavingsTransactions || []) : (state.savingsTransactions || []),
+        transactionsForPeriod: isAsia ? getAsiaSavingsTransactionsForPeriod : getSavingsTransactionsForPeriod,
+        startingBalance: isAsia ? getAsiaSavingsStartingBalance : getSavingsStartingBalance,
+        balanceAtDate: isAsia ? getAsiaSavingsProjectedBalanceAtDate : getSavingsProjectedBalanceAtDate,
+        addTransfer: isAsia ? addLinkedAsiaSavingsTransfer : addLinkedSavingsTransfer,
+        addInterest: isAsia ? addAsiaSavingsInterest : addSavingsInterest,
+        deleteTx: isAsia ? deleteAsiaSavingsTransaction : deleteSavingsTransaction,
+        moveTx: isAsia ? moveAsiaSavingsTransaction : moveSavingsTransaction,
+        // The entry/edit forms' "Checking Account" <select> keeps value="personal" for its non-Joint
+        // option regardless of pool (see updateSavingsSourceOptionLabels()) — only its label changes
+        // ("Jason" vs "Asia") — so reading it always maps that raw value through defaultSource here.
+        defaultSource: isAsia ? 'asia' : 'jason',
+        ledgerName: isAsia ? "Asia's checking ledger" : 'the Personal ledger'
+    };
+}
+
+// Keeps the entry form's and edit dialog's "Checking Account" dropdown showing the right non-Joint
+// option label for whichever pool is active — the option's value attribute deliberately stays
+// "personal" in both cases (see getActiveSavingsPool()'s defaultSource comment).
+function updateSavingsSourceOptionLabels() {
+    const isAsia = state.savingsPoolView === 'asia';
+    ['savings-transfer-source', 'savings-edit-source'].forEach(id => {
+        const opt = document.getElementById(id)?.querySelector('option[value="personal"]');
+        if (opt) opt.textContent = isAsia ? 'Asia' : 'Jason';
+    });
 }
 
 function renderSavingsTab() {
     state.savingsTransactions = state.savingsTransactions || [];
+    state.asiaSavingsTransactions = state.asiaSavingsTransactions || [];
+    const pool = getActiveSavingsPool();
+    document.querySelectorAll('#savings-pool-toggle [data-savings-pool]').forEach(btn => btn.classList.toggle('active', btn.dataset.savingsPool === (pool.isAsia ? 'asia' : 'household')));
+    updateSavingsSourceOptionLabels();
     const isCalendar = state.savingsViewMode !== 'list';
     const scope = isCalendar ? 'month' : (state.savingsListScope || 'month');
     const today = getSavingsToday();
     const bounds = getSavingsPeriodBounds(state.currentYear, state.currentMonth, scope);
-    const periodTransactions = getSavingsTransactionsForPeriod(state.currentYear, state.currentMonth, scope);
+    const periodTransactions = pool.transactionsForPeriod(state.currentYear, state.currentMonth, scope);
     const futureTransfers = periodTransactions.filter(tx => (tx.kind || 'transfer') === 'transfer' && tx.date > today);
     const projectedTransferNet = futureTransfers.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
     const projectedDeposits = futureTransfers.filter(tx => Number(tx.amount) > 0).reduce((sum, tx) => sum + Number(tx.amount), 0);
     const projectedWithdrawals = futureTransfers.filter(tx => Number(tx.amount) < 0).reduce((sum, tx) => sum + Math.abs(Number(tx.amount)), 0);
-    const currentBalance = getSavingsProjectedBalanceAtDate(today);
-    const endBalance = getSavingsProjectedBalanceAtDate(bounds.end);
-    const completedCount = state.savingsTransactions.filter(tx => tx.date <= today).length;
+    const currentBalance = pool.balanceAtDate(today);
+    const endBalance = pool.balanceAtDate(bounds.end);
+    const completedCount = pool.transactions.filter(tx => tx.date <= today).length;
 
     document.getElementById('savings-current-display').textContent = `${currentBalance < 0 ? '-' : ''}$${Math.abs(currentBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     document.getElementById('savings-current-display').className = `card-value ${currentBalance >= 0 ? 'positive' : 'negative'}`;
     document.getElementById('savings-current-sub').textContent = `Starting balance plus ${completedCount} completed entr${completedCount === 1 ? 'y' : 'ies'} through ${formatDateDisplay(today)}`;
-    document.getElementById('savings-current-amount').value = getSavingsStartingBalance().toFixed(2);
+    document.getElementById('savings-current-amount').value = pool.startingBalance().toFixed(2);
     document.getElementById('savings-period-total').textContent = futureTransfers.length ? `${projectedTransferNet < 0 ? '-' : '+'}$${Math.abs(projectedTransferNet).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '$0.00';
     document.getElementById('savings-period-total').className = `card-value ${projectedTransferNet >= 0 ? 'positive' : 'negative'}`;
     document.getElementById('savings-period-total-sub').innerHTML = futureTransfers.length
@@ -10010,7 +11205,7 @@ function renderSavingsTab() {
     document.getElementById('savings-projected-display').className = `card-value ${endBalance >= 0 ? 'positive' : 'negative'}`;
     document.getElementById('savings-projected-sub').textContent = bounds.end < today ? `Actual balance at ${formatDateDisplay(bounds.end)}` : `Projected balance at ${formatDateDisplay(bounds.end)}`;
 
-    const yearEndBalance = getSavingsProjectedBalanceAtDate(`${state.currentYear}-12-31`);
+    const yearEndBalance = pool.balanceAtDate(`${state.currentYear}-12-31`);
     const yearEndCard = document.getElementById('savings-year-projection-display');
     if (yearEndCard) {
         yearEndCard.textContent = `${yearEndBalance < 0 ? '-' : ''}$${Math.abs(yearEndBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
@@ -10023,7 +11218,12 @@ function renderSavingsTab() {
     document.getElementById('savings-calendar-view').classList.remove('hidden');
     document.getElementById('savings-list-view').classList.toggle('hidden', isCalendar);
     document.getElementById('savings-header-scope-toggle').classList.toggle('hidden', isCalendar);
-    document.getElementById('savings-ledger-title').textContent = isCalendar ? 'Savings Calendar' : 'Savings Ledger';
+    // Search/Download CSV/Clear/+Transaction are List-table-only controls (nothing to search/export/
+    // clear about a calendar grid) — Calendar view has its own equivalents already (click a day, or
+    // the always-visible Add Savings Entry sidebar). Was unconditionally visible in both views.
+    // Confirmed real bug, 2026-08-07.
+    document.getElementById('savings-list-only-controls')?.classList.toggle('hidden', isCalendar);
+    document.getElementById('savings-ledger-title').textContent = (isCalendar ? 'Savings Calendar' : 'Savings Ledger') + (pool.isAsia ? ' — Asia' : ' — Jason');
     document.querySelectorAll('[data-savings-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.savingsMode === state.savingsViewMode));
     document.querySelectorAll('[data-savings-scope]').forEach(btn => btn.classList.toggle('active', btn.dataset.savingsScope === scope));
 
@@ -10038,6 +11238,7 @@ function renderSavingsTab() {
 }
 
 function renderSavingsCalendar() {
+    const pool = getActiveSavingsPool();
     const container = document.getElementById('savings-calendar-days');
     container.innerHTML = '';
     const monthIndex = MONTH_ORDER.indexOf(state.currentMonth);
@@ -10050,8 +11251,8 @@ function renderSavingsCalendar() {
         const date = new Date(gridStart);
         date.setUTCDate(gridStart.getUTCDate() + i);
         const dateStr = date.toISOString().split('T')[0];
-        const dayTransactions = (state.savingsTransactions || []).filter(tx => tx.date === dateStr).sort((a, b) => String(a.id).localeCompare(String(b.id)));
-        const balance = getSavingsProjectedBalanceAtDate(dateStr);
+        const dayTransactions = pool.transactions.filter(tx => tx.date === dateStr).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+        const balance = pool.balanceAtDate(dateStr);
         const cell = document.createElement('div');
         const isCurrentMonth = date.getUTCMonth() === monthIndex && date.getUTCFullYear() === state.currentYear;
         const todayStr = formatLocalDate(new Date());
@@ -10062,7 +11263,7 @@ function renderSavingsCalendar() {
             const futureClass = tx.date > today ? ' savings-projected-entry' : '';
             return `<div class="day-transaction-item ${kind === 'interest' ? 'income' : 'transfer'}${futureClass}" draggable="true" data-id="${tx.id}" data-date="${dateStr}" data-amount="${tx.amount}" title="${escapeHTML(tx.description)}"><span>${kind === 'interest' ? 'Interest: ' : ''}${escapeHTML(tx.description)}</span><span>${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toFixed(0)}</span></div>`;
         }).join('');
-        cell.innerHTML = `<div class="day-number-wrapper"><span class="day-number">${date.getUTCDate()}</span><span class="day-balance ${balance >= 0 ? 'positive' : 'negative'}">${balance < 0 ? '-' : ''}$${Math.abs(Math.round(balance)).toLocaleString('en-US')}</span></div><div class="day-transactions">${items}${dayTransactions.length > 3 ? `<div class="day-transaction-item muted-text">+${dayTransactions.length - 3} more</div>` : ''}</div>`;
+        cell.innerHTML = `<div class="day-number-wrapper"><span class="day-number">${date.getUTCDate()}</span><span class="day-balance ${balance >= 0 ? 'positive' : 'negative'}">${balance < 0 ? '-' : ''}$${Math.abs(Math.round(balance)).toLocaleString('en-US')}</span></div><div class="day-transactions">${items}${dayTransactions.length > 3 ? `<div class="day-transaction-item muted-text more-link" style="background:rgba(255,255,255,0.03); text-align:center; font-weight:600; cursor:pointer;">+${dayTransactions.length - 3} more</div>` : ''}</div>`;
 
         cell.querySelectorAll('.day-transaction-item[data-id]').forEach(item => {
             item.addEventListener('dragstart', event => {
@@ -10083,13 +11284,22 @@ function renderSavingsCalendar() {
             cell.classList.remove('drag-hover');
             try {
                 const data = JSON.parse(event.dataTransfer.getData('text/plain'));
-                if (data.savingsId) moveSavingsTransaction(data.savingsId, dateStr);
+                if (data.savingsId) pool.moveTx(data.savingsId, dateStr);
             } catch (error) {
                 console.error('Savings drop parsing error:', error);
             }
         });
-        cell.querySelector('.day-number').addEventListener('click', event => {
-            event.stopPropagation();
+        // Whole-cell click (not just the day-number text) — matches the Checking dashboard and
+        // Credit Card/Loan calendars, which already open their day-details dialog from anywhere on
+        // the cell. Was day-number-only, which made most of the cell look clickable but do nothing.
+        // Confirmed real bug, 2026-08-07. Same day-transaction-item/more-link guard those calendars
+        // use, so a click on an existing entry doesn't ALSO fire this (entries have their own
+        // dragstart/dblclick handling above), but the "+N more" pseudo-entry still does.
+        cell.addEventListener('click', event => {
+            if (event.target.closest('.day-transaction-item') && !event.target.closest('.more-link')) return;
+            // showSavingsDayDetails() relocates the real Add Savings Entry form into the day dialog
+            // (see relocateQuickAddFormIntoModal), which prefills its date itself — no separate set
+            // needed here.
             showSavingsDayDetails(dateStr);
         });
         container.appendChild(cell);
@@ -10106,8 +11316,23 @@ function moveSavingsTransaction(id, targetDate) {
     logSuccess(`Moved savings entry to ${targetDate}: ${tx.description}`);
 }
 
+// Syncs #savings-edit-type-group's active-state buttons and the checking-account field's visibility
+// to whatever #savings-edit-type's hidden value currently is. Top-level (not inside setupEventListeners)
+// since both the toggle buttons' own click listener and openSavingsEditDialog (populating the dialog
+// for an existing entry) need to call it.
+function updateSavingsEditTypeButtons() {
+    const entryType = document.getElementById('savings-edit-type').value;
+    document.querySelectorAll('#savings-edit-type-group .direction-btn').forEach(b => {
+        b.classList.remove('active-charge', 'active-deposit', 'active-interest');
+        if (b.dataset.savingsEntryType === entryType) {
+            b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : 'active-deposit'));
+        }
+    });
+    document.getElementById('savings-edit-source-group').classList.toggle('hidden', entryType === 'interest');
+}
+
 function openSavingsEditDialog(id) {
-    const tx = (state.savingsTransactions || []).find(item => item.id === id);
+    const tx = getActiveSavingsPool().transactions.find(item => item.id === id);
     if (!tx) return;
     const kind = tx.kind || 'transfer';
     // Stored kind is only 'transfer'/'interest' — the UI's 3 Entry Type options split 'transfer'
@@ -10116,41 +11341,58 @@ function openSavingsEditDialog(id) {
     const entryType = kind === 'interest' ? 'interest' : (Number(tx.amount) < 0 ? 'withdrawal' : 'deposit');
     document.getElementById('savings-edit-id').value = tx.id;
     document.getElementById('savings-edit-type').value = entryType;
-    document.getElementById('savings-edit-source').value = tx.transferSource === 'joint' ? 'joint' : 'personal';
-    document.getElementById('savings-edit-source-group').classList.toggle('hidden', entryType === 'interest');
+    document.getElementById('savings-edit-source').value = tx.transferSource === 'joint' ? 'joint' : 'jason';
+    updateSavingsEditTypeButtons();
     document.getElementById('savings-edit-date').value = tx.date;
     document.getElementById('savings-edit-description').value = tx.description;
     document.getElementById('savings-edit-amount').value = Math.abs(Number(tx.amount || 0));
     document.getElementById('savings-edit-dialog').showModal();
 }
 
-function showSavingsDayDetails(date) {
-    const dialog = document.getElementById('savings-day-dialog');
-    const content = document.getElementById('savings-day-dialog-content');
-    const transactions = (state.savingsTransactions || []).filter(tx => tx.date === date).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+// Rebuilds just the transaction-list portion of the shared day-highlights-dialog for a given date —
+// split out from showSavingsDayDetails() so refreshOpenDayHighlightsDialog() can keep the list in
+// sync (e.g. after a delete) without re-relocating the Add Savings Entry form into the modal a second
+// time, mirroring the personal-joint/cc pattern (renderDayHighlights()/renderCCDayHighlights()).
+function renderSavingsDayHighlights(date) {
+    const pool = getActiveSavingsPool();
+    const content = document.getElementById('day-highlights-dialog-content');
+    const transactions = pool.transactions.filter(tx => tx.date === date).sort((a, b) => String(a.id).localeCompare(String(b.id)));
     const formatted = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    document.getElementById('savings-day-dialog-title').textContent = formatted;
-    content.innerHTML = `<div class="savings-day-balance">End-of-day balance: <strong>${getSavingsProjectedBalanceAtDate(date) < 0 ? '-' : ''}$${Math.abs(getSavingsProjectedBalanceAtDate(date)).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong></div>`;
+    const balance = pool.balanceAtDate(date);
+    content.innerHTML = `<div style="margin-bottom: 0.5rem;"><strong>${formatted}</strong><div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 2px;">End-of-day balance: ${balance < 0 ? '-' : ''}$${Math.abs(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div></div>`;
     if (!transactions.length) content.insertAdjacentHTML('beforeend', '<p class="muted-text">No savings entries on this day.</p>');
     transactions.forEach(tx => {
         const row = document.createElement('div');
         row.className = 'highlight-item';
         row.innerHTML = `<div class="highlight-item-left"><span class="highlight-item-title">${escapeHTML(tx.description)}</span><span class="highlight-item-tag">${(tx.kind || 'transfer').toUpperCase()}</span></div><div class="savings-day-actions"><span class="highlight-item-amount ${tx.amount >= 0 ? 'income' : 'expense'}">${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span><button class="action-btn small-btn danger-btn">Delete</button></div>`;
-        row.addEventListener('dblclick', () => { dialog.close(); openSavingsEditDialog(tx.id); });
+        row.addEventListener('dblclick', () => { document.getElementById('day-highlights-dialog').close(); openSavingsEditDialog(tx.id); });
         row.querySelector('button').addEventListener('click', event => {
             event.stopPropagation();
-            if (!confirm(`Delete "${tx.description}" from the Savings ledger? The Personal ledger will not be changed.`)) return;
-            deleteSavingsTransaction(tx.id);
+            if (!confirm(`Delete "${tx.description}" from the Savings ledger? ${pool.ledgerName} will not be changed.`)) return;
+            pool.deleteTx(tx.id);
             saveDatabase();
             renderApp();
-            showSavingsDayDetails(date);
         });
         content.appendChild(row);
     });
+}
+
+// Reuses the SAME shared day-highlights-dialog the Checking dashboard and Credit Card/Loan calendars
+// already use (was its own separate, list-only #savings-day-dialog with no way to add anything) —
+// relocates the real #savings-transfer-form into it via relocateQuickAddFormIntoModal('savings', ...)
+// so clicking a day gets the same "see what's here, add something for this day" experience
+// everywhere in the app. Per explicit user request, 2026-08-07.
+function showSavingsDayDetails(date) {
+    renderSavingsDayHighlights(date);
+    const dialog = document.getElementById('day-highlights-dialog');
+    dialog.dataset.refreshKind = 'savings';
+    dialog.dataset.refreshDate = date;
+    relocateQuickAddFormIntoModal('savings', date);
     if (!dialog.open) dialog.showModal();
 }
 
 function renderSavingsList(transactions, periodStart) {
+    const pool = getActiveSavingsPool();
     const body = document.getElementById('savings-list-body');
     if (!transactions.length) {
         body.innerHTML = '<tr><td colspan="7" class="muted-text" style="text-align:center;">No savings entries in this period.</td></tr>';
@@ -10160,7 +11402,7 @@ function renderSavingsList(transactions, periodStart) {
     // so it's computed first against `transactions` as passed in (already date-ordered by the
     // caller) — the sort below only reorders these already-computed rows for display, it never
     // re-derives runningBalance from the sorted order.
-    let running = getSavingsProjectedBalanceAtDate(periodStart, false);
+    let running = pool.balanceAtDate(periodStart, false);
     const today = getSavingsToday();
     const rows = transactions.map(tx => {
         running += Number(tx.amount || 0);
@@ -10218,8 +11460,8 @@ function renderSavingsList(transactions, periodStart) {
     body.querySelectorAll('.savings-editable-row').forEach(row => row.addEventListener('dblclick', () => openSavingsEditDialog(row.dataset.id)));
     body.querySelectorAll('.delete-savings-entry').forEach(button => button.addEventListener('click', event => {
         event.stopPropagation();
-        if (!confirm('Delete this entry from Savings? The Personal ledger will not be changed.')) return;
-        deleteSavingsTransaction(button.dataset.id);
+        if (!confirm(`Delete this entry from Savings? ${pool.ledgerName} will not be changed.`)) return;
+        pool.deleteTx(button.dataset.id);
         saveDatabase();
         renderApp();
     }));
@@ -10229,29 +11471,30 @@ function renderSavingsList(transactions, periodStart) {
 }
 
 function renderSavingsYearSummary() {
+    const pool = getActiveSavingsPool();
     const year = state.currentYear;
     const body = document.getElementById('savings-year-summary-body');
     const foot = document.getElementById('savings-year-summary-foot');
-    document.getElementById('savings-year-summary-title').textContent = `Yearly Savings Summary - ${year}`;
+    document.getElementById('savings-year-summary-title').textContent = `Yearly Savings Summary - ${year} (${pool.isAsia ? 'Asia' : 'Jason'})`;
     let totalIn = 0;
     let totalOut = 0;
     let totalInterest = 0;
     let totalNet = 0;
     const rows = MONTH_ORDER.map((month, index) => {
-        const txs = getSavingsTransactionsForPeriod(year, month, 'month');
+        const txs = pool.transactionsForPeriod(year, month, 'month');
         const transfersIn = txs.filter(tx => (tx.kind || 'transfer') === 'transfer' && Number(tx.amount) > 0).reduce((sum, tx) => sum + Number(tx.amount), 0);
         const withdrawals = txs.filter(tx => (tx.kind || 'transfer') === 'transfer' && Number(tx.amount) < 0).reduce((sum, tx) => sum + Math.abs(Number(tx.amount)), 0);
         const interest = txs.filter(tx => tx.kind === 'interest').reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
         const net = txs.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
         const endDate = `${year}-${String(index + 1).padStart(2, '0')}-${String(new Date(year, index + 1, 0).getDate()).padStart(2, '0')}`;
-        const endBalance = getSavingsProjectedBalanceAtDate(endDate);
+        const endBalance = pool.balanceAtDate(endDate);
         totalIn += transfersIn;
         totalOut += withdrawals;
         totalInterest += interest;
         totalNet += net;
         return `<tr><td><strong>${MONTH_NAMES[month]}</strong></td><td class="positive">+$${transfersIn.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="negative">-$${withdrawals.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${interest >= 0 ? 'positive' : 'negative'}">${interest >= 0 ? '+' : '-'}$${Math.abs(interest).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${net >= 0 ? 'positive' : 'negative'}">${net >= 0 ? '+' : '-'}$${Math.abs(net).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${endBalance >= 0 ? 'positive' : 'negative'}">${endBalance < 0 ? '-' : ''}$${Math.abs(endBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td></tr>`;
     });
-    const yearEnd = getSavingsProjectedBalanceAtDate(`${year}-12-31`);
+    const yearEnd = pool.balanceAtDate(`${year}-12-31`);
     body.innerHTML = rows.join('');
     foot.innerHTML = `<tr><th>Total / Projection</th><th class="positive">+$${totalIn.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</th><th class="negative">-$${totalOut.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</th><th class="${totalInterest >= 0 ? 'positive' : 'negative'}">${totalInterest >= 0 ? '+' : '-'}$${Math.abs(totalInterest).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</th><th class="${totalNet >= 0 ? 'positive' : 'negative'}">${totalNet >= 0 ? '+' : '-'}$${Math.abs(totalNet).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</th><th class="${yearEnd >= 0 ? 'positive' : 'negative'}">${yearEnd < 0 ? '-' : ''}$${Math.abs(yearEnd).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</th></tr>`;
     document.getElementById('savings-year-projection').textContent = `${yearEnd < 0 ? '-' : ''}$${Math.abs(yearEnd).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
@@ -10466,7 +11709,7 @@ function getCalculatedTransferForJason(year, monthShort, cycle) {
     allBills.forEach(bill => {
         const assignedCycle = bill.cycleAllocation === '15th' ? 'cycle15th' : 'cycle1st';
         const allocatedAmount = bill.cycleAllocation === 'both' ? bill.budgetAmount / 2 : (assignedCycle === cycleKey ? bill.budgetAmount : 0);
-        if (bill.ownership !== 'personal') jointBudget += allocatedAmount;
+        if (bill.ownership === 'joint') jointBudget += allocatedAmount;
     });
 
     // Preserve sign: negative "offset" allocations are meant to net against other allocations, not
@@ -10508,7 +11751,7 @@ function getCalculatedTransferForAsia(year, monthShort, cycle) {
     allBills.forEach(bill => {
         const assignedCycle = bill.cycleAllocation === '15th' ? 'cycle15th' : 'cycle1st';
         const allocatedAmount = bill.cycleAllocation === 'both' ? bill.budgetAmount / 2 : (assignedCycle === cycleKey ? bill.budgetAmount : 0);
-        if (bill.ownership !== 'personal') jointBudget += allocatedAmount;
+        if (bill.ownership === 'joint') jointBudget += allocatedAmount;
     });
 
     // Preserve sign: negative "offset" allocations are meant to net against other allocations, not add to them.
@@ -10536,6 +11779,11 @@ let _personalMonthStartCheckpointCache = { true: {}, false: {} };
 let _jointRegisterSortedCache = null;
 let _jointMonthFullContributionCache = {};
 let _jointDynamicCheckpointCache = {};
+let _asiaTxPeriodCache = {};
+let _sortedAsiaCalendarKeysCache = null;
+let _asiaMonthFullContributionCache = {};
+let _asiaMonthStartCheckpointCache = {};
+let _asiaRunningBalanceCache = {};
 
 function getSortedPersonalCalendarKeys() {
     if (_sortedPersonalCalendarKeysCache) return _sortedPersonalCalendarKeysCache;
@@ -10919,9 +12167,10 @@ function getAdjustedJasonJointTransferForMonth(year, monthShort, cycle, simTrans
     if (jointOvr && jointOvr.amount !== undefined) {
         const hasSplit = Array.isArray(jointOvr.splitPieces) && jointOvr.splitPieces.length;
         // With a split active, this must be the LIVE calculated total (see
-        // reconcileSplitPiecesWithLiveTotal), not the frozen override amount, so a later Bill
-        // Splitter change flows through here the same way it does on the personal side.
-        const total = hasSplit ? getCalculatedTransferForJason(year, monthShort, cycle) : Math.abs(Number(jointOvr.amount) || 0);
+        // reconcileSplitPiecesWithLiveTotal) — UNLESS the user directly typed a custom total (see
+        // resolveDynamicTransferGroupTotal()'s own comment) — so a later Bill Splitter change flows
+        // through here the same way it does on the personal side.
+        const total = hasSplit ? resolveDynamicTransferGroupTotal(jointOvr, getCalculatedTransferForJason(year, monthShort, cycle)) : Math.abs(Number(jointOvr.amount) || 0);
         // If this occurrence has been split across multiple dates, this anchor-day figure must be
         // the derived remainder, not the raw total — the split pieces (rendered/posted
         // separately on their own dates, reconciled to the same live total) already account for
@@ -11150,30 +12399,18 @@ function getJointContinuousBalancesThroughMonth(year, monthShort) {
         return balances;
     }
 
-    // Asia's side has no automatic payday-shift concept (out of scope — she has no personal-
-    // checking buffer motivating one), but CAN carry an explicit date override (set via the editor
-    // or drag-and-drop) that moves her contribution off the natural 1st/15th day — checked here the
-    // same way Jason's side's shifted/overridden postings are already looked up via
-    // sim.transfersByDate. Built once, scanning every month from the anchor through this walk's end.
-    const asiaAmountByDate = {};
-    {
-        const scanCursor = new Date(anchorDate + 'T00:00:00');
-        scanCursor.setDate(1);
-        while (scanCursor <= end) {
-            const y = scanCursor.getFullYear();
-            const mShort = MONTH_ORDER[scanCursor.getMonth()];
-            const mm = String(scanCursor.getMonth() + 1).padStart(2, '0');
-            ['1st', '15th'].forEach(cycleKey => {
-                const dynId = `joint-xfer-asia-${cycleKey}-${y}-${mShort}`;
-                const naturalDate = `${y}-${mm}-${cycleKey === '1st' ? '01' : '15'}`;
-                const ovr = (state.dynamicOverrides || {})[dynId];
-                const effectiveDate = ovr?.date || naturalDate;
-                const amt = getAdjustedAsiaTransferForMonth(y, mShort, cycleKey);
-                if (amt !== 0) asiaAmountByDate[effectiveDate] = (asiaAmountByDate[effectiveDate] || 0) + amt;
-            });
-            scanCursor.setMonth(scanCursor.getMonth() + 1);
-        }
-    }
+    // Phase 2: Asia now has her own real checking (simulateAsiaCheckingAndAdjustTransfers()), with
+    // the SAME payday-shift + explicit-override effective-date resolution Jason's side already has
+    // — read her own simulation's transfersByDate directly, exactly how Jason's postings just above
+    // are read from `sim.transfersByDate`, instead of independently re-deriving the effective date
+    // here a second time. This was a real bug class waiting to happen: before Phase 2, this function
+    // had its own hand-rolled (no-payday-shift) copy of the "what date does this land on" logic —
+    // now that Asia's side needs the full logic (payday shift), duplicating it here would have meant
+    // two independent implementations that could quietly disagree about which day her contribution
+    // posts on, the exact "two independent balance-walk functions" bug class this app has hit
+    // before. simAsia.transfersByDate is cumulative from Asia's own anchor through this month, same
+    // contract as Jason's sim.
+    const simAsia = getSimulatedAsiaTransferAdjustmentsForMonth(year, monthShort);
 
     while (cur <= end) {
         const dateStr = formatLocalDate(cur);
@@ -11197,7 +12434,10 @@ function getJointContinuousBalancesThroughMonth(year, monthShort) {
             // the calendar and this function agreed with each other (both missing it), which made
             // it look like the List was the buggy one when the List was actually right.
             (sim.splitTransfers[dateStr] || []).forEach(piece => { runningBalance += piece.amount; });
-            if (asiaAmountByDate[dateStr]) runningBalance += asiaAmountByDate[dateStr];
+            // Asia's side — same direct-read pattern as Jason's transfersByDate just above; her own
+            // simulation already resolved payday-shift/override, so this is a pure sum of whatever
+            // it decided landed today, not a second derivation of the same thing.
+            (simAsia.transfersByDate[dateStr] || []).forEach(adj => { runningBalance += adj.amount; });
             (deferredByDate[dateStr] || []).forEach(def => { runningBalance += def.amount; });
         }
         balances[dateStr] = runningBalance;
@@ -11477,7 +12717,7 @@ function renderSummaryCards() {
 
         // Card 1: Net Cash Flow
         if (cardNet) {
-            cardNet.querySelector('.card-header span').textContent = 'Personal Net Cash Flow';
+            cardNet.querySelector('.card-header span').textContent = "Jason's Net Cash Flow";
             cardNet.querySelector('.card-header .card-icon').textContent = '💵';
             const valEl = document.getElementById('net-cash-flow');
             valEl.textContent = `${netFlow >= 0 ? '' : '-'}$${Math.abs(netFlow).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
@@ -11502,7 +12742,7 @@ function renderSummaryCards() {
 
         // Card 4: Remaining Balance
         if (cardBal) {
-            document.getElementById('remaining-balance-title').textContent = 'Personal Remaining Balance';
+            document.getElementById('remaining-balance-title').textContent = "Jason's Remaining Balance";
 
             const mIdx = MONTH_ORDER.indexOf(month);
             const nextMonth = mIdx === 11 ? 'Jan' : MONTH_ORDER[mIdx + 1];
@@ -11535,11 +12775,75 @@ function renderSummaryCards() {
         // month/cycle the dashboard is currently viewing), per explicit user request, 2026-08-04.
         const todayBalCard = document.getElementById('today-balance-val');
         if (todayBalCard) {
-            document.getElementById('today-balance-title').textContent = "Personal Today's Balance";
+            document.getElementById('today-balance-title').textContent = "Jason's Today's Balance";
             const todayIso = formatLocalDate(new Date());
             const tomorrowD = new Date(todayIso + 'T00:00:00');
             tomorrowD.setDate(tomorrowD.getDate() + 1);
             const todayBal = getPersonalAdjustedRunningBalanceAtDate(formatLocalDate(tomorrowD));
+            todayBalCard.textContent = `$${todayBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            todayBalCard.className = `card-value ${todayBal >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('today-balance-sub').textContent = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+        }
+    } else if (state.dashboardType === 'asia') {
+        // --- ASIA'S CHECKING SUMMARY --- Phase 1 scope: no gig income, no joint bills/contribution
+        // concept apply to her checking yet, so this is a leaner version of the Personal branch
+        // above (plain inflow/outflow from her real ledger — no tax-reserve/split-transfer/payday
+        // complexity, none of which exists on her side yet).
+        if (cardBills) cardBills.classList.add('hidden');
+        if (cardGigs) cardGigs.classList.add('hidden');
+
+        const asiaAnchor = getAsiaStartingBalanceAnchor();
+        const cashFlowMonths = isYearScope ? MONTH_ORDER : [month];
+        let asiaInflow = 0;
+        let asiaOutflow = 0;
+        cashFlowMonths.forEach(m => {
+            getAsiaTransactionsForPeriod(year, m).forEach(tx => {
+                if (asiaAnchor && tx.date <= asiaAnchor.date) return;
+                if (tx.amount > 0) asiaInflow += tx.amount;
+                else asiaOutflow += tx.amount;
+            });
+        });
+        const asiaNetFlow = asiaInflow + asiaOutflow;
+
+        if (cardNet) {
+            cardNet.querySelector('.card-header span').textContent = "Asia's Net Cash Flow";
+            cardNet.querySelector('.card-header .card-icon').textContent = '💵';
+            const valEl = document.getElementById('net-cash-flow');
+            valEl.textContent = `${asiaNetFlow >= 0 ? '' : '-'}$${Math.abs(asiaNetFlow).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            valEl.className = `card-value ${asiaNetFlow >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('net-cash-flow-sub').innerHTML = `In: +$${asiaInflow.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>Out: -$${Math.abs(asiaOutflow).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        }
+
+        if (cardBal) {
+            document.getElementById('remaining-balance-title').textContent = "Asia's Remaining Balance";
+            const mIdx = MONTH_ORDER.indexOf(month);
+            if (state.listScope === 'year' && state.viewMode === 'list') {
+                const endYearDate = `${year + 1}-01-01`;
+                const endBal = getAsiaAdjustedRunningBalanceAtDate(endYearDate);
+                const valBal = document.getElementById('remaining-balance-val');
+                valBal.textContent = `$${endBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                valBal.className = `card-value ${endBal >= 0 ? 'positive' : 'negative'}`;
+                document.getElementById('remaining-balance-sub').textContent = `End of Year ${year} projected balance`;
+            } else {
+                const monthNumStr = String(mIdx + 1).padStart(2, '0');
+                const lastDayNum = new Date(year, mIdx + 1, 0).getDate();
+                const bal1stCycle = getAsiaAdjustedRunningBalanceAtDate(`${year}-${monthNumStr}-15`);
+                const nextMonthFirstIso = mIdx === 11 ? `${year + 1}-01-01` : `${year}-${String(mIdx + 2).padStart(2, '0')}-01`;
+                const bal2ndCycle = getAsiaAdjustedRunningBalanceAtDate(nextMonthFirstIso);
+                const valBal = document.getElementById('remaining-balance-val');
+                valBal.textContent = `$${bal2ndCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                valBal.className = `card-value ${bal2ndCycle >= 0 ? 'positive' : 'negative'}`;
+                document.getElementById('remaining-balance-sub').innerHTML = `1st Cycle: $${bal1stCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>2nd Cycle: $${bal2ndCycle.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            }
+        }
+
+        const todayBalCard = document.getElementById('today-balance-val');
+        if (todayBalCard) {
+            document.getElementById('today-balance-title').textContent = "Asia's Today's Balance";
+            const todayIso = formatLocalDate(new Date());
+            const tomorrowD = new Date(todayIso + 'T00:00:00');
+            tomorrowD.setDate(tomorrowD.getDate() + 1);
+            const todayBal = getAsiaAdjustedRunningBalanceAtDate(formatLocalDate(tomorrowD));
             todayBalCard.textContent = `$${todayBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             todayBalCard.className = `card-value ${todayBal >= 0 ? 'positive' : 'negative'}`;
             document.getElementById('today-balance-sub').textContent = new Date(todayIso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
@@ -11837,6 +13141,35 @@ function computeJointTransferSplitPlacements(startDateStr, totalAmount) {
     return { placements, remaining: Math.max(0, remaining) };
 }
 
+// Mirrors computeJointTransferSplitPlacements() above for Asia's own checking — Phase 3, used by
+// her quick-add form's Joint Transfer split-protect checkbox.
+function computeAsiaTransferSplitPlacements(startDateStr, totalAmount) {
+    const threshold = getAsiaMinimumBuffer();
+    const { end: cycleEnd } = getCycleBoundsForDate(startDateStr);
+    const placements = [];
+    let remaining = totalAmount;
+    let cumulativePlaced = 0;
+    let cursor = startDateStr;
+
+    while (remaining > 0.005 && cursor <= cycleEnd) {
+        const nextObj = new Date(cursor + 'T00:00:00');
+        nextObj.setDate(nextObj.getDate() + 1);
+        const nextDateStr = formatLocalDate(nextObj);
+        const authoritativeBalance = getAsiaAdjustedRunningBalanceAtDate(nextDateStr);
+        const effectiveBalance = authoritativeBalance - cumulativePlaced;
+        const available = Math.max(0, effectiveBalance - threshold);
+        const placeAmount = Math.min(available, remaining);
+        if (placeAmount > 0.005) {
+            placements.push({ date: cursor, amount: placeAmount });
+            remaining -= placeAmount;
+            cumulativePlaced += placeAmount;
+        }
+        cursor = nextDateStr;
+    }
+
+    return { placements, remaining: Math.max(0, remaining) };
+}
+
 function simulateJasonCheckingAndAdjustTransfers(daysData) {
     const adjustments = {
         transfers: {},
@@ -11937,9 +13270,11 @@ function simulateJasonCheckingAndAdjustTransfers(daysData) {
         // The split's own pieces are reconciled against the LIVE calculated total for this exact
         // cycle before posting — see reconcileSplitPiecesWithLiveTotal — so a Bill Splitter change
         // since the split was last edited shows up on the most-recently-added piece's date instead
-        // of vanishing from the balance walk entirely.
+        // of vanishing from the balance walk entirely. Unless the user directly typed a custom total
+        // (see resolveDynamicTransferGroupTotal()'s own comment), in which case that total IS the
+        // true one and this becomes a no-op.
         const [, cycleKey, yearStr, monthShort] = ovrId.split('-');
-        const liveTotal = getCalculatedTransferForJason(Number(yearStr), monthShort, cycleKey);
+        const liveTotal = resolveDynamicTransferGroupTotal(ovr, getCalculatedTransferForJason(Number(yearStr), monthShort, cycleKey));
         const reconciledPieces = reconcileSplitPiecesWithLiveTotal(liveTotal, ovr);
         // Deleting the group's anchor occurrence deletes the WHOLE group — every piece renders
         // struck-through at $0.00 too, not just the anchor's own date, and contributes $0 to the
@@ -12012,14 +13347,17 @@ function simulateJasonCheckingAndAdjustTransfers(daysData) {
                 // With a split active, the group always tracks the LIVE calculated total (see
                 // reconcileSplitPiecesWithLiveTotal) instead of the value frozen when the split was
                 // last edited — a later Bill Splitter change must still show up somewhere in this
-                // cycle. A plain (non-split) override keeps its old frozen-forever behavior.
-                const fullAmount = hasSplit ? calculatedTotal : ((ovr && ovr.amount !== undefined) ? Math.abs(ovr.amount) : calculatedTotal);
+                // cycle. A plain (non-split) override keeps its old frozen-forever behavior. Unless
+                // the user directly typed a custom total (see resolveDynamicTransferGroupTotal()'s
+                // own comment), in which case that total IS the true one and stays put.
+                const resolvedTotal = hasSplit ? resolveDynamicTransferGroupTotal(ovr, calculatedTotal) : calculatedTotal;
+                const fullAmount = hasSplit ? resolvedTotal : ((ovr && ovr.amount !== undefined) ? Math.abs(ovr.amount) : calculatedTotal);
                 // If this occurrence has been split across multiple dates, the anchor's own
                 // contribution here is the derived remainder, not the full amount — the pieces
                 // above already accounted for the rest (reconciled to the live total), each on its
                 // own date, so the anchor itself always stays exactly what it was originally set to.
                 const originalAmount = hasSplit
-                    ? computeSplitAnchorAmount(fullAmount, reconcileSplitPiecesWithLiveTotal(calculatedTotal, ovr))
+                    ? computeSplitAnchorAmount(fullAmount, reconcileSplitPiecesWithLiveTotal(resolvedTotal, ovr))
                     : fullAmount;
                 if (originalAmount <= 0) return;
                 // The FULL calculated (or explicitly overridden) amount always posts here — no
@@ -12134,7 +13472,7 @@ function getSimulatedTransferAdjustmentsForMonth(year, monthShort, daysDataUnuse
     // ever simulated anyway (the anchor pins those days to $0), so there's no range to walk.
     let result;
     if (endDateStr < anchorDate) {
-        result = { transfers: {}, deferred: [], splitTransfers: {}, transfersByDate: {} };
+        result = { transfers: {}, deferred: [], splitTransfers: {}, transfersByDate: {}, balances: {} };
     } else {
         result = simulateJasonCheckingAndAdjustTransfers(buildContinuousDayRange(anchorDate, endDateStr));
     }
@@ -12148,6 +13486,438 @@ function getSimulatedTransferAdjustmentsForMonth(year, monthShort, daysDataUnuse
 function getAdjustedTransferAmountsForMonth(year, monthShort) {
     return getSimulatedTransferAdjustmentsForMonth(year, monthShort).transfers;
 }
+
+// =====================================================================================
+// ASIA'S CHECKING — balance engine (Phase 1, added 2026-08-06)
+// Structural mirror of the Jason/Personal checking engine above. Phase 1 scope only: Asia's
+// own manual transactions + her own payroll deposits (state.asiaPayrollConfig) — NOT the
+// Bill-Splitter-driven joint-xfer-asia-* withdrawal (that's Phase 2, see project plan). She also
+// has no delivery/gig-income concept (that's a Jason-specific side feature), so unlike
+// getPersonalTransactionsForPeriod() there is no delivery-earnings injection here.
+// Because there's no anchor-withdrawal/insufficient-funds-reduction concept yet, "adjusted" and
+// "raw" balances are mathematically identical right now — simulateAsiaCheckingAndAdjustTransfers()
+// still returns the same {transfers, deferred, splitTransfers, transfersByDate, balances} shape
+// Jason's does (with the transfer-related fields empty placeholders) so Phase 2 can add real
+// anchor-posting logic into this same skeleton instead of retrofitting every call site's contract.
+// =====================================================================================
+
+// Mirrors getJasonPayrollAmount() (~app.js:373) — returns Asia's NET paycheck amount for a
+// specific paycheck date, computed from her own independent state.asiaPayrollConfig.
+function getAsiaPayrollAmount(year, monthShort, dateStr) {
+    const cfg = state.asiaPayrollConfig;
+    if (!cfg) return 0;
+
+    const yearPaychecks = getAsiaPaycheckDatesForYear(year);
+    const monthIndex = MONTH_ORDER.indexOf(monthShort);
+    const mmStr = String(monthIndex + 1).padStart(2, '0');
+    const prefix = `${year}-${mmStr}-`;
+    const monthPaychecks = yearPaychecks.filter(d => d.startsWith(prefix)).sort();
+
+    const paycheckIdx = monthPaychecks.indexOf(dateStr);
+    if (paycheckIdx === -1) return 0;
+
+    let basePay = 0;
+    if (cfg.hasDifferentRates && cfg.differentRates) {
+        if (paycheckIdx === 0) basePay = Number(cfg.differentRates.rate1st) || 0;
+        else if (paycheckIdx === 1) basePay = Number(cfg.differentRates.rate2nd) || 0;
+        else basePay = Number(cfg.differentRates.rate3rd) || 0;
+    } else {
+        basePay = Number(cfg.grossBasePay) || 0;
+    }
+
+    const sortedEstimates = (cfg.estimates || []).map(est => ({
+        ...est,
+        monthIdx: MONTH_ORDER.indexOf(est.effectiveMonth)
+    })).sort((a, b) => {
+        if (a.effectiveYear !== b.effectiveYear) return a.effectiveYear - b.effectiveYear;
+        return a.monthIdx - b.monthIdx;
+    });
+
+    let rate = basePay;
+    let k401TotalBump = 0;
+    const targetMonthIdx = MONTH_ORDER.indexOf(monthShort);
+
+    sortedEstimates.forEach(est => {
+        let triggers = 0;
+        if (year > est.effectiveYear || (year === est.effectiveYear && targetMonthIdx >= est.monthIdx)) {
+            if (est.isRecurring) {
+                const yearsDiff = year - est.effectiveYear;
+                triggers = targetMonthIdx < est.monthIdx ? yearsDiff : yearsDiff + 1;
+            } else {
+                triggers = 1;
+            }
+        }
+        if (triggers > 0) {
+            if (est.type === 'percent') {
+                rate = rate * Math.pow(1 + (Number(est.value) || 0) / 100, triggers);
+            } else {
+                rate = (est.value === '' || est.value === null || est.value === undefined || Number.isNaN(Number(est.value)))
+                    ? rate
+                    : Number(est.value);
+            }
+            const k401Bump = est.k401BumpPercent === undefined ? 1 : (Number(est.k401BumpPercent) || 0);
+            k401TotalBump += k401Bump * triggers;
+        }
+    });
+
+    const grossThisPaycheck = rate + (paycheckIdx === 0 ? (Number(cfg.stipendAmount) || 0) : 0);
+    const effectiveCfg = k401TotalBump > 0
+        ? { ...cfg, deductions: { ...cfg.deductions, traditional401kPercent: (Number(cfg.deductions?.traditional401kPercent) || 0) + k401TotalBump } }
+        : cfg;
+    return calculatePaycheckBreakdown(grossThisPaycheck, effectiveCfg).netPay;
+}
+
+function getAsiaStartingBalanceAnchor() {
+    const anchor = state.asiaStartingBalance;
+    if (!anchor || !anchor.date) return null;
+    const d = new Date(anchor.date + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return null;
+    return { date: anchor.date, amount: Number(anchor.amount) || 0, time: d.getTime(), order: d.getFullYear() * 12 + d.getMonth() };
+}
+
+// Mirrors getPersonalTransactionsForPeriod() (~app.js:511), minus the delivery-earnings injection
+// (section 3/3b there) — Asia has no gig-income feature. Injects her dynamic paycheck deposits
+// under a distinctly-prefixed id (dynamic-asia-paycheck-*) so they can never collide with Jason's
+// dynamic-paycheck-* overrides in the same state.dynamicOverrides map.
+function getAsiaTransactionsForPeriod(year, monthShort) {
+    const key = `${year}-${monthShort}`;
+    if (_asiaTxPeriodCache[key]) return _asiaTxPeriodCache[key];
+    const rawList = state.asiaCalendar[key] || [];
+    let filteredList = rawList.filter(tx => !tx.billOccurrenceDeleted);
+
+    const yearPaychecks = getAsiaPaycheckDatesForYear(year);
+    const monthIndex = MONTH_ORDER.indexOf(monthShort);
+    const mmStr = String(monthIndex + 1).padStart(2, '0');
+    const prefix = `${year}-${mmStr}-`;
+    const skippedPaychecks = state.asiaPayrollConfig?.skippedPaychecks || [];
+    const monthPaychecks = yearPaychecks.filter(d => d.startsWith(prefix) && !skippedPaychecks.includes(d));
+    const asiaDynamicAnchor = getAsiaStartingBalanceAnchor();
+
+    monthPaychecks.forEach(dateStr => {
+        if (asiaDynamicAnchor && dateStr <= asiaDynamicAnchor.date) return;
+        const id = `dynamic-asia-paycheck-${dateStr}`;
+        const override = (state.dynamicOverrides || {})[id];
+        if (override?.deleted) return;
+
+        const calculatedAmount = getAsiaPayrollAmount(year, monthShort, dateStr);
+        const amount = override?.amount !== undefined
+            ? Math.abs(Number(override.amount) || 0)
+            : calculatedAmount;
+        if (amount > 0) {
+            filteredList.push({
+                id,
+                date: dateStr,
+                description: override?.description || 'Asia Pay (Dynamic)',
+                amount,
+                isSplitterDynamic: true
+            });
+        }
+    });
+
+    _asiaTxPeriodCache[key] = filteredList;
+    return filteredList;
+}
+
+function getSortedAsiaCalendarKeys() {
+    if (_sortedAsiaCalendarKeysCache) return _sortedAsiaCalendarKeysCache;
+    _sortedAsiaCalendarKeysCache = Object.keys(state.asiaCalendar || {}).sort((a, b) => {
+        const [yA, mA] = a.split('-');
+        const [yB, mB] = b.split('-');
+        if (parseInt(yA) !== parseInt(yB)) return parseInt(yA) - parseInt(yB);
+        return MONTH_ORDER.indexOf(mA) - MONTH_ORDER.indexOf(mB);
+    });
+    return _sortedAsiaCalendarKeysCache;
+}
+
+// Mirrors getPersonalMonthFullContribution() (~app.js:10577), minus the xfer-1st/15th subtraction
+// (no anchor-withdrawal mechanism yet — Phase 2) and the includeDeliveryEarnings flag (N/A).
+function getAsiaMonthFullContribution(key) {
+    if (Object.prototype.hasOwnProperty.call(_asiaMonthFullContributionCache, key)) return _asiaMonthFullContributionCache[key];
+    const [yStr, mStr] = key.split('-');
+    const y = parseInt(yStr);
+    let contribution = 0;
+    getAsiaTransactionsForPeriod(y, mStr).forEach(tx => { contribution += tx.amount; });
+    _asiaMonthFullContributionCache[key] = contribution;
+    return contribution;
+}
+
+function getAsiaAnchorMonthPartialContribution(anchor) {
+    const d = new Date(anchor.date + 'T00:00:00');
+    const y = d.getFullYear();
+    const mStr = MONTH_ORDER[d.getMonth()];
+    let contribution = 0;
+    getAsiaTransactionsForPeriod(y, mStr).forEach(tx => {
+        if (new Date(tx.date + 'T00:00:00').getTime() >= anchor.time) contribution += tx.amount;
+    });
+    return contribution;
+}
+
+function getAsiaBalanceCheckpointBeforeMonth(year, monthShort) {
+    const key = `${year}-${monthShort}`;
+    if (Object.prototype.hasOwnProperty.call(_asiaMonthStartCheckpointCache, key)) return _asiaMonthStartCheckpointCache[key];
+
+    const targetOrder = year * 12 + MONTH_ORDER.indexOf(monthShort);
+    const anchor = getAsiaStartingBalanceAnchor();
+    let balance = 0;
+    let lowerBoundOrder = -Infinity;
+    if (anchor) {
+        balance = anchor.amount;
+        lowerBoundOrder = anchor.order;
+    } else {
+        // No explicit Starting Balance reset — sum EVERY month back to a safe floor (Jan 1 of
+        // state.currentYear, extended earlier if real data predates that) instead of only months
+        // state.asiaCalendar happens to have a real key for. getAsiaMonthFullContribution() already
+        // folds in synthetic dynamic-paycheck/joint-transfer activity for ANY month regardless of
+        // whether a real key exists — but the old approach (getSortedAsiaCalendarKeys(), real keys
+        // only) silently dropped every synthetic-only month's contribution the moment ANY real
+        // transaction existed after it. Confirmed real bug, 2026-08-07: Asia's checking started with
+        // zero real transactions (all activity was synthetic paycheck/joint-transfer income), so her
+        // FIRST-EVER manual entry (e.g. a savings transfer) became the new walk-start "anchor" and
+        // instantly collapsed every prior day's displayed balance to $0 and every later day's to just
+        // that one transaction's own amount, silently erasing months of real synthetic income from
+        // the display (the underlying transaction records themselves were never touched/lost).
+        const jan1Order = (Number(state.currentYear) || new Date().getFullYear()) * 12;
+        const sortedKeys = getSortedAsiaCalendarKeys();
+        let earliestKeyOrder = Infinity;
+        if (sortedKeys.length) {
+            const [yS, mS] = sortedKeys[0].split('-');
+            earliestKeyOrder = parseInt(yS) * 12 + MONTH_ORDER.indexOf(mS);
+        }
+        lowerBoundOrder = Math.min(jan1Order, earliestKeyOrder) - 1;
+    }
+
+    for (let order = lowerBoundOrder + 1; order < targetOrder; order++) {
+        const y = Math.floor(order / 12);
+        const m = MONTH_ORDER[((order % 12) + 12) % 12];
+        balance += getAsiaMonthFullContribution(`${y}-${m}`);
+    }
+
+    if (anchor && anchor.order < targetOrder) {
+        balance += getAsiaAnchorMonthPartialContribution(anchor);
+    }
+
+    _asiaMonthStartCheckpointCache[key] = balance;
+    return balance;
+}
+
+// Raw/checkpoint balance — mirrors getPersonalRunningBalanceAtDate() (~app.js:10795). Not
+// authoritative once Phase 2 adds a real anchor-withdrawal simulation; the only legitimate caller
+// then will be simulateAsiaCheckingAndAdjustTransfers() itself, same caveat as Jason's original.
+function getAsiaRunningBalanceAtDate(targetDateStr) {
+    if (Object.prototype.hasOwnProperty.call(_asiaRunningBalanceCache, targetDateStr)) return _asiaRunningBalanceCache[targetDateStr];
+
+    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+    const targetDateObj = new Date(targetDateStr + 'T00:00:00');
+    const y = targetDateObj.getFullYear();
+    const mStr = MONTH_ORDER[targetDateObj.getMonth()];
+    const mIdx = targetDateObj.getMonth();
+
+    const anchor = getAsiaStartingBalanceAnchor();
+    if (anchor && targetTime <= anchor.time) {
+        const result = targetDateStr < anchor.date ? 0 : anchor.amount;
+        _asiaRunningBalanceCache[targetDateStr] = result;
+        return result;
+    }
+
+    let balance = getAsiaBalanceCheckpointBeforeMonth(y, mStr);
+    const anchorAppliesThisMonth = anchor && anchor.order === y * 12 + mIdx;
+    if (anchorAppliesThisMonth) balance = anchor.amount;
+    const lowerBoundTime = anchorAppliesThisMonth ? anchor.time : -Infinity;
+
+    const key = `${y}-${mStr}`;
+    if (state.asiaCalendar[key]) {
+        getAsiaTransactionsForPeriod(y, mStr).forEach(tx => {
+            const txTime = new Date(tx.date + 'T00:00:00').getTime();
+            if (txTime < targetTime && txTime >= lowerBoundTime) {
+                balance += tx.amount;
+            }
+        });
+    }
+
+    _asiaRunningBalanceCache[targetDateStr] = balance;
+    return balance;
+}
+
+// How much must stay in Asia's checking at all times — mirrors getPersonalMinimumBuffer()
+// (~app.js:11801). Unused by simulateAsiaCheckingAndAdjustTransfers() until Phase 2 adds an
+// anchor-withdrawal mechanism to actually reduce/flag against; kept now so the Account Settings /
+// Payroll UI has a real field to read/write from day one.
+function getAsiaMinimumBuffer() {
+    return Math.max(0, Number(state.asiaMinimumBuffer) || 0);
+}
+
+// Mirrors simulateJasonCheckingAndAdjustTransfers() (~app.js:12416) — Phase 2: full payday-shift +
+// minimum-buffer parity with Jason's side, per explicit user request. Deliberately still excludes
+// Split Transfer (Jason-only feature, never asked for on Asia's side — see the historical note on
+// getAdjustedAsiaTransferForMonth()). Posts the SAME joint-xfer-asia-* dynamicOverrides ids the
+// Joint balance walk already reads for her contribution's credit side (see
+// getJointContinuousBalancesThroughMonth()) — reusing one shared anchor id per occurrence instead
+// of inventing a second, parallel id namespace, so the two sides can never drift apart.
+function simulateAsiaCheckingAndAdjustTransfers(daysData) {
+    const adjustments = {
+        transfers: {},
+        deferred: [],
+        splitTransfers: {},
+        transfersByDate: {},
+        balances: {}
+    };
+
+    let runningBalance = getAsiaRunningBalanceAtDate(daysData[0].date);
+    const txCache = {};
+    const asiaBalanceAnchor = getAsiaStartingBalanceAnchor();
+
+    // Effective posting date for every joint-xfer-asia-* anchor this walk might touch — mirrors
+    // Jason's anchorsByEffectiveDate exactly (see simulateJasonCheckingAndAdjustTransfers's own
+    // comment for the full rationale), reading Asia's own payroll config/paycheck dates instead of
+    // Jason's.
+    const anchorsByEffectiveDate = {};
+    {
+        const scanCursor = new Date(daysData[0].date + 'T00:00:00');
+        scanCursor.setDate(1);
+        const scanEnd = new Date(daysData[daysData.length - 1].date + 'T00:00:00');
+        while (scanCursor <= scanEnd) {
+            const y = scanCursor.getFullYear();
+            const mShort = MONTH_ORDER[scanCursor.getMonth()];
+            const mm = String(scanCursor.getMonth() + 1).padStart(2, '0');
+            ['1st', '15th'].forEach(cycleKey => {
+                const dynId = `joint-xfer-asia-${cycleKey}-${y}-${mShort}`;
+                const naturalDate = `${y}-${mm}-${cycleKey === '1st' ? '01' : '15'}`;
+                const ovr = (state.dynamicOverrides || {})[dynId];
+                let effectiveDate = naturalDate;
+                let autoShiftedToPayday = false;
+                if (ovr?.date) {
+                    effectiveDate = ovr.date;
+                } else {
+                    const windowStart = new Date(naturalDate + 'T00:00:00');
+                    windowStart.setDate(windowStart.getDate() - 6);
+                    const windowStartStr = formatLocalDate(windowStart);
+                    const skipped = state.asiaPayrollConfig?.skippedPaychecks || [];
+                    const recentPaycheckLanded = [...getAsiaPaycheckDatesForYear(y - 1), ...getAsiaPaycheckDatesForYear(y)]
+                        .some(d => d >= windowStartStr && d <= naturalDate && !skipped.includes(d));
+                    if (!recentPaycheckLanded) {
+                        const nextPayday = getNextAsiaPaycheckDateAfter(naturalDate);
+                        if (nextPayday) {
+                            effectiveDate = nextPayday;
+                            autoShiftedToPayday = true;
+                        }
+                    }
+                }
+                (anchorsByEffectiveDate[effectiveDate] = anchorsByEffectiveDate[effectiveDate] || []).push({ dynId, cycleKey, year: y, monthShort: mShort, naturalDate, autoShiftedToPayday });
+            });
+            scanCursor.setMonth(scanCursor.getMonth() + 1);
+        }
+    }
+
+    daysData.forEach(day => {
+        const cellDateObj = new Date(day.date + 'T00:00:00');
+        const cellYear = cellDateObj.getFullYear();
+        const cellMonth = MONTH_ORDER[cellDateObj.getMonth()];
+        const cellKey = `${cellYear}-${cellMonth}`;
+
+        if (asiaBalanceAnchor && day.date <= asiaBalanceAnchor.date) {
+            runningBalance = day.date < asiaBalanceAnchor.date ? 0 : asiaBalanceAnchor.amount;
+            adjustments.balances[day.date] = runningBalance;
+        } else {
+            if (!txCache[cellKey]) txCache[cellKey] = getAsiaTransactionsForPeriod(cellYear, cellMonth);
+            const matchedTx = txCache[cellKey].filter(tx => tx.date === day.date);
+            matchedTx.forEach(tx => { runningBalance += tx.amount; });
+
+            // Post every anchor whose EFFECTIVE date (natural 1st/15th, explicit override, or
+            // automatic payday shift) is today — mirrors Jason's anchorsByEffectiveDate posting
+            // block exactly, minus Split Transfer (out of scope for Asia's side).
+            (anchorsByEffectiveDate[day.date] || []).forEach(anchor => {
+                const { dynId, cycleKey, year: anchorYear, monthShort: anchorMonth, naturalDate, autoShiftedToPayday } = anchor;
+                const ovr = (state.dynamicOverrides || {})[dynId];
+                if (ovr && ovr.deleted) return;
+                const calculatedTotal = getCalculatedTransferForAsia(anchorYear, anchorMonth, cycleKey);
+                const amount = (ovr && ovr.amount !== undefined) ? Math.abs(ovr.amount) : calculatedTotal;
+                if (amount <= 0) return;
+                const balanceAfter = runningBalance - amount;
+                const entry = {
+                    dynId,
+                    amount,
+                    description: (ovr && ovr.description) || 'Xfer to Joint (Dynamic)',
+                    belowThreshold: balanceAfter < getAsiaMinimumBuffer(),
+                    balanceAfter,
+                    autoShiftedToPayday,
+                    naturalDate,
+                    effectiveDate: day.date
+                };
+                adjustments.transfers[dynId] = entry;
+                (adjustments.transfersByDate[day.date] = adjustments.transfersByDate[day.date] || []).push(entry);
+                runningBalance = balanceAfter;
+            });
+
+            adjustments.balances[day.date] = runningBalance;
+        }
+    });
+
+    return adjustments;
+}
+
+// Mirrors getPersonalTransferSimulationAnchorDate() (~app.js:12120), with one deliberate difference:
+// this floors at Jan 1 of currentYear rather than only falling back to it when NO real transaction
+// exists at all. A brand-new account like Asia's checking can run for months on synthetic income
+// alone (dynamic paychecks, dynamic joint-transfer withdrawals) before its first-ever REAL manual
+// transaction — with the old "earliest real tx, else Jan 1" logic, that first manual entry became
+// the anchor and jumped the walk's start date forward past everything synthetic that came before it,
+// which getAsiaBalanceCheckpointBeforeMonth() only partially (and, before its own 2026-08-07 fix,
+// didn't at all) recover — see that function's comment for the full failure chain this caused live.
+// Anchoring at min(earliest real tx, Jan 1) instead means a first real transaction can only ever
+// pull the anchor EARLIER, never later, so every month from Jan 1 onward stays reachable by the walk.
+function getAsiaTransferSimulationAnchorDate() {
+    const anchor = getAsiaStartingBalanceAnchor();
+    if (anchor) return anchor.date;
+    let earliest = formatLocalDate(new Date(state.currentYear, 0, 1));
+    Object.values(state.asiaCalendar || {}).forEach(list => (list || []).forEach(tx => {
+        if (tx.date && tx.date < earliest) earliest = tx.date;
+    }));
+    return earliest;
+}
+
+// Cache for the Asia balance-adjustment simulation, keyed by "year-month". Cleared in
+// saveDatabase() alongside every other balance cache.
+let _asiaAdjustedTransferCache = {};
+
+// Mirrors getSimulatedTransferAdjustmentsForMonth() (~app.js:12148).
+function getSimulatedAsiaTransferAdjustmentsForMonth(year, monthShort) {
+    const cacheKey = `${year}-${monthShort}`;
+    if (_asiaAdjustedTransferCache[cacheKey]) return _asiaAdjustedTransferCache[cacheKey];
+    const monthIndex = MONTH_ORDER.indexOf(monthShort);
+    const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate();
+    const endDateStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+    const anchorDate = getAsiaTransferSimulationAnchorDate();
+    let result;
+    if (endDateStr < anchorDate) {
+        result = { transfers: {}, deferred: [], splitTransfers: {}, transfersByDate: {}, balances: {} };
+    } else {
+        result = simulateAsiaCheckingAndAdjustTransfers(buildContinuousDayRange(anchorDate, endDateStr));
+    }
+    _asiaAdjustedTransferCache[cacheKey] = result;
+    return result;
+}
+
+// The authoritative source every Asia render site must use — mirrors
+// getPersonalAdjustedRunningBalanceAtDate() (~app.js:10871).
+function getAsiaAdjustedRunningBalanceAtDate(targetDateStr) {
+    const anchor = getAsiaStartingBalanceAnchor();
+    const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
+    if (anchor && targetTime <= anchor.time) {
+        return targetDateStr < anchor.date ? 0 : anchor.amount;
+    }
+    const prevDateObj = new Date(targetDateStr + 'T00:00:00');
+    prevDateObj.setDate(prevDateObj.getDate() - 1);
+    const prevDateStr = formatLocalDate(prevDateObj);
+    if (anchor && prevDateStr < anchor.date) return anchor.amount;
+    const y = prevDateObj.getFullYear();
+    const mStr = MONTH_ORDER[prevDateObj.getMonth()];
+    const sim = getSimulatedAsiaTransferAdjustmentsForMonth(y, mStr);
+    if (Object.prototype.hasOwnProperty.call(sim.balances, prevDateStr)) return sim.balances[prevDateStr];
+    return anchor ? anchor.amount : 0;
+}
+// =====================================================================================
+// END Asia's Checking balance engine
+// =====================================================================================
 
 function renderCalendarDashboard() {
     const year = state.currentYear;
@@ -12192,7 +13962,7 @@ function renderCalendarDashboard() {
                     description: tx.description,
                     amount: tx.amount,
                     type: tx.savingsTransfer || tx.description === 'Xfer to Joint' ? 'transfer' : (tx.amount > 0 ? 'income' : 'expense'),
-                    isRecurring: !!tx.isRecurring, balanceTransferBy: tx.balanceTransferBy || '', transferId: tx.transferId || ''
+                    isRecurring: !!tx.isRecurring, balanceTransferBy: tx.balanceTransferBy || '', transferId: tx.transferId || '', savingsTransfer: !!tx.savingsTransfer
                 });
             });
 
@@ -12297,29 +14067,12 @@ function renderCalendarDashboard() {
         // Same reasoning as the personal branch's anchor: declared here so the 1st/15th dynamic
         // contribution block below can suppress itself too, not just the balance walk further down.
         const jointBalanceAnchor = getJointStartingBalanceAnchor();
-        // Asia's side has no automatic payday shift (out of scope), but CAN carry an explicit date
-        // override (editor or drag-and-drop) — pre-scanned the same way anchorsByEffectiveDate is in
-        // simulateJasonCheckingAndAdjustTransfers, since the render loop below needs to check every
-        // day, not just the natural 1st/15th.
-        const asiaByEffectiveDate = {};
-        {
-            const scanCursor = new Date(daysData[0].date + 'T00:00:00');
-            scanCursor.setDate(1);
-            const scanEnd = new Date(daysData[daysData.length - 1].date + 'T00:00:00');
-            while (scanCursor <= scanEnd) {
-                const y = scanCursor.getFullYear();
-                const mShort = MONTH_ORDER[scanCursor.getMonth()];
-                const mm = String(scanCursor.getMonth() + 1).padStart(2, '0');
-                ['1st', '15th'].forEach(cycleKey => {
-                    const aDynId = `joint-xfer-asia-${cycleKey}-${y}-${mShort}`;
-                    const naturalDate = `${y}-${mm}-${cycleKey === '1st' ? '01' : '15'}`;
-                    const ovr = (state.dynamicOverrides || {})[aDynId];
-                    const effectiveDate = ovr?.date || naturalDate;
-                    (asiaByEffectiveDate[effectiveDate] = asiaByEffectiveDate[effectiveDate] || []).push({ aDynId, cycleKey, year: y, monthShort: mShort });
-                });
-                scanCursor.setMonth(scanCursor.getMonth() + 1);
-            }
-        }
+        // Phase 2: Asia's side now has the same payday-shift + explicit-override effective-date
+        // resolution Jason's does (simulateAsiaCheckingAndAdjustTransfers) — read her own
+        // simulation's transfersByDate directly (same pattern as Jason's cellAdjustments just
+        // below) instead of a hand-rolled pre-scan here that would have to duplicate her payday-
+        // shift logic a second time to stay correct.
+        const adjustmentsAsia = getSimulatedAsiaTransferAdjustmentsForMonth(year, month);
         daysData.forEach(day => {
             const cellDateObj = new Date(day.date + 'T00:00:00');
             const cellYear = cellDateObj.getFullYear();
@@ -12340,7 +14093,7 @@ function renderCalendarDashboard() {
                         description: tx.name,
                         amount: tx.amount,
                         type: tx.type === 'contribution' ? 'income' : 'expense',
-                        isRecurring: !!tx.isRecurring, balanceTransferBy: tx.balanceTransferBy || '', transferId: tx.transferId || '', jason: tx.jason, asia: tx.asia, contributionRecipient: tx.contributionRecipient
+                        isRecurring: !!tx.isRecurring, balanceTransferBy: tx.balanceTransferBy || '', transferId: tx.transferId || '', jason: tx.jason, asia: tx.asia, contributionRecipient: tx.contributionRecipient, savingsTransfer: !!tx.savingsTransfer
                     });
                 }
             });
@@ -12392,31 +14145,43 @@ function renderCalendarDashboard() {
                 }
             }
 
-            // Asia's side — same effective-date approach, using the asiaByEffectiveDate lookup
-            // pre-scanned above (no payday shift, but an explicit date override is possible).
-            (asiaByEffectiveDate[day.date] || []).forEach(asiaAnchor => {
+            // Asia's side — same direct-read pattern as Jason's transfersByDate just above, now that
+            // her own simulation resolves payday-shift/override the same way his does.
+            const cellAdjustmentsAsia = (cellYear === year && cellMonth === month) ? adjustmentsAsia : getSimulatedAsiaTransferAdjustmentsForMonth(cellYear, cellMonth);
+            (cellAdjustmentsAsia.transfersByDate[day.date] || []).forEach(adj => {
                 if (jointBalanceAnchor && day.date <= jointBalanceAnchor.date) return;
-                const aOvr = (state.dynamicOverrides || {})[asiaAnchor.aDynId];
-                const asiaAmt = getAdjustedAsiaTransferForMonth(asiaAnchor.year, asiaAnchor.monthShort, asiaAnchor.cycleKey);
-                if (asiaAmt !== 0) {
-                    day.transactions.push({
-                        id: asiaAnchor.aDynId,
-                        description: (aOvr && aOvr.description) || 'Asia Joint Contribution (Dynamic)',
-                        amount: asiaAmt,
-                        type: 'income',
-                        isSplitterDynamic: true
-                    });
-                } else if (aOvr?.deleted) {
-                    day.transactions.push({
-                        id: asiaAnchor.aDynId,
-                        description: aOvr?.description || 'Asia Joint Contribution (Dynamic)',
-                        amount: 0,
-                        type: 'income',
-                        isSplitterDynamic: true,
-                        deleted: true
-                    });
-                }
+                day.transactions.push({
+                    id: adj.dynId,
+                    description: adj.description ? adj.description.replace('Xfer to Joint', 'Asia Joint Contribution') : 'Asia Joint Contribution (Dynamic)',
+                    amount: adj.amount,
+                    type: 'income',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!adj.belowThreshold,
+                    autoShiftedToPayday: !!adj.autoShiftedToPayday,
+                    naturalDate: adj.naturalDate
+                });
             });
+            // A deleted Asia-side anchor never enters transfersByDate — show it struck-through at
+            // $0.00 on its natural 1st/15th date instead of vanishing, mirroring Jason's equivalent
+            // block just above.
+            {
+                const cellDayNum = cellDateObj.getDate();
+                if ((cellDayNum === 1 || cellDayNum === 15) && !(jointBalanceAnchor && day.date <= jointBalanceAnchor.date)) {
+                    const cycleKey = cellDayNum === 1 ? '1st' : '15th';
+                    const aDynId = `joint-xfer-asia-${cycleKey}-${cellYear}-${cellMonth}`;
+                    const aOvr = (state.dynamicOverrides || {})[aDynId];
+                    if (aOvr?.deleted) {
+                        day.transactions.push({
+                            id: aDynId,
+                            description: aOvr?.description || 'Asia Joint Contribution (Dynamic)',
+                            amount: 0,
+                            type: 'income',
+                            isSplitterDynamic: true,
+                            deleted: true
+                        });
+                    }
+                }
+            }
 
             cellAdjustments.deferred.forEach(def => {
                 if (def.date === day.date && !(jointBalanceAnchor && day.date <= jointBalanceAnchor.date)) {
@@ -12470,6 +14235,88 @@ function renderCalendarDashboard() {
                 runningBalance = day.date < jointBalanceAnchor.date ? 0 : jointBalanceAnchor.amount;
             } else if (Object.prototype.hasOwnProperty.call(jointBalances, day.date)) {
                 runningBalance = jointBalances[day.date];
+            } else {
+                day.transactions.forEach(t => {
+                    runningBalance += t.amount;
+                });
+            }
+            day.balance = runningBalance;
+        });
+    } else if (state.dashboardType === 'asia') {
+        // Asia's Checking Dashboard Calendar — Phase 2: her own manual transactions + her own
+        // payroll deposits, PLUS her Bill-Splitter contribution withdrawal (transfersByDate), same
+        // shape/pattern as the Personal branch above.
+        const asiaBalanceAnchor = getAsiaStartingBalanceAnchor();
+        daysData.forEach(day => {
+            const cellDateObj = new Date(day.date + 'T00:00:00');
+            const cellYear = cellDateObj.getFullYear();
+            const cellMonth = MONTH_ORDER[cellDateObj.getMonth()];
+
+            ensureYearMonthInitialized(cellYear, cellMonth);
+
+            const cellTxList = getAsiaTransactionsForPeriod(cellYear, cellMonth);
+            const matchedTx = cellTxList.filter(tx => tx.date === day.date);
+
+            matchedTx.forEach(tx => {
+                if (!tx.id) {
+                    tx.id = 'a-' + Math.random().toString(36).substr(2, 9);
+                    dbModified = true;
+                }
+                day.transactions.push({
+                    id: tx.id,
+                    description: tx.description,
+                    amount: tx.amount,
+                    type: tx.amount > 0 ? 'income' : 'expense',
+                    isRecurring: !!tx.isRecurring, balanceTransferBy: tx.balanceTransferBy || '', transferId: tx.transferId || '', savingsTransfer: !!tx.savingsTransfer
+                });
+            });
+
+            // Effective-date postings — reads the simulation scoped to THIS day's own month (cheap,
+            // cached), same reasoning as the Personal branch above for why that matters on padding
+            // days that trail into an adjacent month.
+            const cellAdjustmentsAsia = getSimulatedAsiaTransferAdjustmentsForMonth(cellYear, cellMonth);
+            (cellAdjustmentsAsia.transfersByDate[day.date] || []).forEach(adj => {
+                if (asiaBalanceAnchor && day.date <= asiaBalanceAnchor.date) return;
+                day.transactions.push({
+                    id: adj.dynId,
+                    description: adj.description,
+                    amount: -adj.amount,
+                    type: 'transfer',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!adj.belowThreshold,
+                    autoShiftedToPayday: !!adj.autoShiftedToPayday,
+                    naturalDate: adj.naturalDate
+                });
+            });
+            // A deleted anchor never enters transfersByDate — show it struck-through at $0.00 on its
+            // natural 1st/15th date instead of vanishing, mirroring the Personal branch above.
+            const cellDayNum = cellDateObj.getDate();
+            if ((cellDayNum === 1 || cellDayNum === 15) && !(asiaBalanceAnchor && day.date <= asiaBalanceAnchor.date)) {
+                const cycleKey = cellDayNum === 1 ? '1st' : '15th';
+                const aDynId = `joint-xfer-asia-${cycleKey}-${cellYear}-${cellMonth}`;
+                const aOvrForDeleted = (state.dynamicOverrides || {})[aDynId];
+                if (aOvrForDeleted?.deleted) {
+                    day.transactions.push({
+                        id: aDynId,
+                        description: aOvrForDeleted.description || 'Xfer to Joint (Dynamic)',
+                        amount: 0,
+                        type: 'transfer',
+                        isSplitterDynamic: true,
+                        deleted: true
+                    });
+                }
+            }
+        });
+
+        let runningBalance = getAsiaAdjustedRunningBalanceAtDate(daysData[0].date);
+        daysData.forEach(day => {
+            day.transactions.sort((a, b) => b.amount - a.amount);
+            const cellDateObj = new Date(day.date + 'T00:00:00');
+            const cellBalances = getSimulatedAsiaTransferAdjustmentsForMonth(cellDateObj.getFullYear(), MONTH_ORDER[cellDateObj.getMonth()]).balances;
+            if (asiaBalanceAnchor && day.date <= asiaBalanceAnchor.date) {
+                runningBalance = day.date < asiaBalanceAnchor.date ? 0 : asiaBalanceAnchor.amount;
+            } else if (Object.prototype.hasOwnProperty.call(cellBalances, day.date)) {
+                runningBalance = cellBalances[day.date];
             } else {
                 day.transactions.forEach(t => {
                     runningBalance += t.amount;
@@ -12549,7 +14396,7 @@ function renderCalendarDashboard() {
         dayCell.className = `calendar-day ${day.isCurrentMonth ? '' : 'next-month'} ${day.date === state.selectedDate ? 'selected-day' : ''}${day.date === todayStr ? ' today-highlight' : ''}${boundaryClass}`;
         dayCell.dataset.date = day.date;
 
-        const balanceColorClass = (state.dashboardType !== 'personal' && state.dashboardType !== 'joint')
+        const balanceColorClass = (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' && state.dashboardType !== 'asia')
             ? (day.balance > 0.01 ? 'negative' : 'positive')
             : (day.balance >= 0 ? 'positive' : 'negative');
 
@@ -12730,9 +14577,12 @@ function renderCalendarDashboard() {
             document.querySelectorAll('#calendar-days .calendar-day').forEach(c => c.classList.remove('selected-day'));
             dayCell.classList.add('selected-day');
             state.selectedDate = day.date;
-            let d = day.date;
-            if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
-            document.getElementById('trans-date').value = d;
+            // See the matching comment at init() — #trans-date is a native <input type="date"> and
+            // silently clears to '' on anything but ISO yyyy-mm-dd, so this mm/dd/yyyy conversion was
+            // actually blanking the field on every click instead of prefilling it. Confirmed real bug,
+            // 2026-08-07: clicking a day and submitting Quick Add did nothing at all, silently, since
+            // the empty date failed the handler's own `if (!dateInput...) return` guard.
+            document.getElementById('trans-date').value = day.date;
             document.getElementById('trans-date').dataset.isoDate = day.date;
 
             renderDayHighlights(day);
@@ -12820,6 +14670,101 @@ function applyEditTxCardPaymentNotice(tx) {
     }
 }
 
+// Every function that links a savings-transfer checking mirror back to its savings-side entry
+// (syncCheckingTransferMirror, syncAsiaCheckingTransferMirror, switchSavingsTransferAccount below)
+// keys its lookup purely off a shared tx.transferId — but the CHECKING side of that link didn't
+// exist yet in the era before 2026-08-04, when household-savings mirrors were instead linked by the
+// now-retired Google Sheets sync layer via unrelated syncId values (checking side 'DA-####', savings
+// side 'SV-##', no algorithmic correlation between them). Confirmed via a real user backup,
+// 2026-08-09: every checking-side savingsTransfer:true entry in it has no transferId — but the
+// SAVINGS-side entries it should be linked to already DO each carry their own transferId (just an
+// orphaned one nothing on the checking side ever pointed back at), so matching only against
+// transferId-less savings entries (this function's first version) found nothing at all. The
+// missing-transferId gap silently no-ops every one of the functions above (each just returns early
+// on it) and was the real cause of "switched the Checking Account but nothing moved". Self-heals the
+// pair the first time either side is touched post-upgrade: the app's own mirror-creation convention
+// guarantees a linked pair always shares the exact date, description, and negated amount, so that
+// triple finds the counterpart regardless of whether IT already has a transferId — reusing its
+// existing one if so (guarded by confirming no other checking-side entry is already using it, so a
+// coincidental date/description/amount collision can't steal a real pair's link), minting a fresh one
+// only if it truly has none. Household-only isn't assumed — Asia's own savings pool postdates the old
+// sync layer too, so a legacy entry can theoretically only ever match the household list, but both
+// are tried for safety. Returns the (possibly freshly-assigned) transferId, or null if no usable
+// counterpart could be found.
+function ensureSavingsTransferLinkage(checkingTx) {
+    if (!checkingTx?.savingsTransfer) return null;
+    if (checkingTx.transferId) return checkingTx.transferId;
+    const tryPool = (savingsList, prefix, findMirror) => {
+        const match = (savingsList || []).find(s =>
+            s.date === checkingTx.date
+            && s.description === checkingTx.description
+            && Number(s.amount) === -Number(checkingTx.amount)
+            && (!s.transferId || !findMirror(s.transferId)));
+        if (!match) return null;
+        const linkId = match.transferId || (prefix + Math.random().toString(36).substr(2, 9));
+        checkingTx.transferId = linkId;
+        match.transferId = linkId;
+        if (!match.transferSource) match.transferSource = prefix === 'asia-savings-xfer-' ? 'asia' : 'jason';
+        return linkId;
+    };
+    return tryPool(state.savingsTransactions, 'savings-xfer-', findSavingsCheckingMirror)
+        || tryPool(state.asiaSavingsTransactions, 'asia-savings-xfer-', findAsiaSavingsCheckingMirror);
+}
+
+// Shows/populates #edit-tx-savings-account-group for a savings-transfer checking mirror being
+// edited from the personal/joint/asia checking ledger — mirrors the Savings ledger's own edit
+// dialog's "Checking Account" field, per explicit user request, 2026-08-09. currentAccount is always
+// exactly one of the group's own values ('personal'/'asia' if tx lives in that calendar, 'joint' if
+// it lives in jointRegister — see syncSavingsCheckingMirror()/syncAsiaSavingsCheckingMirror(), which
+// are the only things that ever place a savings mirror into one of these three lists in the first
+// place, so the calling list IS the current account). The non-Joint <option> is relabeled to Jason
+// or Asia depending on which pool tx.transferId belongs to, since a household-savings mirror may
+// only ever move to/from Jason (never Asia) and vice versa — the two pools are never interchangeable.
+// Runs ensureSavingsTransferLinkage() first (see its own comment) so a legacy pre-transferId mirror
+// gets linked, and this field shown, instead of staying permanently inert.
+function populateEditTxSavingsAccountField(tx, currentAccount) {
+    const group = document.getElementById('edit-tx-savings-account-group');
+    if (!tx?.savingsTransfer) { group.classList.add('hidden'); return; }
+    ensureSavingsTransferLinkage(tx);
+    if (!tx.transferId) { group.classList.add('hidden'); return; }
+    const isAsiaSavings = String(tx.transferId).startsWith('asia-savings-xfer-');
+    const select = document.getElementById('edit-tx-savings-account');
+    select.options[0].value = isAsiaSavings ? 'asia' : 'jason';
+    select.options[0].textContent = isAsiaSavings ? 'Asia' : 'Jason';
+    select.value = currentAccount;
+    group.classList.remove('hidden');
+}
+
+// Moves a savings-transfer checking mirror to a different checking account (Jason/Asia <-> Joint),
+// driven from the checking-ledger side via #edit-tx-savings-account. The checking-side tx itself has
+// no notion of "account" — that's purely which list it lives in — so the actual move is delegated to
+// the SAVINGS-side entry's own transferSource field and syncSavingsCheckingMirror()/
+// syncAsiaSavingsCheckingMirror(), which already know how to relocate the mirror (that's exactly what
+// they do whenever the Savings ledger's own edit dialog changes its "Checking Account" field). Must
+// be called AFTER syncCheckingTransferMirror()/syncAsiaCheckingTransferMirror() has already pushed
+// this edit's date/description/amount down to the savings-side entry, so the relocated mirror carries
+// the fresh values instead of stale ones. Returns true if the tx actually moved (so the caller can
+// skip its own same-list month-bucket move, since tx has just been spliced out of its old list
+// entirely and re-homed elsewhere as a brand-new object).
+function switchSavingsTransferAccount(tx, newAccountValue) {
+    if (!tx?.savingsTransfer || !newAccountValue) return false;
+    // Defense-in-depth: populateEditTxSavingsAccountField() already runs this at dialog-open time,
+    // so tx.transferId should already be set by the time Save is clicked — but re-running here is a
+    // cheap no-op once linked, and guards any other call site that skips that dialog-open step.
+    ensureSavingsTransferLinkage(tx);
+    if (!tx.transferId) return false;
+    const isAsiaSavings = String(tx.transferId).startsWith('asia-savings-xfer-');
+    const savingsList = isAsiaSavings ? state.asiaSavingsTransactions : state.savingsTransactions;
+    const savingsTx = (savingsList || []).find(item => item.transferId === tx.transferId);
+    if (!savingsTx) return false;
+    const currentAccount = savingsTx.transferSource === 'joint' ? 'joint' : (isAsiaSavings ? 'asia' : 'jason');
+    if (newAccountValue === currentAccount) return false;
+    savingsTx.transferSource = newAccountValue;
+    if (isAsiaSavings) syncAsiaSavingsCheckingMirror(savingsTx, true);
+    else syncSavingsCheckingMirror(savingsTx, true);
+    return true;
+}
+
 function openEditTransactionModal(txId, date) {
     const dialog = document.getElementById('edit-tx-dialog');
     document.getElementById('edit-tx-id').value = txId;
@@ -12844,11 +14789,15 @@ function openEditTransactionModal(txId, date) {
     // editing a dynamic joint transfer, opening an unrelated recurring card charge still showed the
     // split section (with a stale transfer amount suggestion) and an uneditable amount field.
     document.getElementById('edit-tx-split-section')?.classList.add('hidden');
-    document.getElementById('edit-tx-piece-notice')?.classList.add('hidden');
+    document.getElementById('edit-tx-anchor-date-hint')?.classList.add('hidden');
+    document.getElementById('btn-reset-anchor-date')?.classList.add('hidden');
     document.getElementById('edit-tx-threshold-suggestions')?.classList.add('hidden');
     document.getElementById('btn-revert-edit-tx')?.classList.add('hidden');
     document.getElementById('edit-tx-amount').disabled = false;
     _splitEditorState = null;
+    // Reset from any previous open — re-shown below only for a savings-transfer mirror tx (personal/
+    // joint/asia branches), never reachable for CC/card-fallback since a savings mirror never lives there.
+    document.getElementById('edit-tx-savings-account-group')?.classList.add('hidden');
 
     const contribGroup = document.getElementById('edit-joint-contrib-group');
     const amountGroup = document.getElementById('edit-amount-group');
@@ -12864,13 +14813,13 @@ function openEditTransactionModal(txId, date) {
     const recurringDayInput = document.getElementById('edit-tx-recurring-day');
 
     // Determine if we are in a CC context (either sub-dashboard or main dashboard with CC selected)
-    const isCCContext = !!state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint');
+    const isCCContext = !!state.ccSelectedCardId || (state.dashboardType !== 'personal' && state.dashboardType !== 'joint' && state.dashboardType !== 'asia');
 
     // Show/hide merchant and recurring fields based on context
     merchantGroup.classList.toggle('hidden', !isCCContext);
     merchantInput.value = '';
     cardMetaGroup.classList.toggle('hidden', !isCCContext);
-    ownerInput.value = 'personal';
+    ownerInput.value = 'jason';
     tripInput.value = '';
 
     recurringGroup.classList.toggle('hidden', !isCCContext);
@@ -12899,7 +14848,7 @@ function openEditTransactionModal(txId, date) {
             document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
             merchantInput.value = tx.merchant || '';
             document.getElementById('edit-tx-kind').value = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
-            ownerInput.value = tx.owner || 'personal';
+            ownerInput.value = tx.owner || 'jason';
             tripInput.value = tx.trip || '';
             populateTransactionPaymentPlanFields(tx, cardId);
             document.getElementById('edit-payment-plan-group').classList.toggle('hidden', tx.amount >= 0);
@@ -12948,6 +14897,7 @@ function openEditTransactionModal(txId, date) {
             document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
             contribGroup.classList.add('hidden');
             amountGroup.classList.remove('hidden');
+            populateEditTxSavingsAccountField(tx, 'jason');
             applyEditTxCardPaymentNotice(tx);
             dialog.showModal();
         }
@@ -12968,7 +14918,23 @@ function openEditTransactionModal(txId, date) {
                 contribGroup.classList.add('hidden');
                 amountGroup.classList.remove('hidden');
             }
+            populateEditTxSavingsAccountField(tx, 'joint');
             applyEditTxCardPaymentNotice(tx);
+            dialog.showModal();
+        }
+    } else if (state.dashboardType === 'asia') {
+        const dateObj = new Date(date + 'T00:00:00');
+        const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+        const list = state.asiaCalendar[key] || [];
+        const tx = list.find(t => t.id === txId);
+        if (tx) {
+            const dir = tx.amount < 0 ? 'charge' : 'deposit';
+            setDirectionToggleValue('edit-trans-direction-group', 'edit-trans-direction', dir);
+            document.getElementById('edit-tx-desc').value = tx.description;
+            document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
+            contribGroup.classList.add('hidden');
+            amountGroup.classList.remove('hidden');
+            populateEditTxSavingsAccountField(tx, 'asia');
             dialog.showModal();
         }
     } else {
@@ -12985,7 +14951,7 @@ function openEditTransactionModal(txId, date) {
             document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
             merchantInput.value = tx.merchant || '';
             document.getElementById('edit-tx-kind').value = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
-            ownerInput.value = tx.owner || 'personal';
+            ownerInput.value = tx.owner || 'jason';
             tripInput.value = tx.trip || '';
             populateTransactionPaymentPlanFields(tx, cardId);
             document.getElementById('edit-payment-plan-group').classList.toggle('hidden', tx.amount >= 0);
@@ -13124,7 +15090,24 @@ function moveTransaction(txId, sourceDate, targetDate) {
         if (tx) {
             tx.date = targetDate;
             syncCheckingTransferMirror(tx, 'joint');
+            syncAsiaCheckingTransferMirror(tx);
             logSuccess(`Moved joint transaction to ${targetDate}: ${tx.name}`);
+        }
+    } else if (state.dashboardType === 'asia') {
+        const srcKey = `${srcYear}-${srcMonthShort}`;
+        const srcList = state.asiaCalendar[srcKey] || [];
+        const tx = srcList.find(t => t.id === txId);
+        if (tx) {
+            tx.date = targetDate;
+            if (srcKey !== tgtKey) {
+                const idx = srcList.indexOf(tx);
+                srcList.splice(idx, 1);
+                ensureYearMonthInitialized(tgtYear, tgtMonthShort);
+                if (!state.asiaCalendar[tgtKey]) state.asiaCalendar[tgtKey] = [];
+                state.asiaCalendar[tgtKey].push(tx);
+            }
+            syncAsiaCheckingTransferMirror(tx, 'asia');
+            logSuccess(`Moved Asia transaction to ${targetDate}: ${tx.description}`);
         }
     } else {
         const cardId = state.dashboardType;
@@ -13154,9 +15137,99 @@ function moveTransaction(txId, sourceDate, targetDate) {
     renderApp();
 }
 
+// Persists a manual same-day drag-reorder from a list-view row drop (see wireListRowDragDrop() —
+// dropping a row onto another row on the SAME date reorders; dropping onto a different date's row
+// instead calls moveTransaction(), same function calendar view's drag-drop already uses). Dynamic
+// (computed, non-persisted — isDynamicTxId()) rows are excluded by the caller before this ever runs,
+// since they have nowhere real to store a listOrder. Renumbers EVERY real transaction on that date at
+// once (not just the two rows dragged), so compareTransactionsChronologically()'s listOrder tie-break
+// — which only engages once BOTH sides of a comparison already carry it — becomes fully authoritative
+// for the whole day immediately, rather than partially applying to just one pair and leaving the rest
+// of that day's order unstable/undefined relative to it.
+function reorderTransactionsWithinDay(listType, draggedId, targetId, insertAfter) {
+    if (draggedId === targetId) return false;
+    const list = listType === 'personal' ? Object.values(state.personalCalendar).flat()
+        : listType === 'asia' ? Object.values(state.asiaCalendar).flat()
+        : state.jointRegister;
+    const dragged = list.find(t => t.id === draggedId);
+    const target = list.find(t => t.id === targetId);
+    if (!dragged || !target || dragged.date !== target.date) return false;
+    const dayTxs = list.filter(t => t.date === dragged.date).sort(compareTransactionsChronologically);
+    const without = dayTxs.filter(t => t.id !== draggedId);
+    const targetIdx = without.findIndex(t => t.id === targetId);
+    without.splice(targetIdx + (insertAfter ? 1 : 0), 0, dragged);
+    without.forEach((t, i) => { t.listOrder = i; });
+    return true;
+}
+
+// Wires HTML5 drag-and-drop on every '.editable-row' inside container for the Personal/Joint/Asia
+// list views (renderPersonalList/renderAsiaList/renderJointList) — dropping a row onto another row on
+// a DIFFERENT date moves it there via moveTransaction() (the exact same function calendar view's own
+// day-cell drag-drop already uses), dropping onto another row on the SAME date reorders it above/below
+// that row via reorderTransactionsWithinDay(). Re-run on every call (rows are always fully rebuilt via
+// container.innerHTML on each render, same as the existing dblclick/click-to-edit wiring right below
+// each call site) rather than wired once, since the old row elements are gone after every re-render.
+// listType is 'personal'/'joint'/'asia', matching reorderTransactionsWithinDay()'s own parameter and
+// state.dashboardType's values — moveTransaction() itself branches on state.dashboardType, which is
+// already guaranteed correct here since these rows only exist while that dashboard is the active one.
+// Dynamic (isDynamicTxId) rows can still be dragged to a different DAY (moveTransaction already has
+// dedicated branches for every dynamic id prefix) but can't be reordered within a day (no real array
+// slot to store a listOrder in) — that half of a drop is silently ignored rather than erroring.
+// Desktop-only, like every other drag-drop in this app (native HTML5 DnD isn't a touch-input API, and
+// mobile already forces list view / hides the calendar's own drag-drop for the same reason).
+function wireListRowDragDrop(container, listType) {
+    container.querySelectorAll('.editable-row').forEach(row => {
+        row.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', JSON.stringify({ id: row.dataset.id, date: row.dataset.date }));
+            row.classList.add('dragging');
+        });
+        row.addEventListener('dragend', () => row.classList.remove('dragging'));
+        row.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+        row.addEventListener('dragenter', (e) => { e.preventDefault(); row.classList.add('drag-hover'); });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-hover'));
+        row.addEventListener('drop', (e) => {
+            e.preventDefault();
+            row.classList.remove('drag-hover');
+            const dataStr = e.dataTransfer.getData('text/plain');
+            if (!dataStr) return;
+            let data;
+            try { data = JSON.parse(dataStr); } catch (err) { return; }
+            if (!data.id || data.id === row.dataset.id) return;
+            if (data.date === row.dataset.date) {
+                // Same-day reorder only means anything under the default chronological display order
+                // — under a column sort (or descending date) "the row above/below" isn't this day's
+                // actual neighbor, so silently ignore the drop rather than reorder something the user
+                // can't see happen (mirrors how compareTransactionsChronologically/sortTransactions
+                // already treat non-default sort/scope combinations elsewhere in these list views).
+                if (state.listSort.key !== 'date' || state.listSort.direction !== 'asc') return;
+                // Which side of the target row to land on is read from where in the row's own height
+                // the drop happened (top half = before it, bottom half = after) — the same "drop
+                // position implies intent" convention as most drag-reorder UIs.
+                if (isDynamicTxId(data.id) || isDynamicTxId(row.dataset.id)) return;
+                const rect = row.getBoundingClientRect();
+                const insertAfter = (e.clientY - rect.top) > rect.height / 2;
+                if (reorderTransactionsWithinDay(listType, data.id, row.dataset.id, insertAfter)) {
+                    saveDatabase();
+                    renderApp();
+                }
+            } else {
+                // Cross-day move — moveTransaction() already calls saveDatabase()/renderApp() itself.
+                moveTransaction(data.id, data.date, row.dataset.date);
+            }
+        });
+    });
+}
+
 function getTransactionTransferPerson(tx) {
     if (tx.balanceTransferBy === 'jason') return 'Jason';
     if (tx.balanceTransferBy === 'asia') return 'Asia';
+    // A savings-transfer mirror's own transferId is prefixed 'asia-savings-xfer-' for Asia's pool,
+    // 'savings-xfer-' for the household pool — must be checked before the generic "any transferId ->
+    // Jason" fallback below, which was silently mislabeling every Asia-sourced savings transfer as
+    // Jason's (it has no jason/asia numeric split or contributionRecipient to fall back on, so it
+    // always hit that catch-all). Confirmed real bug via user report, 2026-08-09.
+    if (tx.savingsTransfer && String(tx.transferId).startsWith('asia-savings-xfer-')) return 'Asia';
     const jason = Number(tx.jason) || 0;
     const asia = Number(tx.asia) || 0;
     if (jason !== 0 && asia !== 0) return 'Jason + Asia';
@@ -13279,7 +15352,7 @@ function isAutoShiftedToPayday(tx) {
 // entries), not hand-entered, so they shouldn't read as "Manual" either.
 function getGenericDynamicTxLabel(tx) {
     if (!tx.isSplitterDynamic || typeof tx.id !== 'string') return null;
-    if (tx.id.startsWith('dynamic-paycheck-')) return 'Payroll';
+    if (tx.id.startsWith('dynamic-paycheck-') || tx.id.startsWith('dynamic-asia-paycheck-')) return 'Payroll';
     if (tx.id.startsWith('dynamic-delivery-')) return 'Delivery Projection';
     return null;
 }
@@ -13313,10 +15386,12 @@ function getJointTransferOverrideTooltip(tx) {
     if (!ovr) return 'This occurrence was manually overridden, deleted, or split.';
     if (ovr.deleted) return 'This transfer was deleted — click to revert.';
     const hasSplit = Array.isArray(ovr.splitPieces) && ovr.splitPieces.length;
-    const liveTotal = person === 'asia' ? getCalculatedTransferForAsia(year, monthShort, cycle) : getCalculatedTransferForJason(year, monthShort, cycle);
+    const rawLiveTotal = person === 'asia' ? getCalculatedTransferForAsia(year, monthShort, cycle) : getCalculatedTransferForJason(year, monthShort, cycle);
     // With a split active, the total shown always tracks the LIVE calculated amount (see
     // reconcileSplitPiecesWithLiveTotal) rather than freezing whatever was calculated when the
-    // split was last edited.
+    // split was last edited — unless the user directly typed a custom total (see
+    // resolveDynamicTransferGroupTotal()'s own comment), in which case that total is shown as-is.
+    const liveTotal = hasSplit ? resolveDynamicTransferGroupTotal(ovr, rawLiveTotal) : rawLiveTotal;
     const total = hasSplit ? liveTotal : (ovr.amount !== undefined ? Math.abs(ovr.amount) : liveTotal);
     const pieces = hasSplit ? reconcileSplitPiecesWithLiveTotal(liveTotal, ovr) : [];
     const dd = cycle === '1st' ? '01' : '15';
@@ -13371,6 +15446,7 @@ function getTransactionIndicatorBadges(tx) {
         const person = getTransactionTransferPerson(tx);
 
         let badgeLabel = 'Balance Transfer';
+        let savingsOwnerClass = '';
         if (isSavings) {
             const amt = Number(tx.amount || 0);
             let isDeposit = false;
@@ -13379,7 +15455,12 @@ function getTransactionIndicatorBadges(tx) {
             } else {
                 isDeposit = amt < 0; // Money leaving personal into savings is a Savings Deposit
             }
-            badgeLabel = isDeposit ? 'Savings Deposit' : 'Savings Withdrawal';
+            // Whose Savings pool this belongs to — previously omitted entirely, so every savings
+            // transfer read as a generic "Savings Deposit/Withdrawal" with no way to tell Jason's
+            // from Asia's apart in the list. Per explicit user request, 2026-08-09.
+            const ownerName = person === 'Asia' ? 'Asia' : 'Jason';
+            savingsOwnerClass = person === 'Asia' ? ' owner-asia' : ' owner-jason';
+            badgeLabel = `${isDeposit ? 'Savings Deposit' : 'Savings Withdrawal'} - ${ownerName}`;
         } else if (isJoint) {
             let p = 'Jason';
             if (tx.contributionRecipient === 'asia' || (tx.asia && Number(tx.asia) > 0) || desc.includes('asia') || (tx.id && String(tx.id).includes('asia')) || tx.owner === 'asia' || tx.balanceTransferBy === 'asia') {
@@ -13402,7 +15483,7 @@ function getTransactionIndicatorBadges(tx) {
             if (person) badgeLabel += ` - ${person}`;
         }
 
-        transfer = `<span class="cc-transfer-badge" title="${escapeHTML(badgeLabel)}">&#8644; ${escapeHTML(badgeLabel)}</span>`;
+        transfer = `<span class="cc-transfer-badge${savingsOwnerClass}" title="${escapeHTML(badgeLabel)}">&#8644; ${escapeHTML(badgeLabel)}</span>`;
     }
     const classification = getPaymentClassification(tx);
     let source = '';
@@ -13498,7 +15579,12 @@ function getTransactionIndicatorPrefix(tx) {
             ? `<span class="dynamic-override-flag" title="Overridden ${genericLabel}">&#9888;</span> `
             : `<span class="cc-source-badge manual" title="Auto: ${genericLabel}" style="padding:0; background:none;">&#128257;</span> `;
     })() : '';
-    return belowThresholdIcon + jointTransferIcon + genericDynamicIcon + sourceIcon + recurring + transfer;
+    // Ownership flag for a savings-transfer mirror specifically (Jason<->Joint or Asia<->Joint) —
+    // blue for Jason, green for Asia. Per explicit user request, 2026-08-09.
+    const savingsOwnerIcon = tx.savingsTransfer
+        ? `<span class="owner-flag owner-${person === 'Asia' ? 'asia' : 'jason'}" title="Savings Transfer (${person || 'Jason'})">&#9873;</span> `
+        : '';
+    return belowThresholdIcon + jointTransferIcon + genericDynamicIcon + savingsOwnerIcon + sourceIcon + recurring + transfer;
 }
 // A render exception in any one of these (e.g. a malformed record from a Google Drive pull hitting
 // an edge case the calendar view's simpler per-day rendering doesn't) used to propagate straight up
@@ -13512,13 +15598,15 @@ function renderListDashboard() {
             renderPersonalList();
         } else if (state.dashboardType === 'joint') {
             renderJointList();
+        } else if (state.dashboardType === 'asia') {
+            renderAsiaList();
         } else {
             renderCardList();
         }
     } catch (err) {
         console.error('renderListDashboard failed:', err);
         logError(`List view failed to render: ${err.message}. Your data is safe — this is a display error, not data loss. Check the browser console for details.`);
-        const containerId = state.dashboardType === 'personal' || state.dashboardType === 'joint'
+        const containerId = state.dashboardType === 'personal' || state.dashboardType === 'joint' || state.dashboardType === 'asia'
             ? 'list-view-table-container'
             : 'list-view-container';
         const container = document.getElementById(containerId);
@@ -13661,6 +15749,16 @@ window.toggleListSort = function(key) {
 function compareTransactionsChronologically(a, b) {
     const dateCmp = a.date.localeCompare(b.date);
     if (dateCmp !== 0) return dateCmp;
+    // Manual same-day drag-reorder (see reorderTransactionsWithinDay(), wired to list-view row
+    // drag-drop) wins over every rule below once BOTH sides carry it — that's the entire point of
+    // dragging a row to a specific spot, so it can't be a tie-break of last resort under the amount-
+    // sign/dynamic-first grouping. Only engages once a day has actually been drag-reordered (which
+    // stamps listOrder onto every real transaction on that date at once, per that function's own
+    // comment) — a single stray listOrder on only one side falls through to the rules below instead,
+    // same as a pre-existing record with no createdAt does.
+    if (Number.isFinite(a.listOrder) && Number.isFinite(b.listOrder)) {
+        return a.listOrder - b.listOrder;
+    }
     // Same day: positive amounts (income/deposits) before negative (expenses/outflows) — reads as
     // "money arrives, then gets spent" instead of an arbitrary mix. Safe to do here (rather than
     // only in display sorting) because the actual balance SIMULATION never calls this function —
@@ -13860,8 +15958,8 @@ function renderPersonalList() {
     // title on mobile's pinned header — confirmed real redundancy, 2026-08-05. Desktop keeps it
     // (more room, and the title isn't pinned directly under the date-nav there).
     document.getElementById('list-view-title').textContent = isMobileViewport()
-        ? 'Personal Checking Ledger'
-        : `Personal Checking Ledger (${state.listScope === 'month' ? MONTH_NAMES[state.currentMonth] + ' ' + state.currentYear : state.currentYear})`;
+        ? "Jason's Checking Ledger"
+        : `Jason's Checking Ledger (${state.listScope === 'month' ? MONTH_NAMES[state.currentMonth] + ' ' + state.currentYear : state.currentYear})`;
 
     let txList = [];
     const year = state.currentYear;
@@ -14105,7 +16203,7 @@ function renderPersonalList() {
 
         const startingBalance = t.runningBalance - t.amount;
         return `
-            <tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} data-id="${t.id}" data-date="${t.date}" data-desc="${escapeHTML(displayTitle)}" data-amount="${t.amount}" data-isgig="${t.isGig ? 'true' : 'false'}" data-dynamic="${isEditableDynamic ? 'true' : 'false'}" data-below-threshold="${t.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${t.parentDynId || ''}" style="cursor: pointer;">
+            <tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} draggable="true" data-id="${t.id}" data-date="${t.date}" data-desc="${escapeHTML(displayTitle)}" data-amount="${t.amount}" data-isgig="${t.isGig ? 'true' : 'false'}" data-dynamic="${isEditableDynamic ? 'true' : 'false'}" data-below-threshold="${t.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${t.parentDynId || ''}" style="cursor: pointer;">
                 <td><strong>${isMobileViewport() ? formatDateDisplayCompact(t.date) : formatDateDisplay(t.date)}</strong></td>
                 <td><span class="card-icon info" style="font-size:0.75rem; padding: 2px 6px;">${dayName}</span></td>
                 <td><span${t.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(displayTitle)}</span> ${getTransactionIndicatorBadges(t)}</td>
@@ -14145,7 +16243,7 @@ function renderPersonalList() {
     }
 
     if (sortedList.length === 0) {
-        container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No personal transactions logged for this period.</p>`;
+        container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No transactions logged for this period.</p>`;
         return;
     }
 
@@ -14248,6 +16346,301 @@ function renderPersonalList() {
         // desktop reaches via double-click, and that modal has its own Delete button.
         if (isMobileViewport()) row.addEventListener('click', openEditor);
     });
+    wireListRowDragDrop(container, 'personal');
+    _updateListViewStickyOffset();
+}
+
+// Mirrors renderPersonalList() above, but for Asia's Checking — Phase 1 scope: her own manual
+// transactions + her own payroll deposits only. No transfersByDate/deferred/splitTransfers rows
+// (no anchor-withdrawal mechanism yet — Phase 2), so this is a leaner version of that function's
+// per-month loop, matching the same lean approach taken in the calendar renderer's Asia branch.
+function renderAsiaList() {
+    const container = document.getElementById('list-view-table-container');
+    document.getElementById('list-view-title').textContent = isMobileViewport()
+        ? "Asia's Checking Ledger"
+        : `Asia's Checking Ledger (${state.listScope === 'month' ? MONTH_NAMES[state.currentMonth] + ' ' + state.currentYear : state.currentYear})`;
+
+    let txList = [];
+    const year = state.currentYear;
+    const monthsToLoad = state.listScope === 'month' ? [state.currentMonth] : MONTH_ORDER;
+
+    const asiaStartingBalanceEl = document.getElementById('list-view-starting-balance');
+    const asiaEndingBalanceEl = document.getElementById('list-view-ending-balance');
+
+    let pStartIso = `${year}-01-01`;
+    let pEndIso = `${year}-12-31`;
+    if (state.listScope === 'month') {
+        const mIdx = MONTH_ORDER.indexOf(state.currentMonth);
+        const mPart = String(mIdx + 1).padStart(2, '0');
+        const lastDayNum = new Date(year, mIdx + 1, 0).getDate();
+        const cycleFilter = state.listCycleFilter || 'all';
+        if (cycleFilter === '1st') {
+            pStartIso = `${year}-${mPart}-01`;
+            pEndIso = `${year}-${mPart}-14`;
+        } else if (cycleFilter === '2nd') {
+            pStartIso = `${year}-${mPart}-15`;
+            pEndIso = `${year}-${mPart}-${String(lastDayNum).padStart(2, '0')}`;
+        } else {
+            pStartIso = `${year}-${mPart}-01`;
+            pEndIso = `${year}-${mPart}-${String(lastDayNum).padStart(2, '0')}`;
+        }
+    }
+
+    if (asiaStartingBalanceEl) {
+        const startingBalance = getAsiaAdjustedRunningBalanceAtDate(pStartIso);
+        const startLabel = new Date(pStartIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        asiaStartingBalanceEl.textContent = `Starting Balance (${startLabel}): ${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    const asiaTodayBalanceEl = document.getElementById('list-view-today-balance');
+    if (asiaTodayBalanceEl) {
+        const todayIso = formatLocalDate(new Date());
+        const tomorrowD = new Date(todayIso + 'T00:00:00');
+        tomorrowD.setDate(tomorrowD.getDate() + 1);
+        const tomorrowIso = formatLocalDate(tomorrowD);
+        const todayBalance = getAsiaAdjustedRunningBalanceAtDate(tomorrowIso);
+        asiaTodayBalanceEl.textContent = `Current Balance: ${todayBalance < 0 ? '-' : ''}$${Math.abs(todayBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    if (asiaEndingBalanceEl) {
+        const endD = new Date(pEndIso + 'T00:00:00');
+        endD.setDate(endD.getDate() + 1);
+        const dayAfterEndIso = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, '0')}-${String(endD.getDate()).padStart(2, '0')}`;
+        const endingBalance = getAsiaAdjustedRunningBalanceAtDate(dayAfterEndIso);
+        const endLabel = new Date(pEndIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        asiaEndingBalanceEl.textContent = `Ending Balance (${endLabel}): ${endingBalance < 0 ? '-' : ''}$${Math.abs(endingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+
+    monthsToLoad.forEach(m => {
+        const key = `${year}-${m}`;
+        ensureYearMonthInitialized(year, m);
+        getAsiaTransactionsForPeriod(year, m).forEach(tx => {
+            txList.push({ ...tx, type: tx.amount > 0 ? 'income' : 'expense', monthKey: key });
+        });
+
+        const mIdx = MONTH_ORDER.indexOf(m);
+        const mPart = String(mIdx + 1).padStart(2, '0');
+        const yStr = String(year);
+
+        // Effective-date postings (Bill-Splitter contribution withdrawal) — mirrors
+        // renderPersonalList()'s equivalent block. transfersByDate accumulates every date the whole
+        // walk (anchor-to-this-month) ever posted on, so filter to this month's dates.
+        const monthAdjustmentsAsia = getSimulatedAsiaTransferAdjustmentsForMonth(year, m);
+        const asiaListAnchor = getAsiaStartingBalanceAnchor();
+        Object.keys(monthAdjustmentsAsia.transfersByDate).forEach(dateStr => {
+            if (!dateStr.startsWith(`${yStr}-${mPart}-`)) return;
+            if (asiaListAnchor && dateStr <= asiaListAnchor.date) return;
+            monthAdjustmentsAsia.transfersByDate[dateStr].forEach(adj => {
+                txList.push({
+                    id: adj.dynId,
+                    date: dateStr,
+                    description: adj.description,
+                    amount: -adj.amount,
+                    type: 'transfer',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!adj.belowThreshold,
+                    autoShiftedToPayday: !!adj.autoShiftedToPayday,
+                    naturalDate: adj.naturalDate,
+                    monthKey: key
+                });
+            });
+        });
+        // A deleted anchor never enters transfersByDate — show it struck-through at $0.00 on its
+        // natural 1st/15th date instead of vanishing.
+        ['1st', '15th'].forEach(cycleKey => {
+            const aDynId = `joint-xfer-asia-${cycleKey}-${year}-${m}`;
+            const aOvr = (state.dynamicOverrides || {})[aDynId];
+            if (!aOvr?.deleted) return;
+            const naturalDate = `${yStr}-${mPart}-${cycleKey === '1st' ? '01' : '15'}`;
+            if (asiaListAnchor && naturalDate <= asiaListAnchor.date) return;
+            txList.push({
+                id: aDynId,
+                date: naturalDate,
+                description: aOvr.description || 'Xfer to Joint (Dynamic)',
+                amount: 0,
+                type: 'transfer',
+                isSplitterDynamic: true,
+                deleted: true,
+                monthKey: key
+            });
+        });
+    });
+
+    txList.sort(compareTransactionsChronologically);
+
+    let balance = 0;
+    if (txList.length > 0) {
+        balance = getAsiaAdjustedRunningBalanceAtDate(txList[0].date);
+    }
+    const asiaListAnchor = getAsiaStartingBalanceAnchor();
+    let anchorInjected = !asiaListAnchor || !txList.length || txList[0].date >= asiaListAnchor.date;
+    txList.forEach(t => {
+        if (asiaListAnchor && t.date <= asiaListAnchor.date) {
+            balance = t.date < asiaListAnchor.date ? 0 : asiaListAnchor.amount;
+            if (t.date === asiaListAnchor.date) anchorInjected = true;
+        } else {
+            if (!anchorInjected) {
+                balance = asiaListAnchor.amount;
+                anchorInjected = true;
+            }
+            balance += t.amount;
+        }
+        t.runningBalance = balance;
+    });
+
+    let filteredList = txList;
+    if (state.listScope === 'month') {
+        const cycleFilter = state.listCycleFilter || 'all';
+        if (cycleFilter === '1st') {
+            filteredList = txList.filter(t => parseInt(t.date.split('-')[2]) < 15);
+        } else if (cycleFilter === '2nd') {
+            filteredList = txList.filter(t => parseInt(t.date.split('-')[2]) >= 15);
+        }
+    }
+
+    const listMasterSearch = document.getElementById('list-view-master-search')?.value || '';
+    if (listMasterSearch.trim()) {
+        filteredList = filteredList.filter(t => {
+            const dayName = new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+            return matchesMasterSearch(listMasterSearch, t.description, getFormattedTransferTitle(t), t.type, formatDateDisplay(t.date), dayName, t.amount.toFixed(2), t.runningBalance.toFixed(2), getTransactionIndicatorSearchText(t));
+        });
+    }
+
+    const sortedList = sortTransactions(filteredList, state.listSort);
+
+    const buildAsiaRowHtml = (t, isTodayRow, todayRowMarkerId, isDayBoundary) => {
+        const typeClass = t.type;
+        const dayName = new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+        const isEditableDynamic = isDynamicTxId(t.id);
+        const displayTitle = getFormattedTransferTitle(t);
+        let actionHtml = '<span class="muted-text">—</span>';
+
+        if (isEditableDynamic) {
+            actionHtml = `<button class="action-btn small-btn danger-btn hide-dynamic-list-tx-btn" data-id="${t.id}" data-date="${t.date}" data-desc="${escapeHTML(displayTitle)}">Delete</button>`;
+        } else {
+            actionHtml = `<button class="action-btn small-btn danger-btn delete-list-tx-btn" data-id="${t.id}" data-key="${t.monthKey}" data-desc="${escapeHTML(displayTitle)}" data-date="${t.date}" data-amt="${t.amount}">Delete</button>`;
+        }
+
+        const startingBalance = t.runningBalance - t.amount;
+        return `
+            <tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} draggable="true" data-id="${t.id}" data-date="${t.date}" data-desc="${escapeHTML(displayTitle)}" data-amount="${t.amount}" data-isgig="false" data-dynamic="${isEditableDynamic ? 'true' : 'false'}" data-below-threshold="false" data-parent-dyn-id="${t.parentDynId || ''}" style="cursor: pointer;">
+                <td><strong>${isMobileViewport() ? formatDateDisplayCompact(t.date) : formatDateDisplay(t.date)}</strong></td>
+                <td><span class="card-icon info" style="font-size:0.75rem; padding: 2px 6px;">${dayName}</span></td>
+                <td><span${t.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(displayTitle)}</span> ${getTransactionIndicatorBadges(t)}</td>
+                <td><span class="day-transaction-item ${typeClass}" style="display:inline-block; padding: 2px 6px; border-radius:4px; font-size:0.75rem;">${t.type.toUpperCase()}</span></td>
+                <td class="font-heading">$${startingBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                <td class="${t.amount >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;" data-detail-value="${t.amount >= 0 ? '+' : '-'}$${Math.abs(t.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${t.amount >= 0 ? '+' : '-'}${isMobileViewport() ? formatMobileRoundedAmount(t.amount) : `$${Math.abs(t.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                <td class="${t.runningBalance >= 0 ? 'positive' : 'negative'} font-heading" style="font-weight:600;" data-detail-value="$${t.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}">${isMobileViewport() ? formatMobileRoundedAmount(t.runningBalance) : `$${t.runningBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                <td>
+                    ${actionHtml}
+                </td>
+            </tr>
+        `;
+    };
+
+    const showDashboardDividers = state.listScope === 'month' && state.listSort.key === 'date';
+    let rowsHtml;
+    if (showDashboardDividers) {
+        rowsHtml = buildDashboardListRowsWithDividers(sortedList, 8, buildAsiaRowHtml);
+    } else {
+        const todayStr = formatLocalDate(new Date());
+        const todayMarkerIdx = findTodayMarkerIndex(sortedList, todayStr, state.listSort.key === 'date');
+        let prevDate = null;
+        rowsHtml = sortedList.map((t, i) => {
+            const isDayBoundary = state.listSort.key === 'date' && prevDate !== null && prevDate !== t.date;
+            prevDate = t.date;
+            const todayRowMarkerId = i === todayMarkerIdx ? ' id="dashboard-today-marker"' : '';
+            return buildAsiaRowHtml(t, t.date === todayStr, todayRowMarkerId, isDayBoundary);
+        }).join('');
+    }
+
+    if (sortedList.length === 0) {
+        container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No Asia transactions logged for this period.</p>`;
+        return;
+    }
+
+    const getSortCaret = (colKey) => {
+        if (state.listSort.key === colKey) {
+            return state.listSort.direction === 'asc' ? ' ▲' : ' ▼';
+        }
+        return '';
+    };
+
+    const summaryHost = document.getElementById('list-view-summary-host');
+    if (summaryHost) summaryHost.innerHTML = '';
+
+    container.innerHTML = `
+        <table class="data-table personal-list-table">
+            <thead>
+                <tr>
+                    <th style="cursor:pointer;" onclick="toggleListSort('date')">Date${getSortCaret('date')}</th>
+                    <th style="cursor:pointer;" onclick="toggleListSort('day')">Day${getSortCaret('day')}</th>
+                    <th style="cursor:pointer;" onclick="toggleListSort('description')">Description${getSortCaret('description')}</th>
+                    <th style="cursor:pointer;" onclick="toggleListSort('type')">Type${getSortCaret('type')}</th>
+                    <th>Starting Balance</th>
+                    <th style="cursor:pointer;" onclick="toggleListSort('amount')">Amount${getSortCaret('amount')}</th>
+                    <th style="cursor:pointer;" onclick="toggleListSort('runningBalance')">Running Balance${getSortCaret('runningBalance')}</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rowsHtml}
+            </tbody>
+        </table>
+    `;
+    setupTableColumnFilters('#list-view-table-container thead', 'asiaTxList', () => container.querySelector('tbody'), [7]);
+    applyColumnFilters(container.querySelector('tbody'), 'asiaTxList');
+    updateDashboardFilteredMetrics();
+    _updateListViewStickyOffset();
+
+    container.querySelectorAll('.delete-list-tx-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const key = e.currentTarget.dataset.key;
+            const id = e.currentTarget.dataset.id;
+            const date = e.currentTarget.dataset.date;
+            const desc = e.currentTarget.dataset.desc;
+            const amt = parseFloat(e.currentTarget.dataset.amt);
+
+            if (confirm(`Are you sure you want to delete "${desc}" on ${formatDateDisplay(date)}?`)) {
+                const list = state.asiaCalendar[key] || [];
+                const idx = list.findIndex(tx => tx.id === id || (tx.date === date && tx.description === desc && Math.abs(tx.amount - amt) < 0.01));
+                if (idx > -1) {
+                    const removed = list.splice(idx, 1)[0];
+                    removeAsiaCheckingTransferMirror(removed, 'asia');
+                    saveDatabase();
+                    renderApp();
+                    logSystem(`Deleted Asia transaction on ${formatDateDisplay(date)}: ${desc} ($${amt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
+                }
+            }
+        });
+    });
+
+    container.querySelectorAll('.hide-dynamic-list-tx-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const { id, date, desc } = e.currentTarget.dataset;
+            if (!confirm(`Are you sure you want to hide "${desc}" on ${formatDateDisplay(date)}? This does not change your payroll schedule.`)) return;
+
+            saveDynamicTxOverride(id, { deleted: true });
+            saveDatabase();
+            renderApp();
+            logSystem(`Hidden dynamic transaction ${id} on ${formatDateDisplay(date)}`);
+        });
+    });
+
+    container.querySelectorAll('.editable-row').forEach(row => {
+        const openEditor = () => {
+            if (row.dataset.dynamic === 'true') {
+                openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0, row.dataset.parentDynId || '');
+                return;
+            }
+            openEditTransactionModal(row.dataset.id, row.dataset.date);
+        };
+        row.addEventListener('dblclick', openEditor);
+        if (isMobileViewport()) row.addEventListener('click', openEditor);
+    });
+    wireListRowDragDrop(container, 'asia');
     _updateListViewStickyOffset();
 }
 
@@ -14267,10 +16660,20 @@ function removeCheckingTransferMirror(tx, origin) {
     if (!tx?.transferId) return;
     // Was origin === 'personal' only — a savings transfer's checking-side mirror can now live in
     // Joint too (see transferSource, per explicit user request, 2026-08-04), so this needs to catch
-    // it regardless of which calendar it's actually being deleted from.
+    // it regardless of which calendar it's actually being deleted from. Asia's own savings pool
+    // (Phase 3) reuses this same savingsTransfer flag for its Joint-side mirrors, distinguished only
+    // by its 'asia-savings-xfer-' transferId prefix — see findAsiaSavingsCheckingMirror's comment.
+    // Deleting the checking-side row here fully removes the linked savings-side entry too (was
+    // previously just flagging personalMirrorDetached and leaving it behind as an orphaned phantom
+    // entry the Savings ledger kept showing forever — confirmed real bug, 2026-08-07). The
+    // personalMirrorDetached flag itself is still used, unchanged, by the separate transfer->interest
+    // KIND-CONVERSION path in the savings-edit-form submit handler, where the tx object legitimately
+    // survives as a converted interest entry rather than being deleted.
     if (tx.savingsTransfer) {
-        const savingsMirror = (state.savingsTransactions || []).find(item => item.transferId === tx.transferId);
-        if (savingsMirror) savingsMirror.personalMirrorDetached = true;
+        const isAsiaSavings = String(tx.transferId).startsWith('asia-savings-xfer-');
+        const savingsList = isAsiaSavings ? state.asiaSavingsTransactions : state.savingsTransactions;
+        const savingsIdx = (savingsList || []).findIndex(item => item.transferId === tx.transferId);
+        if (savingsIdx > -1) savingsList.splice(savingsIdx, 1);
         return;
     }
     if (origin === 'personal') {
@@ -14288,7 +16691,9 @@ function syncCheckingTransferMirror(tx, origin) {
     if (!tx?.transferId) return;
     // Same broadening as removeCheckingTransferMirror() above.
     if (tx.savingsTransfer) {
-        const savingsMirror = (state.savingsTransactions || []).find(item => item.transferId === tx.transferId);
+        const isAsiaSavings = String(tx.transferId).startsWith('asia-savings-xfer-');
+        const savingsList = isAsiaSavings ? state.asiaSavingsTransactions : state.savingsTransactions;
+        const savingsMirror = (savingsList || []).find(item => item.transferId === tx.transferId);
         if (savingsMirror) {
             savingsMirror.date = tx.date;
             savingsMirror.description = tx.description;
@@ -14323,6 +16728,93 @@ function syncCheckingTransferMirror(tx, origin) {
         state.personalCalendar[key].push(mirror);
     }
 }
+
+// Mirrors removeCheckingTransferMirror()/syncCheckingTransferMirror() above, for Asia's side of a
+// joint contribution/withdrawal — kept as SEPARATE functions rather than a third origin branch on
+// those, since a single joint row's two legs (jason/asia) are independently linked (transferId for
+// Jason's mirror, asiaTransferId for Asia's) and must stay independently removable/syncable — e.g.
+// the edit-tx-form's save handler can zero out just ONE leg's amount without touching the other
+// leg's mirror. Phase 2, added alongside Asia's own checking (asiaCalendar).
+function removeAsiaCheckingTransferMirror(tx, origin) {
+    if (!tx) return;
+    // Asia's own Savings pool (Phase 3) can mirror onto her own checking, funded straight from her
+    // own checking — deleting that checking-side row here fully removes the linked savings-side
+    // entry too, mirroring removeCheckingTransferMirror()'s savingsTransfer branch for the household
+    // pool (see its own comment for why "detach" was wrong here). Safe to check unconditionally
+    // regardless of origin: when this fires for a Joint-side Asia-savings mirror (origin 'joint',
+    // transferSource === 'joint'), removeCheckingTransferMirror() has already spliced the same
+    // transferId out of asiaSavingsTransactions — re-searching for it here just finds nothing, a
+    // harmless no-op repeat, not a double-remove.
+    if (tx.savingsTransfer) {
+        if (!tx.transferId) return;
+        const savingsIdx = (state.asiaSavingsTransactions || []).findIndex(item => item.transferId === tx.transferId);
+        if (savingsIdx > -1) state.asiaSavingsTransactions.splice(savingsIdx, 1);
+        return;
+    }
+    if (origin === 'asia') {
+        // tx is Asia's own checking-side mirror transaction — find+remove the JOINT row linking to
+        // it via asiaTransferId (NOT transferId, which stays reserved for Jason's leg).
+        if (!tx.transferId) return;
+        const index = state.jointRegister.findIndex(item => item.asiaTransferId === tx.transferId);
+        if (index > -1) state.jointRegister.splice(index, 1);
+    } else {
+        // tx is the JOINT row itself — find+remove Asia's own checking-side mirror.
+        if (!tx.asiaTransferId) return;
+        Object.values(state.asiaCalendar || {}).forEach(list => {
+            const index = list.findIndex(item => item.transferId === tx.asiaTransferId);
+            if (index > -1) list.splice(index, 1);
+        });
+    }
+}
+
+function syncAsiaCheckingTransferMirror(tx, origin) {
+    // See the matching comment in removeAsiaCheckingTransferMirror() above.
+    if (tx?.savingsTransfer) {
+        if (!tx.transferId) return;
+        const savingsMirror = (state.asiaSavingsTransactions || []).find(item => item.transferId === tx.transferId);
+        if (savingsMirror) {
+            savingsMirror.date = tx.date;
+            savingsMirror.description = tx.description;
+            savingsMirror.amount = -Number(tx.amount || 0);
+        }
+        return;
+    }
+    if (origin === 'asia') {
+        // tx is Asia's own checking-side mirror transaction, freshly edited from her own list —
+        // push the change back onto the linked JOINT row (found via asiaTransferId, NOT
+        // transferId, which stays reserved for Jason's leg). Deliberately does NOT zero out
+        // mirror.jason the way syncCheckingTransferMirror's personal->joint direction zeroes
+        // mirror.asia — that would silently wipe the OTHER leg's amount on a row that had both,
+        // which is avoidable here since we're writing this path fresh.
+        if (!tx?.transferId) return;
+        const mirror = state.jointRegister.find(item => item.asiaTransferId === tx.transferId);
+        if (mirror) {
+            mirror.date = tx.date;
+            mirror.name = tx.description;
+            mirror.asia = -Number(tx.amount || 0);
+            mirror.amount = (Number(mirror.jason) || 0) + mirror.asia;
+            mirror.type = 'contribution';
+        }
+        return;
+    }
+    // tx is the JOINT row — push it onto Asia's own checking-side mirror (create if missing).
+    if (!tx?.asiaTransferId) return;
+    let mirror = null;
+    Object.values(state.asiaCalendar || {}).forEach(list => {
+        const index = list.findIndex(item => item.transferId === tx.asiaTransferId);
+        if (index > -1) mirror = list.splice(index, 1)[0];
+    });
+    const dateObj = new Date(tx.date + 'T00:00:00');
+    const month = MONTH_ORDER[dateObj.getMonth()];
+    const key = `${dateObj.getFullYear()}-${month}`;
+    if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+    mirror = mirror || { id: 'a-' + Math.random().toString(36).substr(2, 9), transferId: tx.asiaTransferId };
+    mirror.date = tx.date;
+    mirror.description = tx.name || tx.description;
+    mirror.amount = -Number(tx.asia || 0);
+    state.asiaCalendar[key].push(mirror);
+}
+
 function renderJointList() {
     const container = document.getElementById('list-view-table-container');
     const periodLabel = state.listScope === 'month' ? `${MONTH_NAMES[state.currentMonth]} ${state.currentYear}` : String(state.currentYear);
@@ -14392,8 +16884,9 @@ function renderJointList() {
         // Jason's side uses the same balance-adjusted amount (and effective posting date — an
         // explicit date override or automatic payday shift) the calendar view shows, so this list
         // doesn't show a different figure/date than the calendar for the same real-world transfer.
-        // Asia's side has no payday-shift concept, but can carry her own explicit date override.
+        // Phase 2: Asia's side now reads the same way, from her own simulation.
         const monthSim = getSimulatedTransferAdjustmentsForMonth(year, m);
+        const monthSimAsia = getSimulatedAsiaTransferAdjustmentsForMonth(year, m);
         const jointListDynamicAnchor = getJointStartingBalanceAnchor();
 
         Object.keys(monthSim.transfersByDate).forEach(dateStr => {
@@ -14443,32 +16936,43 @@ function renderJointList() {
             });
         });
 
-        // Asia's side — natural date or her own explicit date override (no automatic payday shift).
+        // Asia's side — same direct-read + cumulative-month-prefix-filter pattern as Jason's block
+        // above, now that her own simulation resolves payday-shift/override the same way his does.
+        Object.keys(monthSimAsia.transfersByDate).forEach(dateStr => {
+            if (!dateStr.startsWith(`${year}-${mPart}-`)) return;
+            if (dateStr < periodStart || dateStr > periodEnd) return;
+            if (jointListDynamicAnchor && dateStr <= jointListDynamicAnchor.date) return;
+            monthSimAsia.transfersByDate[dateStr].forEach(adj => {
+                dynamicTxs.push({
+                    id: adj.dynId,
+                    date: dateStr,
+                    type: 'contribution',
+                    name: adj.description || 'Asia Joint Contribution (Dynamic)',
+                    jason: 0,
+                    asia: adj.amount,
+                    amount: adj.amount,
+                    isSplitterDynamic: true,
+                    belowThreshold: !!adj.belowThreshold,
+                    autoShiftedToPayday: !!adj.autoShiftedToPayday,
+                    naturalDate: adj.naturalDate
+                });
+            });
+        });
+        // A deleted Asia-side anchor never enters transfersByDate — show it struck-through at
+        // $0.00 on its natural 1st/15th date instead of vanishing, mirroring Jason's equivalent
+        // block above.
         ['1st', '15th'].forEach(cycleKey => {
             const aDynId = `joint-xfer-asia-${cycleKey}-${year}-${m}`;
-            const naturalDate = `${year}-${mPart}-${cycleKey === '1st' ? '01' : '15'}`;
-            // A cycle recorded in state.skippedTransfers has already been materialized into a real
-            // register transaction elsewhere — skip it here entirely, or a leftover dynamicOverrides
-            // amount from before that move gets counted a second time on top of the real transaction.
-            if ((state.skippedTransfers || []).includes(naturalDate)) return;
             const aOvr = (state.dynamicOverrides || {})[aDynId];
-            const effectiveDate = aOvr?.date || naturalDate;
-            if (effectiveDate < periodStart || effectiveDate > periodEnd) return;
-            if (jointListDynamicAnchor && effectiveDate <= jointListDynamicAnchor.date) return;
-            const asiaAmt = getAdjustedAsiaTransferForMonth(year, m, cycleKey);
-            if (asiaAmt !== 0) {
-                dynamicTxs.push({
-                    id: aDynId, date: effectiveDate, type: 'contribution',
-                    name: (aOvr && aOvr.description) || 'Asia Joint Contribution (Dynamic)',
-                    jason: 0, asia: asiaAmt, amount: asiaAmt, isSplitterDynamic: true
-                });
-            } else if (aOvr?.deleted) {
-                dynamicTxs.push({
-                    id: aDynId, date: naturalDate, type: 'contribution',
-                    name: aOvr?.description || 'Asia Joint Contribution (Dynamic)',
-                    jason: 0, asia: 0, amount: 0, isSplitterDynamic: true, deleted: true
-                });
-            }
+            if (!aOvr?.deleted) return;
+            const naturalDate = `${year}-${mPart}-${cycleKey === '1st' ? '01' : '15'}`;
+            if (naturalDate < periodStart || naturalDate > periodEnd) return;
+            if (jointListDynamicAnchor && naturalDate <= jointListDynamicAnchor.date) return;
+            dynamicTxs.push({
+                id: aDynId, date: naturalDate, type: 'contribution',
+                name: aOvr?.description || 'Asia Joint Contribution (Dynamic)',
+                jason: 0, asia: 0, amount: 0, isSplitterDynamic: true, deleted: true
+            });
         });
 
         // Deferred/catch-up contributions — dead code path (the deferred mechanism was removed;
@@ -14603,7 +17107,7 @@ function renderJointList() {
             ? `<button class="action-btn small-btn danger-btn hide-dynamic-joint-btn" data-id="${tx.id}" data-date="${tx.date}" data-desc="${escapeHTML(description)}">Delete</button>`
             : `<button class="action-btn small-btn danger-btn delete-joint-btn" data-id="${tx.id}">Delete</button>`;
         const startingBalance = tx.runningBalance - (Number(tx.amount) || 0);
-        return `<tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} data-id="${tx.id}" data-date="${tx.date}" data-desc="${escapeHTML(description)}" data-amount="${tx.amount}" data-dynamic="${tx.isSplitterDynamic ? 'true' : 'false'}" data-below-threshold="${tx.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${tx.parentDynId || ''}" style="cursor:pointer;">
+        return `<tr class="editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}"${todayRowMarkerId} draggable="true" data-id="${tx.id}" data-date="${tx.date}" data-desc="${escapeHTML(description)}" data-amount="${tx.amount}" data-dynamic="${tx.isSplitterDynamic ? 'true' : 'false'}" data-below-threshold="${tx.belowThreshold ? 'true' : 'false'}" data-parent-dyn-id="${tx.parentDynId || ''}" style="cursor:pointer;">
             <td>${isMobileViewport() ? formatDateDisplayCompact(tx.date) : formatDateDisplay(tx.date)}</td><td><strong${tx.deleted ? ' class="dynamic-tx-deleted"' : ''}>${escapeHTML(description)}</strong> ${getTransactionIndicatorBadges(tx)}</td>
             <td class="${color(Number(tx.jason) || 0)}">${tx.type === 'contribution' ? money(Number(tx.jason) || 0) : '—'}</td>
             <td class="${color(Number(tx.asia) || 0)}">${tx.type === 'contribution' ? money(Number(tx.asia) || 0) : '—'}</td>
@@ -14719,7 +17223,13 @@ function renderJointList() {
     container.querySelectorAll('.editable-row').forEach(row => {
         const openEditor = () => {
             if (row.dataset.dynamic === 'true') {
-                openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0);
+                // Was missing the 5th (parentDynId) argument personal/asia's own equivalent already
+                // passes — confirmed real bug, 2026-08-09: double-clicking a SPLIT PIECE row here
+                // (parentDynId set, e.g. "split-abc123") fell through to plain anchor-editor mode for
+                // a bogus id with no entry in state.dynamicOverrides, silently no-op'ing any Save/
+                // Delete/Revert. Matches the user's report that editing/reverting only worked from
+                // the Personal ledger, not Joint.
+                openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0, row.dataset.parentDynId || '');
                 return;
             }
             openEditTransactionModal(row.dataset.id, row.dataset.date);
@@ -14729,6 +17239,7 @@ function renderJointList() {
         // desktop reaches via double-click, and that modal has its own Delete button.
         if (isMobileViewport()) row.addEventListener('click', openEditor);
     });
+    wireListRowDragDrop(container, 'joint');
 }
 function showDayHighlightsDialog(sourceId) {
     const source = document.getElementById(sourceId);
@@ -14781,9 +17292,8 @@ function relocateQuickAddFormIntoModal(kind, dateStr) {
         // via the mobile FAB here) — default to today, same as the form's own untouched default.
         document.getElementById('savings-transfer-date').value = dateStr || formatLocalDate(new Date());
     } else {
-        let d = dateStr || '';
-        if (d && d.match(/^\d{4}-\d{2}-\d{2}$/)) d = `${d.substring(8,10)}/${d.substring(5,7)}/${d.substring(0,4)}`;
-        document.getElementById('trans-date').value = d;
+        // See init()'s matching comment — #trans-date is a native <input type="date">, ISO only.
+        document.getElementById('trans-date').value = dateStr || '';
         document.getElementById('trans-date').dataset.isoDate = dateStr || '';
         updateQuickAddFormFields();
     }
@@ -15028,9 +17538,22 @@ function renderDayHighlights(day) {
                             } else {
                                 const removed = state.jointRegister.splice(index, 1)[0];
                                 removeCheckingTransferMirror(removed, 'joint');
+                                removeAsiaCheckingTransferMirror(removed, 'joint');
                                 removeLinkedCardPaymentLeg(removed);
                                 logSystem(`Deleted joint transaction on ${formatDateDisplay(dDate)}: ${dDesc} ($${dAmt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
                             }
+                            saveDatabase();
+                            renderApp();
+                        }
+                    } else if (state.dashboardType === 'asia') {
+                        const monthObj = new Date(dDate + 'T00:00:00');
+                        const key = `${monthObj.getFullYear()}-${MONTH_ORDER[monthObj.getMonth()]}`;
+                        const txList = state.asiaCalendar[key] || [];
+                        const index = txList.findIndex(tx => tx.id === txId || (tx.date === dDate && tx.description === dDesc && Math.abs(tx.amount - dAmt) < 0.01));
+                        if (index > -1) {
+                            const removed = txList.splice(index, 1)[0];
+                            removeAsiaCheckingTransferMirror(removed, 'asia');
+                            logSystem(`Deleted Asia transaction on ${formatDateDisplay(dDate)}: ${dDesc} ($${dAmt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
                             saveDatabase();
                             renderApp();
                         }
@@ -15634,7 +18157,7 @@ function applySeasonalChargeForMonth(year, month) {
         // account, mirroring how Bill Tracker/Bill Splitter items already let paymentSource be a
         // card id (see populateCCDropdowns()).
         const chargeCard = state.loans.find(l => l.id === expense.chargeSource && l.type === 'credit');
-        const source = chargeCard ? 'card' : (expense.chargeSource === 'joint' ? 'joint' : 'personal');
+        const source = chargeCard ? 'card' : (expense.chargeSource === 'joint' ? 'joint' : 'jason');
         const amount = occDate ? Math.max(0, Math.round((Number(expense.chargeAmount) || 0) * 100) / 100) : 0;
         const dateStr = occDate ? formatLocalDate(occDate) : null;
         // Never touch an occurrence that's already in the past — even within the current month,
@@ -15649,7 +18172,7 @@ function applySeasonalChargeForMonth(year, month) {
         const existingCard = chargeCard ? Object.values(state.cardCalendars?.[chargeCard.id] || {}).flat().find(tx => tx.seasonalChargeId === linkId) : null;
         const existing = existingJoint || existingPersonal || existingCard;
         if (existing && amount > 0 && existing.date === dateStr && Math.abs((Number(existing.amount) || 0) + amount) < 0.005
-            && ((existingJoint && source === 'joint') || (existingPersonal && source === 'personal') || (existingCard && source === 'card'))) return;
+            && ((existingJoint && source === 'joint') || (existingPersonal && source === 'jason') || (existingCard && source === 'card'))) return;
 
         Object.values(state.personalCalendar || {}).forEach(list => { for (let i = list.length - 1; i >= 0; i--) if (list[i].seasonalChargeId === linkId) list.splice(i, 1); });
         for (let i = state.jointRegister.length - 1; i >= 0; i--) if (state.jointRegister[i].seasonalChargeId === linkId) state.jointRegister.splice(i, 1);
@@ -15688,7 +18211,7 @@ function openSeasonalEditor(expense) {
     document.getElementById('seasonal-has-charge').checked = !!expense.hasCharge;
     document.getElementById('seasonal-charge-amount').value = expense.chargeAmount || '';
     document.getElementById('seasonal-charge-date').value = expense.chargeDate || '';
-    document.getElementById('seasonal-charge-source').value = expense.chargeSource || 'personal';
+    document.getElementById('seasonal-charge-source').value = expense.chargeSource || 'jason';
     document.getElementById('seasonal-exempt-splitter').checked = !!expense.isExemptFromSplitter;
     document.getElementById('seasonal-charge-group').classList.toggle('hidden', !expense.hasCharge);
     document.getElementById('seasonal-dialog').showModal();
@@ -15737,14 +18260,14 @@ function renderBillSplitterMetrics(mBills, allBills) {
     const monthName = MONTH_NAMES[state.currentMonth];
     const daysInMonth = new Date(state.currentYear, MONTH_ORDER.indexOf(state.currentMonth) + 1, 0).getDate();
     const lastDayOrdinal = ordinal(daysInMonth);
-    document.getElementById('bills-metrics-title').textContent = `${ownership === 'personal' ? 'Personal' : 'Joint'} Bill Splitter Metrics — ${selectedCycleLabel}`;
+    document.getElementById('bills-metrics-title').textContent = `${ownership === 'jason' ? 'Personal' : 'Joint'} Bill Splitter Metrics — ${selectedCycleLabel}`;
     document.querySelectorAll('[data-bills-metrics-cycle]').forEach(button => button.classList.toggle('active', button.dataset.billsMetricsCycle === metricCycle));
 
     // Expenses card: the big number is always the total for whatever's selected (unchanged). Month
     // view breaks it down by cycle AND shows each cycle's 50/50 per-person split (joint expenses
     // only — a "personal" scoped card isn't a shared pot, so no split line there); a specific-cycle
     // view drops the numeric breakdown entirely and just labels which date range you're looking at.
-    document.getElementById('bills-expenses-title').textContent = `${ownership === 'personal' ? 'Personal' : 'Joint'} Expenses`;
+    document.getElementById('bills-expenses-title').textContent = `${ownership === 'jason' ? 'Personal' : 'Joint'} Expenses`;
     // "$total / $splitPerPerson" — e.g. "1st Cycle: $2,942 / $1,471".
     const expensesSub = metricCycle === 'month'
         ? (ownership === 'joint'
@@ -15764,14 +18287,14 @@ function renderBillSplitterMetrics(mBills, allBills) {
     // Mirror the Dashboard's own "Remaining Balance" card exactly — same function, same cycle
     // boundary (the 14th, not the 15th), same two figures — rather than an independently computed
     // balance here that can silently drift out of sync with what the Dashboard actually shows.
-    const { bal14th, balLast } = ownership === 'personal'
+    const { bal14th, balLast } = ownership === 'jason'
         ? getPersonalCalendarBalancesForMonth(state.currentYear, state.currentMonth)
         : getJointCalendarBalancesForMonth(state.currentYear, state.currentMonth);
     const selectedBalance = metricCycle === '1st' ? bal14th : balLast;
     // Always a single "as of" date label, never a 1st/2nd breakdown — Month and 2nd Cycle both mean
     // "as of the end of the month," 1st Cycle means "as of the 14th."
     const balanceAsOfLabel = metricCycle === '1st' ? `Ending balance as of ${monthName} 14th` : `Ending balance as of ${monthName} ${lastDayOrdinal}`;
-    document.getElementById('bills-balance-title').textContent = `${ownership === 'personal' ? 'Personal' : 'Joint'} Remaining Balance`;
+    document.getElementById('bills-balance-title').textContent = `${ownership === 'jason' ? 'Personal' : 'Joint'} Remaining Balance`;
     setMetric('bills-balance-total', selectedBalance, 'bills-balance-sub', balanceAsOfLabel);
 
     // Running totals in each section's OWN header (not just these dashboard cards), scoped to
@@ -16222,7 +18745,7 @@ function renderBillsTab() {
         allBills.forEach(bill => {
             const assignedCycle = bill.cycleAllocation === '15th' ? 'cycle15th' : 'cycle1st';
             const allocatedAmount = bill.cycleAllocation === 'both' ? bill.budgetAmount / 2 : (assignedCycle === cycleKey ? bill.budgetAmount : 0);
-            if (bill.ownership !== 'personal') jointBudget += allocatedAmount;
+            if (bill.ownership === 'joint') jointBudget += allocatedAmount;
         });
         // Preserve sign: negative "offset" allocations are meant to net against other allocations,
         // not add to them. 'both'-cycle allocations split half/half via getAllocationCycleTotal.
@@ -16349,15 +18872,15 @@ function renderBillsTab() {
     const jointBody = document.getElementById('joint-bills-body');
     jointBody.innerHTML = '';
     const ownershipFilter = state.billTrackerOwnership || 'joint';
-    document.getElementById('bill-tracker-title').textContent = ownershipFilter === 'personal' ? 'Personal Expenses' : 'Joint Expenses';
-    document.getElementById('btn-add-joint-bill').textContent = ownershipFilter === 'personal' ? '+ Add Personal Expense' : '+ Add Joint Expense';
+    document.getElementById('bill-tracker-title').textContent = ownershipFilter === 'jason' ? 'Personal Expenses' : 'Joint Expenses';
+    document.getElementById('btn-add-joint-bill').textContent = ownershipFilter === 'jason' ? '+ Add Personal Expense' : '+ Add Joint Expense';
     const categoryFilter = document.getElementById('bill-category-filter').value;
-    const billSort = state.billTrackerSorts?.[ownershipFilter] || { key: ownershipFilter === 'personal' ? 'dueDay' : 'account', direction: 'asc' };
+    const billSort = state.billTrackerSorts?.[ownershipFilter] || { key: ownershipFilter === 'jason' ? 'dueDay' : 'account', direction: 'asc' };
     document.getElementById('bill-sort-select').classList.add('hidden');
     // Text is set on the wrapper span (not the <th> itself) once column-filter buttons have been
     // wired in, since setting .textContent directly on the <th> would wipe out the filter button.
     const dateHeaderEl = document.getElementById('bill-date-header');
-    const dateHeaderLabel = ownershipFilter === 'personal' ? 'Charge Day' : 'Day';
+    const dateHeaderLabel = ownershipFilter === 'jason' ? 'Charge Day' : 'Day';
     const dateHeaderInner = dateHeaderEl.querySelector('.col-th-inner');
     if (dateHeaderInner) dateHeaderInner.textContent = dateHeaderLabel; else dateHeaderEl.textContent = dateHeaderLabel;
     let displayBills = ['cycle1st', 'cycle15th'].flatMap(cycleKey =>
@@ -16421,7 +18944,7 @@ function renderBillsTab() {
     const jointBillsSearch = document.getElementById('joint-bills-master-search')?.value || '';
     if (jointBillsSearch.trim()) {
         displayBills = displayBills.filter(({ bill }) => {
-            const sourceName = bill.paymentSource === 'none' || !bill.paymentSource ? 'No Source' : bill.paymentSource === 'jointChecking' ? 'Joint Checking' : bill.paymentSource === 'personalChecking' ? 'Personal Checking' : (state.loans.find(card => card.id === bill.paymentSource)?.name || 'Credit Card');
+            const sourceName = bill.paymentSource === 'none' || !bill.paymentSource ? 'No Source' : bill.paymentSource === 'jointChecking' ? 'Joint Checking' : bill.paymentSource === 'jasonChecking' ? "Jason's Checking" : bill.paymentSource === 'asiaChecking' ? "Asia's Checking" : (state.loans.find(card => card.id === bill.paymentSource)?.name || 'Credit Card');
             return matchesMasterSearch(jointBillsSearch, bill.account, bill.category, bill.ownership, sourceName, Number(bill.budgetAmount || 0).toFixed(2));
         });
     }
@@ -16464,7 +18987,7 @@ function renderBillsTab() {
     });
 
     displayBills.forEach(({ bill, cycleKey, idx, effectiveCycle, splitAmount, isSplit }) => {
-        const sourceName = bill.paymentSource === 'none' || !bill.paymentSource ? 'No Source' : bill.paymentSource === 'jointChecking' ? 'Joint Checking' : bill.paymentSource === 'personalChecking' ? 'Personal Checking' : (state.loans.find(card => card.id === bill.paymentSource)?.name || 'Credit Card');
+        const sourceName = bill.paymentSource === 'none' || !bill.paymentSource ? 'No Source' : bill.paymentSource === 'jointChecking' ? 'Joint Checking' : bill.paymentSource === 'jasonChecking' ? "Jason's Checking" : bill.paymentSource === 'asiaChecking' ? "Asia's Checking" : (state.loans.find(card => card.id === bill.paymentSource)?.name || 'Credit Card');
         const cycleLabel = `${effectiveCycle}${isSplit ? ' <span class="split-badge" title="This bill\'s monthly total is split across both the 1st and 15th cycles">&#128256; Split</span>' : ''}`;
         const frequencyLabels = { monthly: 'Monthly', weekly: 'Weekly', biweekly: 'Every 2 weeks', fourweekly: 'Every 4 weeks', quarterly: 'Every 3 months', annual: 'Annual' };
         const categoryLabels = { bill: 'Bill', expense: 'Expense', utility: 'Utility', savings: 'Savings / Investments' };
@@ -17643,7 +20166,7 @@ function openLoanExtraPayment(accountId, entryId = '') {
     document.getElementById('loan-extra-payment-amount').value = existing
         ? Math.abs(Number(existing.originalRequestedAmount ?? existing.amount) || 0).toFixed(2)
         : '';
-    document.getElementById('loan-extra-payment-source').value = existing?.owner || loan.paymentSource || 'personal';
+    document.getElementById('loan-extra-payment-source').value = existing?.owner || loan.paymentSource || 'jason';
 
     const typeGroup = document.getElementById('loan-extra-payment-type-group');
     const typeSelect = document.getElementById('loan-extra-payment-type');
@@ -17735,6 +20258,16 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
     const isLoanType = type === 'loan';
     let accounts = state.loans.filter(item => item.type === type);
     if (getDebtOverviewHideZero()[type]) accounts = accounts.filter(account => Math.abs(calculateCardLedgerBalance(account.id)) > 0.005);
+    const ownershipFilter = state.debtOwnershipFilter || 'all';
+    document.querySelectorAll(`#debt-ownership-filter-${type} .segment-btn`).forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.debtOwnership === ownershipFilter);
+    });
+    if (ownershipFilter !== 'all') {
+        accounts = accounts.filter(account => {
+            const owner = account.paymentSource === 'joint' ? 'joint' : account.paymentSource === 'asia' ? 'asia' : 'jason';
+            return owner === ownershipFilter;
+        });
+    }
     // Column-click sort (headers in the table view) takes priority over the dropdown when set —
     // clicking a header sets state.debtSummarySort[type]; the dropdown's own change handler clears
     // it so the two don't fight over which one "wins".
@@ -18076,7 +20609,7 @@ function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDat
     // filter, and Bill Splitter total keys off — distinct from `transferOwner` ('jason'/'asia',
     // just who gets the badge). Defaulting to 'personal' here matches every other transaction's own
     // default. Per explicit user request, 2026-08-05.
-    const resolvedLedgerOwner = ledgerOwner || 'personal';
+    const resolvedLedgerOwner = ledgerOwner || 'jason';
     const defaultDescription = `Balance Transfer - ${transferOwnerLabel} - ${sourceLabel}`;
     const description = (customDescription || '').trim() || defaultDescription;
 
@@ -18261,9 +20794,16 @@ function logInfo(msg) {
 function updateQuickAddFormFields() {
     const isPersonal = state.dashboardType === 'personal';
     const isJoint = state.dashboardType === 'joint';
+    const isAsiaDash = state.dashboardType === 'asia';
     const isSavingsTransfer = isPersonal && document.getElementById('personal-trans-type').value === 'savings-transfer';
     const isJointTransfer = isPersonal && document.getElementById('personal-trans-type').value === 'joint-transfer';
     const isJointTransferDeposit = isJointTransfer && document.getElementById('personal-joint-direction').value === 'deposit';
+    // Asia's Checking Transaction Type selector (Phase 3) — same shape as Jason's above, its own
+    // element ids since #quick-add-form is shared across all three dashboards and only one type
+    // group is ever visible at a time (see the hidden toggles below).
+    const isAsiaSavingsTransfer = isAsiaDash && document.getElementById('asia-trans-type').value === 'savings-transfer';
+    const isAsiaJointTransfer = isAsiaDash && document.getElementById('asia-trans-type').value === 'joint-transfer';
+    const isAsiaJointTransferDeposit = isAsiaJointTransfer && document.getElementById('asia-joint-direction').value === 'deposit';
     const jointTypeVal = document.getElementById('joint-trans-type').value;
     const isContribution = isJoint && (jointTypeVal === 'contribution' || jointTypeVal === 'withdrawal');
     const isExplicitWithdrawal = isJoint && jointTypeVal === 'withdrawal';
@@ -18275,9 +20815,12 @@ function updateQuickAddFormFields() {
     document.getElementById('personal-type-group').classList.toggle('hidden', !isPersonal);
     document.getElementById('personal-joint-transfer-group').classList.toggle('hidden', !isJointTransfer);
     document.getElementById('personal-joint-split-group').classList.toggle('hidden', !isJointTransferDeposit);
-    document.getElementById('trans-amount-label').textContent = isSavingsTransfer ? 'Personal Account Amount' : (isJointTransfer ? 'Transfer Amount' : 'Amount');
-    document.getElementById('trans-amount-hint').classList.toggle('hidden', !isSavingsTransfer);
-    document.getElementById('trans-amount').placeholder = isSavingsTransfer ? 'Negative to move into Savings' : (isJointTransfer ? 'Positive amount' : 'Negative for expenses');
+    document.getElementById('asia-type-group').classList.toggle('hidden', !isAsiaDash);
+    document.getElementById('asia-joint-transfer-group').classList.toggle('hidden', !isAsiaJointTransfer);
+    document.getElementById('asia-joint-split-group').classList.toggle('hidden', !isAsiaJointTransferDeposit);
+    document.getElementById('trans-amount-label').textContent = isSavingsTransfer ? 'Personal Account Amount' : (isAsiaSavingsTransfer ? 'Asia Account Amount' : ((isJointTransfer || isAsiaJointTransfer) ? 'Transfer Amount' : 'Amount'));
+    document.getElementById('trans-amount-hint').classList.toggle('hidden', !(isSavingsTransfer || isAsiaSavingsTransfer));
+    document.getElementById('trans-amount').placeholder = (isSavingsTransfer || isAsiaSavingsTransfer) ? 'Negative to move into Savings' : ((isJointTransfer || isAsiaJointTransfer) ? 'Positive amount' : 'Negative for expenses');
     document.getElementById('joint-contribution-group').classList.toggle('hidden', !isContribution);
     document.getElementById('single-amount-group').classList.toggle('hidden', isContribution);
     document.getElementById('contribution-deposit-fields').classList.toggle('hidden', isWithdrawal);
@@ -18372,7 +20915,7 @@ function updateTabTitles() {
     // request, 2026-08-05.
     const accountSettingsButton = document.getElementById('btn-open-account-settings');
     const showAccountSettings = activeTab === 'dashboard'
-        && (state.dashboardType === 'personal' || state.dashboardType === 'joint');
+        && (state.dashboardType === 'personal' || state.dashboardType === 'joint' || state.dashboardType === 'asia');
     accountSettingsButton?.classList.toggle('hidden', !showAccountSettings);
 
     const isLoanHome = activeTab === 'loans'
@@ -18382,26 +20925,33 @@ function updateTabTitles() {
     document.getElementById('header-period-nav')?.classList.toggle('hidden', isLoanHome || isCreditCardHome);
 
     if (activeTab === 'dashboard') {
-        let accountName = 'Personal';
+        let accountName = 'Jason';
         if (state.dashboardType === 'joint') {
             accountName = 'Joint';
+        } else if (state.dashboardType === 'asia') {
+            accountName = 'Asia';
         } else if (state.dashboardType !== 'personal') {
             const card = state.loans.find(l => l.id === state.dashboardType);
             if (card) accountName = card.name;
         }
-        // Personal/Joint get a clickable icon badge (custom upload or a default emoji) mirroring
-        // the credit-card/loan pattern, driven by the new Account Settings dialog — per explicit
-        // user request, 2026-08-05. The third branch above (dashboardType holding a card id) is an
-        // unrelated legacy case with no icon/login of its own, so it keeps the plain text title.
-        if (state.dashboardType === 'personal' || state.dashboardType === 'joint') {
-            const isJoint = state.dashboardType === 'joint';
-            const pseudoAccount = { name: `${accountName} Checking`, loginUrl: isJoint ? state.jointLoginUrl : state.personalLoginUrl };
-            const icon = getCustomAccountIcon(isJoint ? state.jointIcon : state.personalIcon, pseudoAccount.name) || { glyph: isJoint ? '👥' : '🏠', label: pseudoAccount.name };
+        // Jason/Joint/Asia get a clickable icon badge (custom upload or a default emoji) mirroring
+        // the credit-card/loan pattern, driven by the Account Settings dialog — per explicit user
+        // request, 2026-08-05 (extended to Asia 2026-08-06). The final branch above (dashboardType
+        // holding a card id) is an unrelated legacy case with no icon/login of its own, so it keeps
+        // the plain text title.
+        if (state.dashboardType === 'personal' || state.dashboardType === 'joint' || state.dashboardType === 'asia') {
+            const loginUrl = state.dashboardType === 'joint' ? state.jointLoginUrl : (state.dashboardType === 'asia' ? state.asiaLoginUrl : state.personalLoginUrl);
+            const iconVal = state.dashboardType === 'joint' ? state.jointIcon : (state.dashboardType === 'asia' ? state.asiaIcon : state.personalIcon);
+            const pseudoAccount = { name: `${accountName} Checking`, loginUrl };
+            const icon = getCustomAccountIcon(iconVal, pseudoAccount.name) || { glyph: state.dashboardType === 'joint' ? '👥' : '🏠', label: pseudoAccount.name };
             title.innerHTML = `${renderDebtAccountIconBadge(pseudoAccount, icon, 'header-debt-icon')}${escapeHTML(accountName)} Dashboard`;
         } else {
             title.textContent = `${accountName} Dashboard`;
         }
-        subtitle.textContent = `${state.dashboardType === 'personal' ? 'Personal checking calendar and cash flows' : (state.dashboardType === 'joint' ? 'Shared Joint Account ledger and expenditures' : 'Credit card transactions and running balance')}`;
+        subtitle.textContent = state.dashboardType === 'personal' ? "Jason's checking calendar and cash flows"
+            : state.dashboardType === 'joint' ? 'Shared Joint Account ledger and expenditures'
+            : state.dashboardType === 'asia' ? "Asia's checking calendar and cash flows"
+            : 'Credit card transactions and running balance';
     } else if (activeTab === 'bills') {
         title.textContent = `Shared Bills Split`;
         subtitle.textContent = "Split monthly payments and track delivery allocations";
@@ -18409,8 +20959,13 @@ function updateTabTitles() {
         title.textContent = `Delivery Side Gigs`;
         subtitle.textContent = "Log gig app logs and calculate daily payouts";
     } else if (activeTab === 'savings') {
-        const pseudoAccount = { name: 'Savings Tracker', loginUrl: state.savingsLoginUrl };
-        const icon = getCustomAccountIcon(state.savingsIcon, pseudoAccount.name) || { glyph: '💰', label: pseudoAccount.name };
+        // Reflects whichever pool is currently toggled — Asia's own icon/login URL now have full
+        // parity with the household pool's (see her Savings Account Settings dialog), so the header
+        // badge needs to switch with the toggle too, not stay pinned to the household pool's icon
+        // regardless of which one is selected.
+        const isAsiaPool = state.savingsPoolView === 'asia';
+        const pseudoAccount = { name: 'Savings Tracker', loginUrl: (isAsiaPool ? state.asiaSavingsLoginUrl : state.savingsLoginUrl) };
+        const icon = getCustomAccountIcon(isAsiaPool ? state.asiaSavingsIcon : state.savingsIcon, pseudoAccount.name) || { glyph: '💰', label: pseudoAccount.name };
         title.innerHTML = `${renderDebtAccountIconBadge(pseudoAccount, icon, 'header-debt-icon')}Savings Tracker`;
         subtitle.textContent = 'Plan savings transfers and track the projected balance';
     } else if (activeTab === 'loans') {
@@ -18486,31 +21041,45 @@ function updateTabTitles() {
 }
 
 function populateCCDropdowns() {
-    const dashboardCC = document.getElementById('dashboard-cc-optgroup');
-    const billSourceCC = document.getElementById('bill-source-cc-optgroup');
-    const billSettingsSourceCC = document.getElementById('bill-settings-source-cc-optgroup');
-    const seasonalChargeSourceCC = document.getElementById('seasonal-charge-source-cc-optgroup');
+    // Per explicit user request, 2026-08-10: these pickers used to lump every credit card into one
+    // flat "Credit Cards" group regardless of who owns it — with cards now spanning Joint/Jason/Asia
+    // (see Phase 4b), that made it hard to find the right one. Each select's single optgroup was
+    // split into three static ones in Index.html (id suffixed -joint/-asia/-jason); populate each
+    // from the matching ownership slice of state.loans, in that display order (Joint, Asia, Jason —
+    // the order explicitly requested). A group with zero cards just renders as an empty (invisible)
+    // optgroup, not a stray "Joint Cards" label with nothing under it.
+    const groups = {
+        billSource: { joint: 'bill-source-cc-optgroup-joint', asia: 'bill-source-cc-optgroup-asia', jason: 'bill-source-cc-optgroup-jason' },
+        billSettingsSource: { joint: 'bill-settings-source-cc-optgroup-joint', asia: 'bill-settings-source-cc-optgroup-asia', jason: 'bill-settings-source-cc-optgroup-jason' },
+        seasonalChargeSource: { joint: 'seasonal-charge-source-cc-optgroup-joint', asia: 'seasonal-charge-source-cc-optgroup-asia', jason: 'seasonal-charge-source-cc-optgroup-jason' },
+    };
+    const elements = {};
+    Object.entries(groups).forEach(([pickerKey, byOwnership]) => {
+        elements[pickerKey] = {};
+        Object.entries(byOwnership).forEach(([ownership, id]) => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '';
+            elements[pickerKey][ownership] = el;
+        });
+    });
 
-    if (dashboardCC) dashboardCC.innerHTML = '';
-    if (billSourceCC) billSourceCC.innerHTML = '';
-    if (billSettingsSourceCC) billSettingsSourceCC.innerHTML = '';
-    if (seasonalChargeSourceCC) seasonalChargeSourceCC.innerHTML = '';
-
-    // Alphabetical, not state.loans' own (insertion) order — with a dozen+ cards, finding one in a
-    // "No Source / Joint Checking / Personal Checking / Credit Cards: ..." picker is much easier
-    // sorted by name than in whatever order they happened to be added.
+    // Alphabetical within each ownership group, not state.loans' own (insertion) order — with a
+    // dozen+ cards, finding one in a "No Source / Joint Checking / Personal Checking / Credit
+    // Cards: ..." picker is much easier sorted by name than in whatever order they happened to be
+    // added.
     state.loans
         .filter(loan => loan.type === 'credit')
         .sort((a, b) => a.name.localeCompare(b.name))
         .forEach(loan => {
+            const ownership = loan.paymentSource === 'joint' ? 'joint' : loan.paymentSource === 'asia' ? 'asia' : 'jason';
             const opt = document.createElement('option');
             opt.value = loan.id;
             opt.textContent = loan.name;
 
-            if (dashboardCC) dashboardCC.appendChild(opt.cloneNode(true));
-            if (billSourceCC) billSourceCC.appendChild(opt.cloneNode(true));
-            if (billSettingsSourceCC) billSettingsSourceCC.appendChild(opt.cloneNode(true));
-            if (seasonalChargeSourceCC) seasonalChargeSourceCC.appendChild(opt.cloneNode(true));
+            Object.values(elements).forEach(byOwnership => {
+                const target = byOwnership[ownership];
+                if (target) target.appendChild(opt.cloneNode(true));
+            });
         });
 }
 
@@ -18748,9 +21317,9 @@ function restoreOrphanedPersonalRecurringBills() {
             frequencyAmount: group.amount,
             samePaymentAmount: true,
             dueDay: day,
-            paymentSource: 'personalChecking',
+            paymentSource: 'jasonChecking',
             entryType: 'actual',
-            ownership: 'personal',
+            ownership: 'jason',
             cycleAllocation: '1st',
             budgetFrequency: 'monthly',
             chargeFrequency: 'monthly',
@@ -18915,6 +21484,7 @@ function getBillLinkedLedgerEntries(billId) {
     const entries = [];
     Object.values(state.personalCalendar || {}).forEach(list => entries.push(...(list || []).filter(tx => tx.linkedBillId === billId)));
     entries.push(...(state.jointRegister || []).filter(tx => tx.linkedBillId === billId));
+    Object.values(state.asiaCalendar || {}).forEach(list => entries.push(...(list || []).filter(tx => tx.linkedBillId === billId)));
     Object.values(state.cardCalendars || {}).forEach(calendar => Object.values(calendar || {}).forEach(list => entries.push(...(list || []).filter(tx => tx.linkedBillId === billId))));
     return entries;
 }
@@ -18966,6 +21536,7 @@ function removeBillLedgerEntries(billId, year, month, oldBill = null, force = fa
     };
     if (state.personalCalendar[key]) state.personalCalendar[key] = state.personalCalendar[key].filter(removeLinkedOrLegacy);
     state.jointRegister = (state.jointRegister || []).filter(removeLinkedOrLegacy);
+    if (state.asiaCalendar && state.asiaCalendar[key]) state.asiaCalendar[key] = state.asiaCalendar[key].filter(removeLinkedOrLegacy);
     Object.values(state.cardCalendars || {}).forEach(calendar => {
         if (calendar[key]) calendar[key] = calendar[key].filter(removeLinkedOrLegacy);
     });
@@ -19040,11 +21611,14 @@ function syncBillLedgerEntry(rawBill, year, month, allowBackfill = false) {
         // Bill Tracker setting multiple times produced 5+ duplicate rows for the same historical date.
         if (getBillLinkedLedgerEntries(bill.id).some(tx => (tx.billOccurrenceDate || tx.date) === date)) return;
         const common = { date, amount: -occurrenceAmount, linkedBillId: bill.id, linkedBillSeriesId: bill.recurringSeriesId || bill.id, billOccurrenceDate: date, splitterItem: true, owner: bill.ownership, isRecurring: !!bill.isRecurring, billType: bill.billType || 'bill', isPlaceholder: !!bill.isPlaceholder, placeholderType: bill.placeholderType || '', billOccurrenceOverridden: false, billOccurrenceDeleted: false };
-        if (bill.paymentSource === 'personalChecking') {
+        if (bill.paymentSource === 'jasonChecking') {
             if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
             state.personalCalendar[key].push({ id: 'p-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common });
         } else if (bill.paymentSource === 'jointChecking') {
             state.jointRegister.push({ id: 'j-' + Math.random().toString(36).substr(2, 9), type: 'expense', name: bill.account, ...common });
+        } else if (bill.paymentSource === 'asiaChecking') {
+            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+            state.asiaCalendar[key].push({ id: 'a-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common });
         } else {
             if (!state.cardCalendars) state.cardCalendars = {};
             if (!state.cardCalendars[bill.paymentSource]) state.cardCalendars[bill.paymentSource] = {};
@@ -19146,13 +21720,16 @@ function deleteBillSplitterItem(bill, year, month, deleteFuture) {
             return Number(parts[0]) * 12 + Number(parts[1]) - 1 >= currentIndex;
         };
         const matchesSeries = tx => tx.linkedBillSeriesId === seriesId || tx.linkedBillId === bill.id || String(tx.linkedBillId || '').startsWith(`${seriesId}-`);
-        const matchesLegacy = tx => (tx.splitterItem || (bill.paymentSource === 'personalChecking' && tx.isRecurring)) &&
+        const matchesLegacy = tx => (tx.splitterItem || (bill.paymentSource === 'jasonChecking' && tx.isRecurring)) &&
             (tx.description || tx.name || tx.merchant) === bill.account &&
             Math.abs(Math.abs(Number(tx.amount) || 0) - getBillOccurrencePaymentAmount(bill)) < 0.001;
         Object.keys(state.personalCalendar || {}).forEach(key => {
-            state.personalCalendar[key] = (state.personalCalendar[key] || []).filter(tx => !(isCurrentOrFuture(tx) && (matchesSeries(tx) || (bill.paymentSource === 'personalChecking' && matchesLegacy(tx)))));
+            state.personalCalendar[key] = (state.personalCalendar[key] || []).filter(tx => !(isCurrentOrFuture(tx) && (matchesSeries(tx) || (bill.paymentSource === 'jasonChecking' && matchesLegacy(tx)))));
         });
         state.jointRegister = (state.jointRegister || []).filter(tx => !(isCurrentOrFuture(tx) && (matchesSeries(tx) || (bill.paymentSource === 'jointChecking' && matchesLegacy(tx)))));
+        Object.keys(state.asiaCalendar || {}).forEach(key => {
+            state.asiaCalendar[key] = (state.asiaCalendar[key] || []).filter(tx => !(isCurrentOrFuture(tx) && (matchesSeries(tx) || (bill.paymentSource === 'asiaChecking' && matchesLegacy(tx)))));
+        });
         Object.entries(state.cardCalendars || {}).forEach(([cardId, calendar]) => {
             Object.keys(calendar || {}).forEach(key => {
                 calendar[key] = (calendar[key] || []).filter(tx => !(isCurrentOrFuture(tx) && (matchesSeries(tx) || (bill.paymentSource === cardId && matchesLegacy(tx)))));
@@ -19234,10 +21811,13 @@ function syncCardPaymentSplitterRowsForMonth(year, month) {
 
     const payments = [];
     (state.personalCalendar[key] || []).forEach(tx => {
-        if (tx.payoffTargetId && !tx.billOccurrenceDeleted) payments.push({ tx, source: 'personal' });
+        if (tx.payoffTargetId && !tx.billOccurrenceDeleted) payments.push({ tx, source: 'jason' });
     });
     (state.jointRegister || []).forEach(tx => {
         if (tx.payoffTargetId && tx.date && tx.date.startsWith(prefix) && !tx.billOccurrenceDeleted) payments.push({ tx, source: 'joint' });
+    });
+    (state.asiaCalendar[key] || []).forEach(tx => {
+        if (tx.payoffTargetId && !tx.billOccurrenceDeleted) payments.push({ tx, source: 'asia' });
     });
 
     const activeRowIds = new Set();
@@ -19265,8 +21845,8 @@ function syncCardPaymentSplitterRowsForMonth(year, month) {
                 account: `Pmt: ${card.name}`,
                 category: 'bill',
                 entryType: 'calculation',
-                ownership: source === 'joint' ? 'joint' : 'personal',
-                paymentSource: source === 'joint' ? 'jointChecking' : 'personalChecking',
+                ownership: source === 'joint' ? 'joint' : source === 'asia' ? 'asia' : 'jason',
+                paymentSource: source === 'joint' ? 'jointChecking' : source === 'asia' ? 'asiaChecking' : 'jasonChecking',
                 dueDay: day,
                 cycleAllocation: resolvedCycle,
                 budgetAmount: amount,
@@ -19287,8 +21867,8 @@ function syncCardPaymentSplitterRowsForMonth(year, month) {
             row.account = `Pmt: ${card.name}`;
             row.dueDay = day;
             row.linkedPaymentDate = tx.date;
-            row.ownership = source === 'joint' ? 'joint' : 'personal';
-            row.paymentSource = source === 'joint' ? 'jointChecking' : 'personalChecking';
+            row.ownership = source === 'joint' ? 'joint' : source === 'asia' ? 'asia' : 'jason';
+            row.paymentSource = source === 'joint' ? 'jointChecking' : source === 'asia' ? 'asiaChecking' : 'jasonChecking';
             row.cardPaymentKind = isAuto ? 'auto' : 'manual';
             row.payoffTargetId = card.id;
             row.paymentAmount = amount;
@@ -20680,7 +23260,8 @@ function commitPayoffPayments() {
     }
 
     const startPayDate = new Date(startPayDateStr + 'T00:00:00');
-    const source = (card.paymentSource || card.owner) === 'joint' ? 'joint' : 'personal';
+    const cardPaymentSource = card.paymentSource || card.owner;
+    const source = cardPaymentSource === 'joint' ? 'joint' : cardPaymentSource === 'asia' ? 'asia' : 'jason';
     // Use the estimator's date-specific applied amounts so the final payment never overpays.
     const committedProjection = projectCardPayoffPath(cardId, monthsCount, startPayDateStr, pmtAmount, 0, true);
     const projPayments = committedProjection.additionalPayments || [];
@@ -20700,12 +23281,22 @@ function commitPayoffPayments() {
         ensureYearMonthInitialized(y, mShort);
 
         const linkId = 'payoff-pmt-' + Math.random().toString(36).substr(2, 9);
-        const checkingTxId = (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9);
+        const checkingTxId = (source === 'joint' ? 'j-' : source === 'asia' ? 'a-' : 'p-') + Math.random().toString(36).substr(2, 9);
         const pmtDesc = `Payoff: ${card.name}`;
 
-        if (source === 'personal') {
+        if (source === 'jason') {
             if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
             state.personalCalendar[key].push({
+                id: checkingTxId,
+                date: dateStr,
+                description: pmtDesc,
+                amount: -roundedAmount,
+                linkedPaymentId: linkId,
+                payoffTargetId: cardId
+            });
+        } else if (source === 'asia') {
+            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+            state.asiaCalendar[key].push({
                 id: checkingTxId,
                 date: dateStr,
                 description: pmtDesc,
@@ -20811,7 +23402,8 @@ function commitSliderPayments() {
     }
 
     let modifiedCount = 0;
-    const source = (card.paymentSource || card.owner) === 'joint' ? 'joint' : 'personal';
+    const cardPaymentSource = card.paymentSource || card.owner;
+    const source = cardPaymentSource === 'joint' ? 'joint' : cardPaymentSource === 'asia' ? 'asia' : 'jason';
     const monthsFromToday = (endDate.getFullYear() - today.getFullYear()) * 12 + (endDate.getMonth() - today.getMonth());
 
     for (let i = 0; i <= monthsFromToday + 1; i++) {
@@ -20835,6 +23427,13 @@ function commitSliderPayments() {
                         state.jointRegister.push({
                             id: 'j-' + Math.random().toString(36).substr(2, 9), type: 'expense', name: description,
                             description, date: tx.date, amount: -Math.abs(extraVal), linkedPaymentId: linkId,
+                            payoffTargetId: cardId, isPayoffPlan: true, isMortgagePayoffExtra: true
+                        });
+                    } else if (source === 'asia') {
+                        if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+                        state.asiaCalendar[key].push({
+                            id: 'a-' + Math.random().toString(36).substr(2, 9), description,
+                            date: tx.date, amount: -Math.abs(extraVal), linkedPaymentId: linkId,
                             payoffTargetId: cardId, isPayoffPlan: true, isMortgagePayoffExtra: true
                         });
                     } else {
@@ -20883,6 +23482,7 @@ function commitSliderPayments() {
                     };
                     findAndIncrease(state.personalCalendar);
                     findAndIncrease(state.jointRegister);
+                    findAndIncrease(state.asiaCalendar);
                 }
             }
         });
@@ -20953,11 +23553,22 @@ function countFutureTransactionsTiedToSetting(targetId, type = 'billTracker') {
                 count += (list || []).filter(isFuture).length;
             });
         }
-        // Count transfers in jointRegister
-        count += (state.jointRegister || []).filter(tx => isFuture(tx) && (tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId)).length;
-        // Count transfers in personalCalendar
+        // Bug fix, 2026-08-10: destinationAccount/transferTargetId are never actually SET on any
+        // transaction anywhere in this file (confirmed via grep — this was the only place either was
+        // referenced) — automatic-payment and payoff-payment checking-side legs are tagged
+        // payoffTargetId (see ensureAutomaticCardPaymentForMonth/commitPayoffPayments/etc.), which this
+        // count never checked, so the confirm dialog's "will delete N future transactions" always
+        // undercounted (usually to 0) for a card/loan with any automatic or payoff payments. Added
+        // payoffTargetId alongside the original conditions (kept, not replaced, in case some other
+        // path does set them) and asiaCalendar (missing entirely — an Asia-owned account's future
+        // checking-side legs were never counted at all).
+        const matchesCardCheckingTx = tx => tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId || tx.payoffTargetId === targetId;
+        count += (state.jointRegister || []).filter(tx => isFuture(tx) && matchesCardCheckingTx(tx)).length;
         Object.values(state.personalCalendar || {}).forEach(list => {
-            count += (list || []).filter(tx => isFuture(tx) && (tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId)).length;
+            count += (list || []).filter(tx => isFuture(tx) && matchesCardCheckingTx(tx)).length;
+        });
+        Object.values(state.asiaCalendar || {}).forEach(list => {
+            count += (list || []).filter(tx => isFuture(tx) && matchesCardCheckingTx(tx)).length;
         });
         return count;
     }
@@ -20991,9 +23602,19 @@ function deleteAllFutureTransactionsForSetting(targetId, type = 'billTracker') {
                 cal[monthKey] = (cal[monthKey] || []).filter(tx => !isFuture(tx));
             });
         }
-        state.jointRegister = (state.jointRegister || []).filter(tx => !(isFuture(tx) && (tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId)));
+        // Bug fix, 2026-08-10 — see the matching comment in countFutureTransactionsTiedToSetting():
+        // destinationAccount/transferTargetId are never actually set on any transaction; automatic-
+        // payment/payoff-payment checking-side legs are tagged payoffTargetId, which this filter never
+        // checked, so deleting a loan/card account left its future automatic/payoff payments stranded
+        // in the checking ledger forever. Confirmed live via a real Asia-owned loan. Added
+        // payoffTargetId (kept the original conditions too) and asiaCalendar (missing entirely).
+        const matchesCardCheckingTx = tx => tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId || tx.payoffTargetId === targetId;
+        state.jointRegister = (state.jointRegister || []).filter(tx => !(isFuture(tx) && matchesCardCheckingTx(tx)));
         Object.keys(state.personalCalendar || {}).forEach(monthKey => {
-            state.personalCalendar[monthKey] = (state.personalCalendar[monthKey] || []).filter(tx => !(isFuture(tx) && (tx.paymentSource === targetId || tx.destinationAccount === targetId || tx.transferTargetId === targetId)));
+            state.personalCalendar[monthKey] = (state.personalCalendar[monthKey] || []).filter(tx => !(isFuture(tx) && matchesCardCheckingTx(tx)));
+        });
+        Object.keys(state.asiaCalendar || {}).forEach(monthKey => {
+            state.asiaCalendar[monthKey] = (state.asiaCalendar[monthKey] || []).filter(tx => !(isFuture(tx) && matchesCardCheckingTx(tx)));
         });
         return;
     }
@@ -21009,6 +23630,9 @@ function deleteAllFutureTransactionsForSetting(targetId, type = 'billTracker') {
     state.jointRegister = (state.jointRegister || []).filter(tx => !(isFuture(tx) && matchesId(tx)));
     Object.keys(state.personalCalendar || {}).forEach(monthKey => {
         state.personalCalendar[monthKey] = (state.personalCalendar[monthKey] || []).filter(tx => !(isFuture(tx) && matchesId(tx)));
+    });
+    Object.keys(state.asiaCalendar || {}).forEach(monthKey => {
+        state.asiaCalendar[monthKey] = (state.asiaCalendar[monthKey] || []).filter(tx => !(isFuture(tx) && matchesId(tx)));
     });
 }
 
@@ -21328,7 +23952,7 @@ function resetXferEditor() {
     document.getElementById('xfer-promo-exp').value = '';
     document.getElementById('xfer-source').value = document.getElementById('xfer-source').options[0]?.value || '';
     document.getElementById('xfer-external-source-name').value = '';
-    document.getElementById('xfer-ledger-owner').value = 'personal';
+    document.getElementById('xfer-ledger-owner').value = 'jason';
     document.getElementById('xfer-description').value = '';
     xferDescriptionAutoValue = '';
     document.getElementById('btn-execute-xfer').textContent = 'Add Transfer';
@@ -21346,7 +23970,7 @@ function resetExistingPlanEditor() {
     document.getElementById('existing-plan-activated').value = formatLocalDate(new Date());
     // Pre-select a new plan's ownership to match the card currently open in the loan dialog, so a
     // plan on a Joint card defaults to Joint without the user having to think about it.
-    document.getElementById('existing-plan-ownership').value = document.getElementById('loan-payment-source').value === 'joint' ? 'joint' : 'personal';
+    document.getElementById('existing-plan-ownership').value = document.getElementById('loan-payment-source').value;
     editingPaymentPlanId = '';
     document.getElementById('btn-add-existing-plan').textContent = 'Add Existing Plan';
     document.getElementById('btn-cancel-plan-edit').classList.add('hidden');
@@ -21379,17 +24003,18 @@ function normalizePaymentPlan(plan) {
         // hard-defaulting here — this function has no access to the owning card, and an unset plan
         // should inherit the CARD's own ownership (resolved at each usage site via
         // resolvePaymentPlanOwnership()), not a fixed default.
-        ownership: plan.ownership === 'joint' ? 'joint' : (plan.ownership === 'personal' ? 'personal' : '')
+        ownership: ['joint', 'jason', 'asia'].includes(plan.ownership) ? plan.ownership : ''
     };
     normalized.payoffDate = calculatePlanPayoffDate(normalized);
     return normalized;
 }
 
-// A plan with no explicit ownership inherits the owning card's own personal/joint setting, rather
+// A plan with no explicit ownership inherits the owning card's own joint/jason/asia setting, rather
 // than a fixed default — see the comment on normalizePaymentPlan's `ownership` field.
 function resolvePaymentPlanOwnership(plan, card) {
-    if (plan?.ownership === 'joint' || plan?.ownership === 'personal') return plan.ownership;
-    return (card?.paymentSource || card?.owner) === 'joint' ? 'joint' : 'personal';
+    if (['joint', 'jason', 'asia'].includes(plan?.ownership)) return plan.ownership;
+    const cardSource = card?.paymentSource || card?.owner;
+    return cardSource === 'joint' ? 'joint' : cardSource === 'asia' ? 'asia' : 'jason';
 }
 
 function getStatementStartDate(closingDateStr, statementDay) {
@@ -21829,7 +24454,7 @@ function propagateRecurringChargeChanges(cardId, editedTx) {
         merchant: editedTx.merchant || '',
         description: editedTx.description,
         amount: editedTx.amount,
-        owner: editedTx.owner || 'personal',
+        owner: editedTx.owner || 'jason',
         trip: editedTx.trip || '',
         interestRate: editedTx.interestRate,
         isRecurring: true,
@@ -22228,7 +24853,7 @@ function setupCCDashboardListeners() {
             const pmtDesc = `Pmt: ${activeCard ? activeCard.name : 'Card'}`;
             const nowStamp = Date.now();
 
-            if (source === 'personal') {
+            if (source === 'jason') {
                 state.personalCalendar[key].push({
                     id: checkingTxId, date: dateStr, description: pmtDesc,
                     amount: -Math.abs(amount), linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
@@ -22257,7 +24882,7 @@ function setupCCDashboardListeners() {
             document.getElementById('cc-trans-desc').value = '';
             document.getElementById('cc-trans-amount').value = '';
             document.getElementById('cc-trans-kind').value = 'charge';
-            document.getElementById('cc-trans-owner').value = 'personal';
+            document.getElementById('cc-trans-owner').value = 'jason';
             document.getElementById('cc-trans-trip').value = '';
             document.getElementById('cc-trans-recurring').checked = false;
             document.getElementById('cc-recurring-day-group').classList.add('hidden');
@@ -22309,7 +24934,7 @@ function setupCCDashboardListeners() {
         document.getElementById('cc-trans-desc').value = '';
         document.getElementById('cc-trans-amount').value = '';
         document.getElementById('cc-trans-kind').value = 'charge';
-        document.getElementById('cc-trans-owner').value = 'personal';
+        document.getElementById('cc-trans-owner').value = 'jason';
         document.getElementById('cc-trans-trip').value = '';
         document.getElementById('cc-trans-recurring').checked = false;
         document.getElementById('cc-recurring-day-group').classList.add('hidden');
@@ -22392,6 +25017,12 @@ function syncLinkedPayoffPayment(cardTx) {
         const index = state.jointRegister.findIndex(tx => tx.linkedPaymentId === cardTx.linkedPaymentId);
         if (index > -1) linked = state.jointRegister.splice(index, 1)[0];
     }
+    if (!linked) {
+        for (const list of Object.values(state.asiaCalendar || {})) {
+            const index = list.findIndex(tx => tx.linkedPaymentId === cardTx.linkedPaymentId);
+            if (index > -1) { linked = list.splice(index, 1)[0]; break; }
+        }
+    }
     if (!linked) return;
 
     // The checking-side label reads "Pmt: <Card Name>" while the card-side entry's own description
@@ -22408,6 +25039,12 @@ function syncLinkedPayoffPayment(cardTx) {
     if (cardTx.owner === 'joint') {
         linked.name = checkingDescription;
         state.jointRegister.push(linked);
+    } else if (cardTx.owner === 'asia') {
+        const dateObj = new Date(cardTx.date + 'T00:00:00');
+        const targetKey = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+        ensureYearMonthInitialized(dateObj.getFullYear(), MONTH_ORDER[dateObj.getMonth()]);
+        if (!state.asiaCalendar[targetKey]) state.asiaCalendar[targetKey] = [];
+        state.asiaCalendar[targetKey].push(linked);
     } else {
         const dateObj = new Date(cardTx.date + 'T00:00:00');
         const targetKey = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
@@ -22514,6 +25151,10 @@ function deleteAutomaticPaymentBothLegs(linkId) {
         const idx = (list || []).findIndex(tx => tx.automaticPaymentId === linkId);
         if (idx > -1) list.splice(idx, 1);
     });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
+        const idx = (list || []).findIndex(tx => tx.automaticPaymentId === linkId);
+        if (idx > -1) list.splice(idx, 1);
+    });
     const jointIdx = (state.jointRegister || []).findIndex(tx => tx.automaticPaymentId === linkId);
     if (jointIdx > -1) state.jointRegister.splice(jointIdx, 1);
     skipAutomaticPaymentRegeneration(linkId);
@@ -22551,6 +25192,42 @@ function syncCheckingOverrideToCard(tx) {
     refreshMaterializedCardStatementCharges(cardId);
 }
 
+// getJointContinuousBalancesThroughMonth()/getPersonalAdjustedRunningBalanceAtDate() etc. build their
+// own byDate lookup FRESH from state.jointRegister/personalCalendar on every call (never cached
+// themselves) — only their OUTER per-(year,month) result is cached, in _jointContinuousBalanceCache/
+// _personalRunningBalanceCache/_jointRunningBalanceCache/_asiaRunningBalanceCache, and those are
+// normally only invalidated by saveDatabase(). syncAutomaticCardPaymentOverride() breaks that
+// assumption: it's a lazy "make sure this automatic payment's checking-side mirror is in sync" resync
+// that fires mid-RENDER, as a side effect of whichever calculation happens to need this month's Bill
+// Splitter transfer amount first (getCalculatedTransferForJason/ForAsia → autopopulateBillsForMonth →
+// rebuildDebtMonthFinance → here) — not from a user edit, and with no saveDatabase() call anywhere
+// nearby. Confirmed real bug, 2026-08-09: the Joint dashboard's "Remaining Balance" summary card
+// (computed early in renderSummaryCards(), populating these caches) disagreed with the Joint List's
+// own last-row running balance by the exact amount of one such resynced automatic payment, because
+// the List (rendered later in the same pass, reading jointRegister/personalCalendar fresh) saw the
+// freshly-synced mirror while the summary card's already-cached balance walk didn't.
+//
+// Deliberately clears ONLY these four — an earlier version of this fix also cleared
+// _adjustedTransferCache/_asiaAdjustedTransferCache/_transferForJasonCache/_transferForAsiaCache and
+// every checkpoint cache (mirroring saveDatabase()'s full list, on the theory that matched it), which
+// was a serious confirmed regression, 2026-08-09: those are exactly the caches
+// getCalculatedTransferForJason/ForAsia and getSimulatedTransferAdjustmentsForMonth themselves
+// populate, and clearing them mid-call (this function fires from INSIDE that same call chain) made
+// the very next month processed re-trigger the whole autopopulateBillsForMonth → ...→
+// syncAutomaticCardPaymentOverride chain again, which cleared them again, cascading — confirmed via
+// instrumentation to balloon a single Joint List Full-Year render from ~1,750 calls to
+// ensureAutomaticCardPaymentForMonth() (already the pre-existing baseline on a large dataset, not
+// itself new) up to over 24,000, turning a ~2.5s render into ~9s. sim.transfersByDate/splitTransfers
+// (what those caches actually hold) don't depend on jointRegister/personalCalendar content at all —
+// confirmed by direct comparison — so clearing them was never what fixed the original bug; re-tested
+// clearing only the four below and the original discrepancy stays fixed.
+function invalidateContinuousBalanceCaches() {
+    _personalRunningBalanceCache = {};
+    _jointRunningBalanceCache = {};
+    _asiaRunningBalanceCache = {};
+    _jointContinuousBalanceCache = {};
+}
+
 function syncAutomaticCardPaymentOverride(cardTx, cardId) {
     if (!cardTx.isAutomaticCardPayment || !cardTx.automaticPaymentId) return;
     const linkId = cardTx.automaticPaymentId;
@@ -22559,10 +25236,14 @@ function syncAutomaticCardPaymentOverride(cardTx, cardId) {
         const index = list.findIndex(tx => tx.automaticPaymentId === linkId);
         if (index > -1) linked = list.splice(index, 1)[0];
     });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
+        const index = list.findIndex(tx => tx.automaticPaymentId === linkId);
+        if (index > -1) linked = list.splice(index, 1)[0];
+    });
     const jointIndex = state.jointRegister.findIndex(tx => tx.automaticPaymentId === linkId);
     if (jointIndex > -1) linked = state.jointRegister.splice(jointIndex, 1)[0];
 
-    const source = cardTx.owner === 'joint' ? 'joint' : 'personal';
+    const source = cardTx.owner === 'joint' ? 'joint' : cardTx.owner === 'asia' ? 'asia' : 'jason';
     const dateObj = new Date(cardTx.date + 'T00:00:00');
     const month = MONTH_ORDER[dateObj.getMonth()];
     const key = `${dateObj.getFullYear()}-${month}`;
@@ -22570,7 +25251,7 @@ function syncAutomaticCardPaymentOverride(cardTx, cardId) {
     const card = state.loans.find(item => item.id === cardId);
     const checkingTx = {
         ...(linked || {}),
-        id: linked?.id || (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9),
+        id: linked?.id || (source === 'joint' ? 'j-' : source === 'asia' ? 'a-' : 'p-') + Math.random().toString(36).substr(2, 9),
         type: source === 'joint' ? 'expense' : undefined,
         name: `Pmt: ${card?.name || 'Credit Card'}`,
         description: `Pmt: ${card?.name || 'Credit Card'}`,
@@ -22588,7 +25269,9 @@ function syncAutomaticCardPaymentOverride(cardTx, cardId) {
         payoffTargetId: cardId
     };
     if (source === 'joint') state.jointRegister.push(checkingTx);
+    else if (source === 'asia') { if (!state.asiaCalendar[key]) state.asiaCalendar[key] = []; state.asiaCalendar[key].push(checkingTx); }
     else state.personalCalendar[key].push(checkingTx);
+    invalidateContinuousBalanceCaches();
     // Do not rebuild here: this helper is itself called from ensureAutomaticCardPaymentForMonth()
     // during a rebuild. The edit/save caller performs one rebuild after synchronization completes.
 }
@@ -22609,6 +25292,9 @@ function clearFutureAutomaticCardPayments(cardId, fromDate = formatLocalDate(new
         }
     });
     Object.values(state.personalCalendar || {}).forEach(list => {
+        for (let i = list.length - 1; i >= 0; i--) if (removedLinkIds.has(list[i].automaticPaymentId)) list.splice(i, 1);
+    });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
         for (let i = list.length - 1; i >= 0; i--) if (removedLinkIds.has(list[i].automaticPaymentId)) list.splice(i, 1);
     });
     for (let i = state.jointRegister.length - 1; i >= 0; i--) {
@@ -22668,6 +25354,9 @@ function revertAutomaticPaymentOverride(cardId, cardTxId) {
     const idx = list.findIndex(tx => tx.id === cardTxId);
     if (idx > -1) list.splice(idx, 1);
     Object.values(state.personalCalendar || {}).forEach(txList => {
+        for (let i = txList.length - 1; i >= 0; i--) if (txList[i].automaticPaymentId === linkId) txList.splice(i, 1);
+    });
+    Object.values(state.asiaCalendar || {}).forEach(txList => {
         for (let i = txList.length - 1; i >= 0; i--) if (txList[i].automaticPaymentId === linkId) txList.splice(i, 1);
     });
     for (let i = state.jointRegister.length - 1; i >= 0; i--) {
@@ -22745,6 +25434,7 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
             for (let index = state.jointRegister.length - 1; index >= 0; index--) {
                 if (legacyLinkIds.has(state.jointRegister[index].automaticPaymentId)) state.jointRegister.splice(index, 1);
             }
+            invalidateContinuousBalanceCaches();
         }
         return;
     }
@@ -22810,6 +25500,26 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     // This month's payment was deliberately deleted, or moved elsewhere (see
     // skipAutomaticPaymentRegeneration) — respect that instead of materializing a fresh replacement.
     if (state.automaticPaymentSkips?.[linkId]) return;
+    // Defense-in-depth for the same case, independent of whether the skip flag above actually got
+    // set — confirmed real bug, 2026-08-09: an automatic payment moved to a different month (via
+    // syncCheckingOverrideToCard(), which does correctly set the skip flag when it moves the card
+    // leg) can still end up here with NO skip flag if it was relocated by an older build that predates
+    // that call, or by any future code path that moves a card leg without going through it — every
+    // future visit to this payment's ORIGINAL month then regenerates a brand-new automatic payment
+    // reusing the EXACT SAME linkId as the one already living in its new month, a duplicate-linkId
+    // collision that breaks the 1:1 assumption every linkId-keyed lookup in this file relies on
+    // (syncAutomaticCardPaymentOverride's checking-mirror sync, revertAutomaticPaymentOverride,
+    // deleteAutomaticPaymentBothLegs — all findIndex/splice by automaticPaymentId, matching whichever
+    // one happens to be found first). Checking every other month's bucket on every call is only ever
+    // O(months materialized so far) for one card, not a real cost — and self-heals the skip flag too,
+    // so this full scan only ever actually runs once per stray payment.
+    const elsewhere = Object.entries(state.cardCalendars[cardId]).find(([otherKey, list]) =>
+        otherKey !== key && (list || []).some(tx => tx.automaticPaymentId === linkId));
+    if (elsewhere) {
+        if (!state.automaticPaymentSkips) state.automaticPaymentSkips = {};
+        state.automaticPaymentSkips[linkId] = true;
+        return;
+    }
     const existingIndex = cardList.findIndex(tx => tx.isAutomaticCardPayment);
     let existingPayment = null;
     if (existingIndex > -1) {
@@ -22833,6 +25543,9 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     )) {
         if (existingPayment) {
             Object.values(state.personalCalendar || {}).forEach(list => {
+                for (let i = list.length - 1; i >= 0; i--) if (list[i].automaticPaymentId === linkId) list.splice(i, 1);
+            });
+            Object.values(state.asiaCalendar || {}).forEach(list => {
                 for (let i = list.length - 1; i >= 0; i--) if (list[i].automaticPaymentId === linkId) list.splice(i, 1);
             });
             for (let i = state.jointRegister.length - 1; i >= 0; i--) {
@@ -22886,7 +25599,7 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     }
     amount = Math.max(0, Math.round(amount * 100) / 100);
 
-    const source = card.paymentSource || 'personal';
+    const source = card.paymentSource || 'jason';
 
     // Idempotence check: if the recomputed payment is identical to the existing one and its
     // checking-side leg still exists, put the existing transaction back untouched and stop.
@@ -22896,7 +25609,7 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     if (existingPayment && amount > 0
         && existingPayment.date === dueDate
         && Math.abs((Number(existingPayment.amount) || 0) - amount) < 0.005
-        && (existingPayment.owner || 'personal') === source) {
+        && (existingPayment.owner || 'jason') === source) {
         // Bug fix: this only ever checked "does at least one checking-side leg with this
         // automaticPaymentId exist" — if a legacy duplicate had already crept in (2+ legs sharing
         // the same id), this just confirmed "yes" and left both in place forever, every render,
@@ -22909,6 +25622,15 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
                 if (seenJoint) { state.jointRegister.splice(i, 1); } else { seenJoint = true; }
             }
             if (seenJoint) { cardList.push(existingPayment); return; }
+        } else if (source === 'asia') {
+            let seenAsia = false;
+            Object.values(state.asiaCalendar || {}).forEach(list => {
+                for (let i = (list || []).length - 1; i >= 0; i--) {
+                    if (list[i].automaticPaymentId !== linkId) continue;
+                    if (seenAsia) { list.splice(i, 1); } else { seenAsia = true; }
+                }
+            });
+            if (seenAsia) { cardList.push(existingPayment); return; }
         } else {
             let seenPersonal = false;
             Object.values(state.personalCalendar || {}).forEach(list => {
@@ -22922,6 +25644,9 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     }
 
     Object.values(state.personalCalendar || {}).forEach(list => {
+        for (let i = list.length - 1; i >= 0; i--) if (list[i].automaticPaymentId === linkId) list.splice(i, 1);
+    });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
         for (let i = list.length - 1; i >= 0; i--) if (list[i].automaticPaymentId === linkId) list.splice(i, 1);
     });
     for (let i = state.jointRegister.length - 1; i >= 0; i--) {
@@ -22938,7 +25663,7 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     }
 
     const checkingTx = {
-        id: (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9),
+        id: (source === 'joint' ? 'j-' : source === 'asia' ? 'a-' : 'p-') + Math.random().toString(36).substr(2, 9),
         type: source === 'joint' ? 'expense' : undefined,
         name: `Pmt: ${card.name}`,
         description: `Pmt: ${card.name}`,
@@ -22950,6 +25675,7 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     };
     ensureYearMonthInitialized(year, month);
     if (source === 'joint') state.jointRegister.push(checkingTx);
+    else if (source === 'asia') { if (!state.asiaCalendar[key]) state.asiaCalendar[key] = []; state.asiaCalendar[key].push(checkingTx); }
     else state.personalCalendar[key].push(checkingTx);
 
     cardList.push({
@@ -23093,7 +25819,7 @@ function renderCardPayoffWidgets(card) {
 
     const targetInput = document.getElementById('payoff-target-date');
     if (card.payoffTargetDate) targetInput.value = card.payoffTargetDate;
-    document.getElementById('payoff-source').value = card.payoffSource || card.paymentSource || 'personal';
+    document.getElementById('payoff-source').value = card.payoffSource || card.paymentSource || 'jason';
 
     const planSummary = document.getElementById('card-payment-plans-summary-list');
     if (!isLoan && planSummary) {
@@ -23711,7 +26437,7 @@ function exportTableToCSV(containerSelector, filenamePrefix) {
 }
 
 function exportListViewToCSV() {
-    const viewLabel = state.dashboardType === 'joint' ? 'joint' : 'personal';
+    const viewLabel = state.dashboardType === 'joint' ? 'joint' : (state.dashboardType === 'asia' ? 'asia' : 'personal');
     exportTableToCSV('#list-view-table-container', `${viewLabel}_list`);
 }
 
@@ -23779,7 +26505,7 @@ function renderCCCardList(cardId) {
     // 2026-08-05, per explicit user request — matchesMasterSearch() below already covers all three
     // (plus date/amount/badge text) through the single search box.
     txList = txList.filter(t => {
-        const owner = t.owner || 'personal';
+        const owner = t.owner || 'jason';
         const merchant = (t.merchant || '').trim();
         const trip = (t.trip || '').trim();
         return matchesMasterSearch(textFilter, merchant, t.description, owner, trip, formatDateDisplay(t.date), t.date, Number(t.amount).toFixed(2), getTransactionIndicatorSearchText(t));
@@ -23799,7 +26525,7 @@ function renderCCCardList(cardId) {
             case 'date': return t.date;
             case 'merchant': return (t.merchant || '').toLowerCase();
             case 'description': return (t.description || '').toLowerCase();
-            case 'owner': return t.owner || 'personal';
+            case 'owner': return t.owner || 'jason';
             case 'trip': return (t.trip || '').toLowerCase();
             case 'amount': return Number(t.amount) || 0;
             case 'type': return ccActivityType(t).toLowerCase();
@@ -23941,7 +26667,7 @@ function renderCCCardList(cardId) {
             return;
         }
 
-        const owner = t.owner || 'personal';
+        const owner = t.owner || 'jason';
         const trip = t.trip || '';
         const merchantCell = t.merchant ? `<span style="font-weight:600;">${escapeHTML(t.merchant)}</span>` : '<span class="muted-text">-</span>';
         const paidOffPlan = activePlans.find(plan => plan.isPaidOff && plan.paidOffDateStr === t.date);
@@ -24066,12 +26792,31 @@ function deleteLoanAccount(account) {
     if (index < 0) return false;
 
     const count = countFutureTransactionsTiedToSetting(account.id, 'card');
-    if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${account.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.`)) {
+    // Per explicit user request, 2026-08-10: a Bill Tracker setting whose Payment Source is THIS
+    // card had no warning at all before deletion — syncBillLedgerEntry's fallback treats any
+    // unrecognized paymentSource as a card id, so after deletion the bill would keep silently
+    // "posting" into state.cardCalendars[<deleted id>], a bucket nothing in the UI ever reads from,
+    // with zero visible sign the bill stopped actually funding anything. Warn up front by name, and
+    // reset affected settings to 'none' (No Source / budget only) on deletion, so the Bill Tracker
+    // list visibly shows "No Source" instead of silently going nowhere.
+    const affectedSettings = (state.billTrackerSettings || []).filter(s => s.source === account.id);
+    const warningText = affectedSettings.length
+        ? `\n\n⚠️ ${affectedSettings.length} bill/expense${affectedSettings.length === 1 ? '' : 's'} ` +
+          `currently use this as their payment source and will be reset to "No Source" (budget only, won't post anywhere) once this is deleted:\n` +
+          affectedSettings.map(s => `• ${s.name}`).join('\n') +
+          `\n\nYou'll need to pick a new payment source for ${affectedSettings.length === 1 ? 'it' : 'them'} afterward.`
+        : '';
+
+    if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${account.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.${warningText}`)) {
         return false;
     }
 
     const removed = state.loans.splice(index, 1)[0];
     deleteAllFutureTransactionsForSetting(removed.id, 'card');
+    if (affectedSettings.length) {
+        affectedSettings.forEach(s => { s.source = 'none'; });
+        syncBillTrackerBillsToAllMonths();
+    }
 
     if (isLoanType) syncMortgageLoansToAllMonths();
     saveDatabase();
@@ -24158,7 +26903,7 @@ function applyDebtConsolidation(newLoanId, accounts, transferDate, cashOutAmount
             merchant: account.name,
             amount: payoffAmount,
             transactionKind: 'payment',
-            owner: account.paymentSource === 'joint' ? 'joint' : 'personal',
+            owner: account.paymentSource === 'joint' ? 'joint' : account.paymentSource === 'asia' ? 'asia' : 'jason',
             isDebtConsolidationPayment: true,
             consolidationLoanId: newLoanId
         });
@@ -24171,7 +26916,7 @@ function applyDebtConsolidation(newLoanId, accounts, transferDate, cashOutAmount
 
     if (cashOutAmount > 0.005) {
         const cashOutTx = {
-            id: (cashOutDest === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9),
+            id: (cashOutDest === 'joint' ? 'j-' : cashOutDest === 'asia' ? 'a-' : 'p-') + Math.random().toString(36).substr(2, 9),
             type: cashOutDest === 'joint' ? 'income' : undefined,
             name: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
             description: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
@@ -24181,6 +26926,7 @@ function applyDebtConsolidation(newLoanId, accounts, transferDate, cashOutAmount
             consolidationLoanId: newLoanId
         };
         if (cashOutDest === 'joint') state.jointRegister.push(cashOutTx);
+        else if (cashOutDest === 'asia') { if (!state.asiaCalendar[key]) state.asiaCalendar[key] = []; state.asiaCalendar[key].push(cashOutTx); }
         else state.personalCalendar[key].push(cashOutTx);
     }
 }
@@ -24214,7 +26960,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-is-charge-card').checked = !!loan.isChargeCard;
     document.getElementById('loan-limit-field').value = loan.isChargeCard ? '' : (loan.limit || 5000);
     document.getElementById('loan-payment-strategy').value = loan.paymentStrategy || 'none';
-    document.getElementById('loan-payment-source').value = loan.paymentSource || 'personal';
+    document.getElementById('loan-payment-source').value = loan.paymentSource || 'jason';
     document.getElementById('loan-first-payment-date').value = loan.paymentStrategyStartDate || '';
     document.getElementById('loan-payment-end-date').value = loan.paymentEndDate || '';
     document.getElementById('loan-splitter-cycle').value = loan.splitterCycleOverride || (Number(loan.dueDay) <= 14 ? '1st' : '15th');
@@ -24500,7 +27246,7 @@ function getBillTrackerCardSortValue(bill, key) {
         case 'autopay': return bill.autopay ? 1 : 0;
         case 'recurring': return bill.recurring ? 1 : 0;
         case 'closingDate': return (bill.hasClosing && bill.closingDate) ? Number(bill.closingDate) || 0 : -1;
-        case 'source': return bill.source === 'jointChecking' ? 'Joint Checking' : bill.source === 'personalChecking' ? 'Personal Checking' : (state.loans.find(card => card.id === bill.source)?.name || 'Credit Card');
+        case 'source': return bill.source === 'jointChecking' ? 'Joint Checking' : bill.source === 'jasonChecking' ? "Jason's Checking" : bill.source === 'asiaChecking' ? "Asia's Checking" : (state.loans.find(card => card.id === bill.source)?.name || 'Credit Card');
         default: return (bill.name || '').toLowerCase();
     }
 }
@@ -24508,7 +27254,8 @@ function getBillTrackerCardSortValue(bill, key) {
 function describeBillTrackerSetting(bill) {
     const sourceName = bill.source === 'none' || !bill.source ? 'No Source' :
                        bill.source === 'jointChecking' ? 'Joint Checking' :
-                       bill.source === 'personalChecking' ? 'Personal Checking' :
+                       bill.source === 'jasonChecking' ? "Jason's Checking" :
+                       bill.source === 'asiaChecking' ? "Asia's Checking" :
                        (state.loans.find(card => card.id === bill.source)?.name || 'Credit Card');
 
     let recurDesc = 'No';
@@ -24551,6 +27298,22 @@ function deleteBillTrackerSetting(bill) {
 }
 
 function renderBillTrackerTab() {
+    // Guarantees _billTrackerScheduledAmountsByMonth (read by the totals line AND the "scheduled
+    // this month only" filter below) is fresh regardless of which tab was rendered last — mirrors
+    // the same call renderBillTrackerCalendar() already makes for itself, for the same reason (this
+    // page can be opened without ever visiting Bill Splitter/Dashboard this session, which are the
+    // other paths that normally trigger this).
+    ensureYearMonthInitialized(state.currentYear, state.currentMonth);
+    autopopulateBillsForMonth(state.currentYear, state.currentMonth);
+    // autopopulateBillsForMonth() above only calls the SIGNATURE-GATED
+    // syncBillTrackerBillsToAllMonthsIfChanged(), which no-ops whenever settings/month-count haven't
+    // changed since the last call from ANYWHERE in the app (Dashboard, Bill Splitter, etc.) — on a
+    // large dataset (many materialized months) that skip is important for render speed, so don't
+    // force the real (expensive, ~2s on a 90-month dataset) sync unconditionally. Only self-heal by
+    // forcing it when the currently-viewed month is actually missing from the cache — the one case
+    // that would otherwise leave the totals line/filter silently empty for this render.
+    const _viewedMonthKeyForSync = `${state.currentYear}-${state.currentMonth}`;
+    if (!_billTrackerScheduledAmountsByMonth[_viewedMonthKeyForSync]) syncBillTrackerBillsToAllMonths();
     const viewMode = state.billTrackerViewMode || 'cards';
     const isCalendar = viewMode === 'calendar';
     const isList = viewMode === 'list';
@@ -24589,41 +27352,51 @@ function renderBillTrackerTab() {
     // Bill Tracker's total is joint vs. personal, filterable to just one side.
     const allSettings = state.billTrackerSettings || [];
     const fmtTotal = v => `$${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    // Bug fix: this used to just sum every setting's raw Estimated Cost, regardless of whether it's
-    // even active this month — a quarterly/annual bill, a one-time placeholder dated years out, or
-    // anything gated by First Payment Date/End Date all counted their FULL estimate every single
-    // month, wildly overstating what's actually posting now. Sum the REAL amount each setting is
-    // actually posting in the real current month instead, reading straight from the ledger (which
-    // already correctly accounts for every one of those gates) rather than re-deriving them here.
-    const today = new Date();
-    const currentMonthPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-`;
-    const getSettingMonthlyPostedAmount = setting => {
-        const linkId = `bill-settings-${setting.id}`;
-        let total = 0;
-        Object.values(state.personalCalendar || {}).forEach(list => (list || []).forEach(tx => {
-            if (tx.linkedBillId === linkId && tx.date && tx.date.startsWith(currentMonthPrefix)) total += Math.abs(Number(tx.amount) || 0);
-        }));
-        (state.jointRegister || []).forEach(tx => {
-            if (tx.linkedBillId === linkId && tx.date && tx.date.startsWith(currentMonthPrefix)) total += Math.abs(Number(tx.amount) || 0);
-        });
-        Object.values(state.cardCalendars || {}).forEach(calendar => Object.values(calendar || {}).forEach(list => (list || []).forEach(tx => {
-            if (tx.linkedBillId === linkId && tx.date && tx.date.startsWith(currentMonthPrefix)) total += Math.abs(Number(tx.amount) || 0);
-        })));
-        return total;
-    };
-    const jointTotal = allSettings.filter(b => (b.ownership || 'joint') === 'joint').reduce((sum, b) => sum + getSettingMonthlyPostedAmount(b), 0);
-    const personalTotal = allSettings.filter(b => b.ownership === 'personal').reduce((sum, b) => sum + getSettingMonthlyPostedAmount(b), 0);
+    // Per explicit user request, 2026-08-09: show what's SCHEDULED for the currently-viewed month
+    // (tracks the header's Year/Month nav, not always literally today), not just what has already
+    // posted to the ledger as of today — a bill due later this month should count now, not stay at
+    // $0 until its due date passes. Reads _billTrackerScheduledAmountsByMonth, populated as a side
+    // effect of syncBillTrackerBillsToAllMonths()'s own per-setting gating (one-time-only / First
+    // Payment Date / End Date) and budget calculation (calculateBillFundingAmount, correctly spreads
+    // quarterly/annual bills rather than counting their full estimate every month) — reusing that
+    // already-correct calculation instead of re-deriving the same gates a second time here, which
+    // would risk silently disagreeing with it. syncBillTrackerBillsToAllMonths() runs earlier in the
+    // same render pass (via autopopulateBillsForMonth), so the cache is always fresh by the time
+    // this reads it.
+    const viewedMonthKey = `${state.currentYear}-${state.currentMonth}`;
+    const viewedMonthScheduled = _billTrackerScheduledAmountsByMonth[viewedMonthKey] || {};
+    const getSettingMonthlyScheduledAmount = setting => viewedMonthScheduled[setting.id] || 0;
+    const jointTotal = allSettings.filter(b => (b.ownership || 'joint') === 'joint').reduce((sum, b) => sum + getSettingMonthlyScheduledAmount(b), 0);
+    const personalTotal = allSettings.filter(b => b.ownership === 'jason').reduce((sum, b) => sum + getSettingMonthlyScheduledAmount(b), 0);
+    const asiaTotal = allSettings.filter(b => b.ownership === 'asia').reduce((sum, b) => sum + getSettingMonthlyScheduledAmount(b), 0);
     const totalsLine = document.getElementById('billtracker-totals-line');
-    if (totalsLine) totalsLine.textContent = `Posting This Month: ${fmtTotal(jointTotal + personalTotal)} (Joint: ${fmtTotal(jointTotal)} | Personal: ${fmtTotal(personalTotal)})`;
+    if (totalsLine) totalsLine.textContent = `Scheduled for ${state.currentMonth} ${state.currentYear}: ${fmtTotal(jointTotal + personalTotal + asiaTotal)} (Joint: ${fmtTotal(jointTotal)} | Jason: ${fmtTotal(personalTotal)} | Asia: ${fmtTotal(asiaTotal)})`;
     const ownershipFilter = state.billTrackerOwnershipFilter || 'all';
     document.querySelectorAll('#billtracker-ownership-filter .segment-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.billtrackerOwnership === ownershipFilter);
     });
+    // Per explicit user request, 2026-08-09: List/Cards views show every recurring setting ever
+    // created regardless of whether it actually applies to the month being viewed (unlike the
+    // Calendar view, which already only shows real occurrences) — defaults OFF (all bills), matching
+    // existing behavior, since this is an added option, not a behavior change. Reuses the same
+    // _billTrackerScheduledAmountsByMonth cache the totals line above reads, keyed to the same
+    // viewedMonthKey, so "scheduled this month" means the same thing in both places.
+    const scheduledOnlyCheckbox = document.getElementById('billtracker-scheduled-this-month-only');
+    if (scheduledOnlyCheckbox) scheduledOnlyCheckbox.checked = !!state.billTrackerScheduledThisMonthOnly;
 
     if (!state.billTrackerSorts) state.billTrackerSorts = {};
     const sortKey = isList ? (state.billTrackerSorts.billTracker?.key || 'name') : (state.billTrackerCardSort || 'name');
     const sortDirection = isList ? (state.billTrackerSorts.billTracker?.direction || 'asc') : 'asc';
-    const filteredSettings = ownershipFilter === 'all' ? allSettings : allSettings.filter(b => (b.ownership || 'joint') === ownershipFilter);
+    let filteredSettings = ownershipFilter === 'all' ? allSettings : allSettings.filter(b => (b.ownership || 'joint') === ownershipFilter);
+    if (state.billTrackerScheduledThisMonthOnly) {
+        // Bug fix: hasOwnProperty alone isn't enough — a "Charge"-budget-method bill (annual/quarterly,
+        // only funded in its actual charge month) still gets a cache ENTRY for every OTHER month too
+        // (see the capture site in syncBillTrackerBillsToAllMonths, which always writes
+        // recalculated.budgetAmount, including legitimate $0 months), so presence alone matched an
+        // October cardmember fee or an April tax placeholder in every month of the year. Filter on the
+        // actual amount instead.
+        filteredSettings = filteredSettings.filter(b => (viewedMonthScheduled[b.id] || 0) > 0.005);
+    }
     const settings = [...filteredSettings].sort((a, b) => {
         const valA = getBillTrackerCardSortValue(a, sortKey);
         const valB = getBillTrackerCardSortValue(b, sortKey);
@@ -24656,10 +27429,16 @@ function renderBillTrackerTab() {
                 // does persist correctly) looked broken any time someone didn't reopen Edit to check.
                 const exemptBadge = bill.excludeFromSplitter ? '<br><span class="cc-source-badge manual" title="Not shown/budgeted in the Bill Splitter — still posts to its Payment Source normally">&#128683; Excluded from Splitter</span>' : '';
                 const placeholderBadge = bill.isPlaceholder ? `<br>${getPlaceholderBadge(bill)}` : '';
+                // When "Scheduled this month only" is active, show what's actually budgeted THIS
+                // month (matches the totals line/filter) instead of the flat total estimate — per
+                // explicit user request, 2026-08-10: a "Spread Evenly" annual bill showing its full
+                // $894.96 estimate while the filter is scoped to one month's $74.58 slice looked like
+                // the whole amount was due now, when only the monthly slice actually is.
+                const displayAmount = state.billTrackerScheduledThisMonthOnly ? viewedMonthScheduled[bill.id] : bill.estimate;
                 row.innerHTML = `
                     <td><div class="debt-table-account">${renderDebtAccountIconBadge(bill, icon, 'compact')}<div><strong>${escapeHTML(bill.name)}</strong>${exemptBadge}${placeholderBadge}</div></div></td>
-                    <td>${escapeHTML(bill.category || '')}<br><span class="muted-text">${bill.ownership === 'joint' ? 'Joint' : 'Personal'}</span></td>
-                    <td class="negative font-heading" style="font-weight:600;">${formatBillAmountText(bill.estimate)}</td>
+                    <td>${escapeHTML(bill.category || '')}<br><span class="muted-text">${bill.ownership === 'joint' ? 'Joint' : bill.ownership === 'asia' ? 'Asia' : 'Jason'}</span></td>
+                    <td class="negative font-heading" style="font-weight:600;">${formatBillAmountText(displayAmount)}</td>
                     <td>${paymentDateText}</td>
                     <td>${closingDateText || 'None'}</td>
                     <td>${bill.autopay ? 'Yes' : 'No'}</td>
@@ -24706,10 +27485,17 @@ function renderBillTrackerTab() {
 
     visibleSettings.forEach(bill => {
         const { sourceName, recurDesc, paymentDateText, closingDateText, icon } = describeBillTrackerSetting(bill);
-        const ownershipBadge = `<span class="debt-store-badge">${bill.ownership === 'joint' ? 'Joint' : 'Personal'} · ${escapeHTML(bill.category || '')}</span>`;
+        const ownershipBadge = `<span class="debt-store-badge">${bill.ownership === 'joint' ? 'Joint' : bill.ownership === 'asia' ? 'Asia' : 'Jason'} · ${escapeHTML(bill.category || '')}</span>`;
         // Same visible confirmation as the List view — see its comment for why this exists.
         const exemptBadge = bill.excludeFromSplitter ? '<span class="debt-store-badge" title="Not shown/budgeted in the Bill Splitter — still posts to its Payment Source normally">&#128683; Excluded from Splitter</span>' : '';
         const placeholderBadge = getPlaceholderBadge(bill);
+        // When "Scheduled this month only" is active, show what's actually budgeted THIS month
+        // (matches the totals line/filter) instead of the flat total estimate — per explicit user
+        // request, 2026-08-10: a "Spread Evenly" annual bill showing its full $894.96 estimate while
+        // the filter is scoped to one month's $74.58 slice looked like the whole amount was due now,
+        // when only the monthly slice actually is.
+        const displayAmount = state.billTrackerScheduledThisMonthOnly ? viewedMonthScheduled[bill.id] : bill.estimate;
+        const amountLabel = state.billTrackerScheduledThisMonthOnly ? 'Scheduled This Month' : 'Estimated Cost';
 
         const card = document.createElement('div');
         card.className = 'glass-card loan-overview-card bill-tracker-card';
@@ -24732,7 +27518,7 @@ function renderBillTrackerTab() {
                 </div>
             </div>
             <div class="debt-overview-metrics">
-                <div><span>Estimated Cost</span><strong>${formatBillAmountText(bill.estimate)}</strong></div>
+                <div><span>${amountLabel}</span><strong>${formatBillAmountText(displayAmount)}</strong></div>
                 <div><span>Payment Date</span><strong>${paymentDateText}</strong></div>
                 <div><span>Payment Source</span><strong>${escapeHTML(sourceName)}</strong></div>
                 <div><span>Recurring</span><strong>${recurDesc}</strong></div>
@@ -24891,6 +27677,11 @@ function setupBillTrackerListeners() {
             saveDatabase();
             renderBillTrackerTab();
         });
+    });
+    document.getElementById('billtracker-scheduled-this-month-only')?.addEventListener('change', event => {
+        state.billTrackerScheduledThisMonthOnly = event.target.checked;
+        saveDatabase();
+        renderBillTrackerTab();
     });
     document.querySelectorAll('#billtracker-view-toggle .segment-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -25228,6 +28019,7 @@ function backfillBillTrackerSettingOccurrences(setting) {
 
 function syncBillTrackerBillsToAllMonths() {
     const activeSettings = state.billTrackerSettings || [];
+    _billTrackerScheduledAmountsByMonth = {};
 
     Object.keys(state.monthlyBills || {}).forEach(key => {
         const mBills = state.monthlyBills[key];
@@ -25293,7 +28085,7 @@ function syncBillTrackerBillsToAllMonths() {
                 // Personal-ownership settings get the same treatment — the Bill Splitter no longer
                 // has a "Personal" side at all, so a personal bill is never budgeted/shown there, but
                 // (per this same fix) it's still posted to its own chosen payment source's ledger.
-                const excludeFromSplitterDisplay = setting.excludeFromSplitter || setting.ownership === 'personal';
+                const excludeFromSplitterDisplay = setting.excludeFromSplitter || setting.ownership === 'jason' || setting.ownership === 'asia';
                 if (excludeFromSplitterDisplay) {
                     ['cycle1st', 'cycle15th'].forEach(cycleKey => {
                         mBills[cycleKey].bills = mBills[cycleKey].bills.filter(b => b.billTrackerSettingId !== setting.id);
@@ -25490,6 +28282,8 @@ function syncBillTrackerBillsToAllMonths() {
 
                     const recalculated = recalculateBillBudgetForPeriod(bill, Number(y), m);
                     Object.assign(bill, recalculated);
+                    if (!_billTrackerScheduledAmountsByMonth[key]) _billTrackerScheduledAmountsByMonth[key] = {};
+                    _billTrackerScheduledAmountsByMonth[key][setting.id] = recalculated.budgetAmount;
                     syncBillLedgerEntry(bill, Number(y), m);
                 } else {
                     const newBill = {
@@ -25535,6 +28329,8 @@ function syncBillTrackerBillsToAllMonths() {
 
                     const recalculated = recalculateBillBudgetForPeriod(newBill, Number(y), m);
                     Object.assign(newBill, recalculated);
+                    if (!_billTrackerScheduledAmountsByMonth[key]) _billTrackerScheduledAmountsByMonth[key] = {};
+                    _billTrackerScheduledAmountsByMonth[key][setting.id] = recalculated.budgetAmount;
                     syncBillLedgerEntry(newBill, Number(y), m);
                 }
             });
