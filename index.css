@@ -1216,6 +1216,36 @@ label {
     cursor: pointer;
 }
 
+/* Savings-transfer ownership flag — Joint calendar chip/List badge (whose Savings pool a
+   Jason<->Joint or Asia<->Joint savings transfer belongs to) and the Bill Splitter's Jason/Asia
+   transfer card pills. Blue for Jason, green for Asia. Deliberately a distinct color pair from the
+   three warning flags above (yellow/red/orange) — this is an OWNER indicator, not a condition. Per
+   explicit user request, 2026-08-09.*/
+.owner-flag,
+.transfer-cycle-breakdown span .owner-flag {
+    display: inline-block;
+    width: auto;
+    height: auto;
+    margin-left: 0.35rem;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    font-size: 0.8em;
+    background: none;
+    -webkit-background-clip: initial;
+    background-clip: initial;
+}
+.owner-flag.owner-jason { -webkit-text-fill-color: #3b82f6; color: #3b82f6; }
+.owner-flag.owner-asia { -webkit-text-fill-color: #22c55e; color: #22c55e; }
+
+/* Inside the Jason/Asia pills (colored gradient background, white text) the flag needs a light
+   outline to stay legible against its own blue/green fill instead of blending into the gradient. */
+.col-name-pill .owner-flag {
+    margin-left: 0;
+    margin-right: 0.35rem;
+    -webkit-text-stroke: 1px rgba(255, 255, 255, 0.65);
+}
+
 /* A deleted dynamic joint-transfer occurrence renders struck-through at $0.00 instead of being
    omitted entirely — visible, non-destructive, always revertible via openDynamicTxEditor's
    "Revert to Original" button. Applied to the description text (calendar chip span, list row
@@ -2370,37 +2400,36 @@ label {
     padding: 1rem;
 }
 
-@media (max-width: 900px) {
-    .gig-entry-dialog {
+body.is-mobile-screen .gig-entry-dialog {
         width: 92%;
         max-width: 380px;
         padding: 1.5rem;
     }
-
-    /* .gig-entry-row and .gig-entry-add-row are each three flex-shrink:0, fixed-width items
+/* .gig-entry-row and .gig-entry-add-row are each three flex-shrink:0, fixed-width items
        (amount ~100px + time ~110px + a delete/add button) — together comfortably wider than this
        dialog's own content area on a real phone (~246-310px after the dialog's own padding), with no
        wrap. That doesn't clip visibly so much as push the row's tail end (the delete/+Add button,
        and on the add-row the input itself) out past the dialog's right edge — reachable only by
        scrolling/rotating to landscape. Wrapping the amount+time onto one line and the button onto
        its own line below keeps everything within the dialog at portrait width instead. */
-    .gig-entry-row, .gig-entry-add-row {
+body.is-mobile-screen .gig-entry-row, body.is-mobile-screen .gig-entry-add-row {
         flex-wrap: wrap;
     }
-    .gig-entry-row-amount-wrapper, .gig-entry-add-row .gig-entry-amount-field {
+body.is-mobile-screen .gig-entry-row-amount-wrapper, body.is-mobile-screen .gig-entry-add-row .gig-entry-amount-field {
         flex: 1 1 auto;
         width: auto;
         min-width: 90px;
     }
-    .gig-entry-row-time, .gig-entry-add-row input[type="time"] {
+body.is-mobile-screen .gig-entry-row-time, body.is-mobile-screen .gig-entry-add-row input[type="time"] {
         flex: 1 1 auto;
         width: auto;
         min-width: 90px;
     }
-    .gig-entry-delete-btn, .gig-entry-add-row #btn-add-gig-entry {
+body.is-mobile-screen .gig-entry-delete-btn, body.is-mobile-screen .gig-entry-add-row #btn-add-gig-entry {
         flex: 1 1 100%;
     }
-}
+
+
 
 .gig-entry-total-row {
     display: flex;
@@ -2971,14 +3000,14 @@ label {
 #cc-filter-summary {
     white-space: nowrap;
 }
-@media (max-width: 900px) {
-    .cc-list-search-group {
+body.is-mobile-screen .cc-list-search-group {
         max-width: 360px;
     }
-    #cc-filter-summary {
+body.is-mobile-screen #cc-filter-summary {
         white-space: normal;
     }
-}
+
+
 
 input[type="date"]::-webkit-calendar-picker-indicator {
     display: none !important;
@@ -3037,8 +3066,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     display: none;
 }
 
-@media (max-width: 900px) {
-    .mobile-nav-toggle {
+body.is-mobile-screen .mobile-nav-toggle {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -3059,8 +3087,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         font-size: 1.25rem;
         cursor: pointer;
     }
-
-    .sidebar-close-btn {
+body.is-mobile-screen .sidebar-close-btn {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -3076,8 +3103,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         font-size: 1.1rem;
         cursor: pointer;
     }
-
-    .app-sidebar {
+body.is-mobile-screen .app-sidebar {
         transform: translateX(-100%);
         transition: transform 0.25s ease;
         /* Several in-page sticky headers (.main-sticky-dashboard, .cc-sticky-dashboard, etc.) use
@@ -3092,12 +3118,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         padding-top: calc(2rem + env(safe-area-inset-top, 0px));
         padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
     }
-
-    .app-sidebar.mobile-open {
+body.is-mobile-screen .app-sidebar.mobile-open {
         transform: translateX(0);
     }
-
-    .sidebar-backdrop {
+body.is-mobile-screen .sidebar-backdrop {
         display: block;
         position: fixed;
         inset: 0;
@@ -3108,13 +3132,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         pointer-events: none;
         transition: opacity 0.25s ease;
     }
-
-    .sidebar-backdrop.visible {
+body.is-mobile-screen .sidebar-backdrop.visible {
         opacity: 1;
         pointer-events: auto;
     }
-
-    .app-main {
+body.is-mobile-screen .app-main {
         margin-left: 0;
         padding: 1.5rem;
         /* Was 4.5rem, then 3.5rem — see the two superseded attempts described in git history for this
@@ -3135,30 +3157,29 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         overflow-x: clip;
         box-sizing: border-box;
     }
-    .split-columns {
+body.is-mobile-screen .split-columns {
         flex-direction: column;
         gap: 1.5rem;
     }
-    .split-col {
+body.is-mobile-screen .split-col {
         width: 100%;
     }
-    /* Only the arrow glyph itself rotates on mobile (columns stack vertically, so ↔ becomes ↕) —
+/* Only the arrow glyph itself rotates on mobile (columns stack vertically, so ↔ becomes ↕) —
        .split-separator now also contains the Extra Transfers button, which must stay upright. */
-    .split-separator > span {
+body.is-mobile-screen .split-separator > span {
         transform: rotate(90deg);
     }
-    /* .transfer-cycle-breakdown's 1st/15th boxes (base rule: grid-template-columns: 1fr 1fr, ~2588)
+/* .transfer-cycle-breakdown's 1st/15th boxes (base rule: grid-template-columns: 1fr 1fr, ~2588)
        never had a mobile override either — squeezed side by side on a narrow phone, the 15th box
        overflowed off the right edge of the screen instead of wrapping. Confirmed real bug,
        2026-08-05: looked fine for Asia (shorter content — no split-transfer badge) but Jason's
        longer numbers plus a "(1st Transfer Split)" badge pushed the 15th box past the viewport.
        Stacking to one column removes the horizontal squeeze entirely regardless of content length,
        for both people, not just whichever one happens to have shorter text this month. */
-    .transfer-cycle-breakdown {
+body.is-mobile-screen .transfer-cycle-breakdown {
         grid-template-columns: 1fr;
     }
-
-    /* #unified-header-layout's "left period right" / "toggles toggles toggles" grid never had a
+/* #unified-header-layout's "left period right" / "toggles toggles toggles" grid never had a
        mobile override at all — on a narrow phone viewport, "period" (the whole month/day/year
        date-nav, 5 elements in one flex row) got squeezed into just the grid's center "auto" column
        instead of the full viewport width, so its flex row wrapped each element onto its own line:
@@ -3167,31 +3188,30 @@ input[type="date"]::-webkit-calendar-picker-indicator {
        the Today/Threshold buttons and the Hide-header toggle, instead of squeezed beside them —
        at typical phone widths its 5 pieces (2 arrow buttons + 3 selects) comfortably fit in one row
        when they have the full viewport width to themselves. */
-    #unified-header-layout.unified-header-dashboard,
-    #unified-header-layout.unified-header-cc {
+body.is-mobile-screen #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen #unified-header-layout.unified-header-cc {
         grid-template-areas:
             "period period period"
             "left left right"
             "toggles toggles toggles";
         grid-template-columns: 1fr auto 1fr;
     }
-    /* NOT scoped under #unified-header-layout — relocateMobileStickyHeader() (app.js) physically
+/* NOT scoped under #unified-header-layout — relocateMobileStickyHeader() (app.js) physically
        moves #header-period-nav to be a direct child of .main-sticky-dashboard instead for every tab
        in MOBILE_STICKY_HEADER_TABS, so a `#unified-header-layout #header-period-nav` descendant
        selector silently stopped matching for those tabs (confirmed real bug, 2026-08-04: date-nav
        rendered left-aligned instead of centered). Targeting the id alone works in both the relocated
        and non-relocated position. */
-    #header-period-nav {
+body.is-mobile-screen #header-period-nav {
         width: 100%;
         justify-content: center;
         flex-wrap: nowrap;
     }
-    /* The Sync tab's Web App URL card also has both a #header-left-actions row (Today/Threshold,
+/* The Sync tab's Web App URL card also has both a #header-left-actions row (Today/Threshold,
        usually hidden there) and no #header-period-nav at all, so this rule is a no-op for it —
        harmless since grid-template-areas naming an empty "period" row just collapses to 0 height
        when nothing occupies it. */
-
-    /* Even given the full row above, the month/year selects' desktop min-widths (95px/82px) plus
+/* Even given the full row above, the month/year selects' desktop min-widths (95px/82px) plus
        the rarely-used day-jumper dropdown left no room for the trailing "next month" arrow to fit
        on the same row at real phone widths — it wrapped onto its own line below. Confirmed live,
        2026-08-01. Per explicit user request: shrink the two selects and drop the day-jumper on
@@ -3199,57 +3219,55 @@ input[type="date"]::-webkit-calendar-picker-indicator {
        selects plus the prev/next arrows still cover normal navigation) so all 4 remaining pieces
        (prev arrow, month, year, next arrow) comfortably share one row.
        !important beats these elements' own inline width/padding styles (set in Index.html). */
-    #month-select {
+body.is-mobile-screen #month-select {
         min-width: 60px !important;
         padding: 0 0.3rem !important;
         font-size: 0.85rem !important;
     }
-    #year-select {
+body.is-mobile-screen #year-select {
         min-width: 62px !important;
         padding: 0 0.3rem !important;
         font-size: 0.85rem !important;
     }
-    #month-date-jumper,
-    #full-year-date-jumper {
+body.is-mobile-screen #month-date-jumper,
+    body.is-mobile-screen #full-year-date-jumper {
         display: none !important;
     }
-
-    /* The header's 3-column grid (controls | title | action buttons) doesn't fit phone width and was
+/* The header's 3-column grid (controls | title | action buttons) doesn't fit phone width and was
        forcing app-main wider than the viewport, pushing "Hide Metrics"/"Expand View" off-screen
        entirely. Stack it into one centered column instead, with each row free to wrap. */
-    .app-header {
+body.is-mobile-screen .app-header {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 0.75rem;
         text-align: center;
     }
-    .header-controls {
+body.is-mobile-screen .header-controls {
         flex-wrap: wrap !important;
         justify-content: center;
         order: 2;
     }
-    .header-title {
+body.is-mobile-screen .header-title {
         order: 1;
         width: 100%;
     }
-    .month-select-wrapper {
+body.is-mobile-screen .month-select-wrapper {
         flex-wrap: wrap !important;
     }
-    .header-right {
+body.is-mobile-screen .header-right {
         order: 3;
         width: 100%;
         justify-content: center;
         margin-left: 0 !important;
         flex-wrap: wrap;
     }
-    /* "Expand View" toggles a full-screen desktop layout that doesn't apply on a phone-sized
+/* "Expand View" toggles a full-screen desktop layout that doesn't apply on a phone-sized
        viewport — hiding it removes a redundant, hard-to-reach button rather than leaving it dead. */
-    #btn-toggle-layout-maximize {
+body.is-mobile-screen #btn-toggle-layout-maximize {
         display: none !important; /* beats the element's inline style="display: inline-flex" */
     }
-
-    /* Personal/Joint Dashboard list and Credit Card/Loan ledger column-trimming now lives in one
+/* Personal/Joint Dashboard list and Credit Card/Loan ledger column-trimming now lives in one
        place — see the body[data-dashboard-type]/#cc-dashboard-layout.loan-dashboard-mode rules
        further down (same @media 900px breakpoint, just a later block in this file). This earlier
        version (removed 2026-08-03) only ever hid columns 2 and 4 unconditionally, which was wrong
@@ -3259,31 +3277,31 @@ input[type="date"]::-webkit-calendar-picker-indicator {
        columns overlapping/rendering on top of each other instead of reflowing into the reclaimed
        space. The recurring/manual/source badge hiding below is still genuinely useful and carried
        forward as-is. */
-    #list-view-table-container .cc-recurring-badge,
-    #list-view-table-container .cc-transfer-badge,
-    #list-view-table-container .cc-source-badge,
-    #cc-list-view-table-container .cc-recurring-badge,
-    #cc-list-view-table-container .cc-transfer-badge,
-    #cc-list-view-table-container .cc-source-badge {
+body.is-mobile-screen #list-view-table-container .cc-recurring-badge,
+    body.is-mobile-screen #list-view-table-container .cc-transfer-badge,
+    body.is-mobile-screen #list-view-table-container .cc-source-badge,
+    body.is-mobile-screen #cc-list-view-table-container .cc-recurring-badge,
+    body.is-mobile-screen #cc-list-view-table-container .cc-transfer-badge,
+    body.is-mobile-screen #cc-list-view-table-container .cc-source-badge {
         display: none;
     }
-
-    /* Calendar grids are unreadable at phone width — app.js's enforceMobileListView() forces
+/* Calendar grids are unreadable at phone width — app.js's enforceMobileListView() forces
        state.viewMode/ccViewMode/savingsViewMode to 'list' on every render below this breakpoint, so
        the calendar containers are already hidden via their normal 'hidden' class toggling. These rules
        are a CSS-level backstop (covers the instant before the first render, and hides the now-useless
        "Calendar" toggle buttons themselves) rather than the primary mechanism. */
-    #btn-view-calendar,
-    #btn-cc-view-calendar,
-    [data-savings-mode="calendar"] {
+body.is-mobile-screen #btn-view-calendar,
+    body.is-mobile-screen #btn-cc-view-calendar,
+    body.is-mobile-screen [data-savings-mode="calendar"] {
         display: none;
     }
-    #dashboard-calendar-view,
-    #cc-calendar-view-container,
-    #savings-calendar-layout {
+body.is-mobile-screen #dashboard-calendar-view,
+    body.is-mobile-screen #cc-calendar-view-container,
+    body.is-mobile-screen #savings-calendar-layout {
         display: none !important;
     }
-}
+
+
 
 /* SEGMENTED CONTROLS & UTILITIES */
 .segmented-control {
@@ -3488,14 +3506,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 /* Sidebar collapses to a slide-in drawer below 900px (see .app-sidebar's own media query) — anchor
    the popover to the left edge there instead of a sidebar width that no longer applies. */
-@media (max-width: 900px) {
-    .sync-status-detail {
+body.is-mobile-screen .sync-status-detail {
         left: 0.75rem;
         right: 0.75rem;
         width: auto;
         bottom: 1.5rem;
     }
-}
+
+
 
 /* Floating mobile sync-status badge — see the matching comment on its markup in Index.html and
    showSyncStatusFlag()/updateMobileSyncBadge() in app.js. Desktop always has the sidebar's own
@@ -3522,11 +3540,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     transition: opacity 0.6s ease, transform 0.3s ease;
     opacity: 1;
 }
-@media (max-width: 900px) {
-    .mobile-sync-badge:not(.hidden) {
+body.is-mobile-screen .mobile-sync-badge:not(.hidden) {
         display: flex;
     }
-}
+
+
 .mobile-sync-badge.fading-out {
     opacity: 0;
     transform: scale(0.85);
@@ -3565,11 +3583,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     flex-direction: column;
     gap: 0.6rem;
 }
-@media (max-width: 900px) {
-    .mobile-sync-badge-detail:not(.hidden) {
+body.is-mobile-screen .mobile-sync-badge-detail:not(.hidden) {
         display: flex;
     }
-}
+
+
 .mobile-sync-badge-detail-message {
     font-size: 0.9rem;
     line-height: 1.4;
@@ -3612,6 +3630,33 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 #delivery-log-body tr.gig-row-drag-hover {
     background: rgba(99, 102, 241, 0.15) !important;
     box-shadow: inset 0 0 0 1.5px var(--color-primary);
+}
+
+/* Personal/Joint/Asia checking list-view row drag-drop (see wireListRowDragDrop() in app.js) —
+   mirrors the calendar view's own .day-transaction-item.dragging/.calendar-day.drag-hover pair above,
+   sized for a table row instead of a chip. */
+.editable-row.dragging {
+    opacity: 0.4;
+}
+
+.editable-row.drag-hover {
+    background: rgba(99, 102, 241, 0.15) !important;
+    box-shadow: inset 0 0 0 1.5px var(--color-primary);
+}
+
+/* Split Transfer editor's unified anchor+pieces view (see openDynamicTxEditor()/
+   renderSplitEditorRows() in app.js) — marks whichever split-piece row was actually clicked, when
+   entering via a piece rather than the anchor, so it's obvious which date is being looked at among
+   several. */
+.split-editor-row.split-row-focused {
+    background: rgba(99, 102, 241, 0.15);
+    box-shadow: inset 0 0 0 1.5px var(--color-primary);
+    border-radius: 6px;
+    padding: 0.4rem;
+}
+
+.split-row-balance.negative {
+    color: var(--color-danger);
 }
 
 #delivery-log-body td:first-child strong {
@@ -3695,6 +3740,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     color: #67e8f9;
     background: rgba(6, 182, 212, 0.14);
     white-space: nowrap;
+}
+
+/* Savings-transfer ownership coloring — same blue/green pair as .owner-flag above, applied to the
+   whole List-view badge instead of a separate icon since there's already room for the full "Savings
+   Deposit - Jason"/"Savings Withdrawal - Asia" label here. Per explicit user request, 2026-08-09. */
+.cc-transfer-badge.owner-jason {
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.16);
+}
+.cc-transfer-badge.owner-asia {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.16);
 }
 
 .cc-source-badge {
@@ -3837,6 +3894,17 @@ body.maximized-calendar .day-transaction-item {
 
 .savings-view-header {
     margin-bottom: 1rem;
+    /* Without an explicit gap, the title and the adjacent search box (no margin of its own, see
+       #savings-list-master-search) sit flush against each other in this flex row — fine while the
+       title stayed short, but the Phase 3 pool suffix ("Savings Calendar — Asia") made it crowd the
+       search box, and the title (default flex-shrink:1) could compress/clip instead of the row just
+       wrapping. Confirmed real bug, 2026-08-07. */
+    gap: 1rem;
+}
+
+#savings-ledger-title {
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 #savings-list-view {
@@ -3880,12 +3948,12 @@ body.maximized-calendar .day-transaction-item {
     }
 }
 
-@media (max-width: 900px) {
-    .savings-summary-cards,
-    .savings-controls-grid {
+body.is-mobile-screen .savings-summary-cards,
+    body.is-mobile-screen .savings-controls-grid {
         grid-template-columns: 1fr;
     }
-}
+
+
 
 .savings-year-summary-card {
     margin-top: 1.5rem;
@@ -4283,22 +4351,21 @@ body.maximized-calendar .day-transaction-item {
     to { transform: rotate(360deg); }
 }
 /* ===== MOBILE POLISH PASS (July 2026) ===== */
-@media (max-width: 900px) {
-    /* Broad safety net: let any card scroll horizontally instead of clipping/pushing content off
+/* Broad safety net: let any card scroll horizontally instead of clipping/pushing content off
        screen with no way to reach it. Cards that don't overflow are unaffected.
        .list-view-card is also excluded (alongside .delivery-grid-card) — its only genuinely wide
        content is the table, already handled by its own .table-responsive wrapper, and giving the
        outer card its own overflow-x:auto has the same overflow-y:auto forcing side effect
        documented on body/.tab-view above, which would otherwise defeat .list-view-sticky-wrapper's
        position:sticky on exactly the screens (mobile) where it matters most. */
-    .glass-card:not(.delivery-grid-card):not(.list-view-card) {
+body.is-mobile-screen .glass-card:not(.delivery-grid-card):not(.list-view-card) {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
     }
-    .table-responsive {
+body.is-mobile-screen .table-responsive {
         -webkit-overflow-scrolling: touch;
     }
-    /* .delivery-grid-card .table-responsive (index.css ~1262) forces overflow:visible at every
+/* .delivery-grid-card .table-responsive (index.css ~1262) forces overflow:visible at every
        width, specifically to stop overflow-x:auto from hijacking position:sticky on the table
        header (see that rule's comment) — but that silently defeated horizontal scroll entirely,
        even though the "abbreviate headers" comment just above assumed it still worked. Setting
@@ -4308,42 +4375,39 @@ body.maximized-calendar .day-transaction-item {
        resolves against the page's own scroll, exactly as it does on desktop. This gets horizontal
        scroll AND a working sticky header together, instead of trading one for the other.
      */
-    .delivery-grid-card .table-responsive {
+body.is-mobile-screen .delivery-grid-card .table-responsive {
         overflow-x: auto;
         overflow-y: visible;
         -webkit-overflow-scrolling: touch;
     }
-    /* table-card-header (title+subtitle block next to action buttons) squeezes both onto one flex
+/* table-card-header (title+subtitle block next to action buttons) squeezes both onto one flex
        row on narrow screens, which can visually collapse into what looks like a single wrapped cell.
        Stack title above actions instead. */
-    .table-card-header {
+body.is-mobile-screen .table-card-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.75rem;
     }
-    .table-card-header > div:last-child,
-    .delivery-summary-header-actions {
+body.is-mobile-screen .table-card-header > div:last-child,
+    body.is-mobile-screen .delivery-summary-header-actions {
         width: 100%;
         flex-wrap: wrap;
     }
-
-    /* Platform breakdown + Weekly Summary side-by-side (.delivery-stats-body) doesn't stack on its
+/* Platform breakdown + Weekly Summary side-by-side (.delivery-stats-body) doesn't stack on its
        own, squeezing Weekly Summary into a sliver that clips its own content off-screen. */
-    .delivery-stats-body {
+body.is-mobile-screen .delivery-stats-body {
         flex-direction: column;
         gap: 1.25rem;
     }
-
-    /* Weekly delivery summary: 2-column grid squeezed each "Week N ($x / $y goal)" entry into half
+/* Weekly delivery summary: 2-column grid squeezed each "Week N ($x / $y goal)" entry into half
        the screen width with no way to scroll to the clipped part. One column instead. */
-    .weekly-totals-list {
+body.is-mobile-screen .weekly-totals-list {
         grid-template-columns: 1fr;
     }
-    .weekly-total-item {
+body.is-mobile-screen .weekly-total-item {
         flex-wrap: wrap;
     }
-
-    /* Delivery Side Gigs page, mobile: the shared top bar (Today button, month/year date-nav
+/* Delivery Side Gigs page, mobile: the shared top bar (Today button, month/year date-nav
        selectors, view toggles, Expand View/Hide) eats a lot of vertical space before any actual
        content is visible, none of which is needed on this page on a phone — per explicit user
        request, 2026-08-01, hide all of it, leaving only the "Delivery Side Gigs" title itself.
@@ -4357,25 +4421,25 @@ body.maximized-calendar .day-transaction-item {
        longer risks taking the title down with it — the old "force the collapsible wrapper visible
        regardless of its own collapsed state" workaround this used to need is gone along with that
        wrapper. */
-    body[data-active-tab="delivery"] #unified-header-layout,
-    body[data-active-tab="delivery"] #current-tab-subtitle {
+body.is-mobile-screen[data-active-tab="delivery"] #unified-header-layout,
+    body.is-mobile-screen[data-active-tab="delivery"] #current-tab-subtitle {
         display: none !important;
     }
-    /* Even with the above hidden, the title block still reserved its usual margin below it, sized
+/* Even with the above hidden, the title block still reserved its usual margin below it, sized
        for the full header+date-nav stack that's now gone — tighten it to a compact single line for
        this page specifically. */
-    body[data-active-tab="delivery"] .header-title-compact {
+body.is-mobile-screen[data-active-tab="delivery"] .header-title-compact {
         margin-bottom: 0.15rem !important;
         gap: 0 !important;
     }
-    body[data-active-tab="delivery"] .header-title h2 {
+body.is-mobile-screen[data-active-tab="delivery"] .header-title h2 {
         font-size: 1.3rem !important;
         margin-bottom: 0 !important;
     }
-    body[data-active-tab="delivery"] .header-title p {
+body.is-mobile-screen[data-active-tab="delivery"] .header-title p {
         font-size: 0.8rem !important;
     }
-    /* Three more sources of dead space the above didn't touch, all confirmed live, 2026-08-01:
+/* Three more sources of dead space the above didn't touch, all confirmed live, 2026-08-01:
        (1) .app-main's own top padding/gap were sized for the full (now-hidden) header+date-nav
        stack, leaving a tall empty band between the fixed hamburger button and the title. (2) The
        Platform Breakdown card's own title-bar padding (1.5rem/24px) made even its collapsed title
@@ -4384,38 +4448,37 @@ body.maximized-calendar .day-transaction-item {
        three specifically for this tab — 3.2rem top padding still clears the fixed hamburger
        button's own height+position (see .mobile-nav-toggle), just with much less spare room above
        the title than the 4.5rem default (sized for the header this page no longer shows). */
-    /* padding-top was 3.2rem here (2026-08-01), sized to clear the hamburger button vertically —
+/* padding-top was 3.2rem here (2026-08-01), sized to clear the hamburger button vertically —
        superseded 2026-08-04 by the same fix used everywhere else (.header-top-row .header-title-
        compact's own horizontal padding keeps title text clear of the button regardless of how far up
        it sits), so this can now match the same small buffer as every other tab instead of its own
        larger one. Confirmed real complaint: a real gap was still visible above this title after that
        change shipped everywhere else, because this per-tab !important override was still shadowing
        the new global default. */
-    body[data-active-tab="delivery"] .app-main {
+body.is-mobile-screen[data-active-tab="delivery"] .app-main {
         padding-top: calc(0.5rem + env(safe-area-inset-top, 0px)) !important;
         gap: 0.25rem !important;
     }
-    body[data-active-tab="delivery"] .main-sticky-dashboard {
+body.is-mobile-screen[data-active-tab="delivery"] .main-sticky-dashboard {
         padding-bottom: 0 !important;
     }
-    body[data-active-tab="delivery"] .delivery-stats {
+body.is-mobile-screen[data-active-tab="delivery"] .delivery-stats {
         padding: 0.6rem 1rem !important;
     }
-    body[data-active-tab="delivery"] .delivery-grid-card {
+body.is-mobile-screen[data-active-tab="delivery"] .delivery-grid-card {
         padding: 0.75rem 1rem !important;
     }
-    body[data-active-tab="delivery"] .delivery-layout {
+body.is-mobile-screen[data-active-tab="delivery"] .delivery-layout {
         gap: 0.4rem !important;
     }
-    /* Per explicit user request, 2026-08-04: the Show All/Hide All master toggle isn't needed on
+/* Per explicit user request, 2026-08-04: the Show All/Hide All master toggle isn't needed on
        mobile — every section it controls (Metrics, Platform Breakdown, Year Summary) already
        defaults to collapsed via enforceMobileListView() in app.js, and the user taps each header
        individually to expand the one they want instead. */
-    body[data-active-tab="delivery"] #btn-master-show-hide-all {
+body.is-mobile-screen[data-active-tab="delivery"] #btn-master-show-hide-all {
         display: none !important;
     }
-
-    /* Delivery earnings log, mobile: only Date (with the day-off checkbox), Daily Total, Budget, and
+/* Delivery earnings log, mobile: only Date (with the day-off checkbox), Daily Total, Budget, and
        Difference stay visible. The per-platform columns (Cash/DoorDash/GrubHub/UberEats), the Day
        (weekday name) column, and the Off-Day Reason text column are all hidden outright — entering a
        platform's earnings now goes through the two-step tap-to-log popup (tap the row to choose a
@@ -4424,16 +4487,16 @@ body.maximized-calendar .day-transaction-item {
        next to it. The "Show columns" checkbox row is moot once these are unconditionally hidden.
        Budget and Difference stay visible — they're needed for editing/reference on mobile just as
        much as on desktop. */
-    #delivery-col-toggles {
+body.is-mobile-screen #delivery-col-toggles {
         display: none;
     }
-    #delivery-table th:nth-child(2), #delivery-table td:nth-child(2),
-    #delivery-table .col-cash, #delivery-table .col-doordash,
-    #delivery-table .col-grubhub, #delivery-table .col-ubereats,
-    #delivery-table th:last-child, #delivery-table td:last-child {
+body.is-mobile-screen #delivery-table th:nth-child(2), body.is-mobile-screen #delivery-table td:nth-child(2),
+    body.is-mobile-screen #delivery-table .col-cash, body.is-mobile-screen #delivery-table .col-doordash,
+    body.is-mobile-screen #delivery-table .col-grubhub, body.is-mobile-screen #delivery-table .col-ubereats,
+    body.is-mobile-screen #delivery-table th:last-child, body.is-mobile-screen #delivery-table td:last-child {
         display: none;
     }
-    /* The off-day banner cell (colspan="4", spanning the 4 platform columns just hidden above) has
+/* The off-day banner cell (colspan="4", spanning the 4 platform columns just hidden above) has
        no .col-* class of its own — deliberately, so the desktop column TOGGLES never touch it — but
        that also means table-layout:auto still reserves real width for its "🚫 Off-Day: reason" text
        across those now-hidden columns, quietly re-inflating the table past the viewport width and
@@ -4441,10 +4504,10 @@ body.maximized-calendar .day-transaction-item {
        avoid. Confirmed live. The day-off checkbox in the Date column already conveys "day off" on
        mobile, so this banner is redundant there anyway — hide it outright instead of narrowing it.
        */
-    #delivery-table .off-day-overlay-cell {
+body.is-mobile-screen #delivery-table .off-day-overlay-cell {
         display: none;
     }
-    /* With the platform columns and off-day banner both hidden just above, the table's real content
+/* With the platform columns and off-day banner both hidden just above, the table's real content
        width on mobile no longer exceeds the viewport — confirmed live, 2026-08-05 (scrollWidth ===
        clientWidth). That means the overflow-x:auto quirk this .table-responsive relied on (forcing
        overflow-y to auto too, trapping the header's position:sticky inside its own non-scrolling box
@@ -4453,90 +4516,84 @@ body.maximized-calendar .day-transaction-item {
        here (same fix as Savings' own table-responsive) lets the header actually stick to the page as
        you scroll, instead of silently never moving. Desktop, where all 4 platform columns really can
        need horizontal scroll, is untouched. */
-    .delivery-grid-card .table-responsive {
+body.is-mobile-screen .delivery-grid-card .table-responsive {
         overflow: visible !important;
     }
-    /* Tapping anywhere in the (now much shorter) row opens the platform picker — signal that with a
+/* Tapping anywhere in the (now much shorter) row opens the platform picker — signal that with a
        pointer cursor and a little breathing room, same as any other tappable list row. */
-    #delivery-table tbody tr {
+body.is-mobile-screen #delivery-table tbody tr {
         cursor: pointer;
     }
-    /* The remaining 4 columns still rendered at full desktop size/padding (the existing shrink
+/* The remaining 4 columns still rendered at full desktop size/padding (the existing shrink
        rules above only apply down to 901px, not below it) — confirmed live: the table stayed wider
        than the phone's viewport even with 6 of 10 columns hidden, forcing a horizontal scroll that
        broke the sticky header (it scrolled the Date column off-screen by default). Reuse the same
        narrower sizing the 901-1500px rule already uses so 4 slim columns actually fit without
        needing to scroll at all. */
-    .delivery-table {
+body.is-mobile-screen .delivery-table {
         font-size: 0.78rem;
     }
-    .delivery-table th,
-    .delivery-table td {
+body.is-mobile-screen .delivery-table th,
+    body.is-mobile-screen .delivery-table td {
         padding: 0.5rem 0.35rem;
     }
-    .delivery-table input {
+body.is-mobile-screen .delivery-table input {
         width: 48px;
         padding: 0.2rem 0.3rem;
         font-size: 0.78rem;
     }
-
-    /* Savings ledger: keep Date/Description/Amount/Running Balance/Actions, hide Type (redundant with
+/* Savings ledger: keep Date/Description/Amount/Running Balance/Actions, hide Type (redundant with
        the amount's sign/color anyway). */
-    #savings-list-view .data-table th:nth-child(3),
-    #savings-list-view .data-table td:nth-child(3) {
+body.is-mobile-screen #savings-list-view .data-table th:nth-child(3),
+    body.is-mobile-screen #savings-list-view .data-table td:nth-child(3) {
         display: none;
     }
-
-    /* Joint/Personal bills (Bill Splitter): keep Item, Source, Cycle, Transfer Budget, Actions — hide
+/* Joint/Personal bills (Bill Splitter): keep Item, Source, Cycle, Transfer Budget, Actions — hide
        Classification, Day, Monthly Total, Actual Payment, Paid From, Recurring. This is the amount
        actually coming out for that cycle, not the full per-payer breakdown or monthly total, which
        needs the desktop view to read well. Monthly Total now sits BEFORE Transfer Budget (column 6),
        so it's the one hidden here, not column 7. */
-    #joint-expenses-card .data-table th:nth-child(2), #joint-expenses-card .data-table td:nth-child(2),
-    #joint-expenses-card .data-table th:nth-child(5), #joint-expenses-card .data-table td:nth-child(5),
-    #joint-expenses-card .data-table th:nth-child(6), #joint-expenses-card .data-table td:nth-child(6),
-    #joint-expenses-card .data-table th:nth-child(8), #joint-expenses-card .data-table td:nth-child(8),
-    #joint-expenses-card .data-table th:nth-child(9), #joint-expenses-card .data-table td:nth-child(9),
-    #joint-expenses-card .data-table th:nth-child(10), #joint-expenses-card .data-table td:nth-child(10),
-    #joint-expenses-card .data-table th:nth-child(11), #joint-expenses-card .data-table td:nth-child(11) {
+body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(2), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(2),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(5), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(5),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(6), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(6),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(8), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(8),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(9), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(9),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(10), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(10),
+    body.is-mobile-screen #joint-expenses-card .data-table th:nth-child(11), body.is-mobile-screen #joint-expenses-card .data-table td:nth-child(11) {
         display: none;
     }
-
-    /* Personal Allocations table is already a reasonable column count — just tighten padding so more
+/* Personal Allocations table is already a reasonable column count — just tighten padding so more
        fits on screen without needing to hide anything. */
-    #personal-allocations-card .data-table th,
-    #personal-allocations-card .data-table td {
+body.is-mobile-screen #personal-allocations-card .data-table th,
+    body.is-mobile-screen #personal-allocations-card .data-table td {
         padding: 0.5rem 0.6rem;
         font-size: 0.85rem;
     }
-
-    /* Month summary header (📁 January + Budget/Actual/Diff) squeezed both onto one flex row, causing
+/* Month summary header (📁 January + Budget/Actual/Diff) squeezed both onto one flex row, causing
        the month name and the totals to visually overlap on a phone. Stack instead. */
-    .month-summary-header {
+body.is-mobile-screen .month-summary-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.4rem;
     }
-    .month-totals {
+body.is-mobile-screen .month-totals {
         margin-left: 0;
         margin-right: 0;
         flex-wrap: wrap;
         gap: 0.9rem;
     }
-
-    /* .delivery-year-summary-card's table-card-header is position: sticky, designed around its
+/* .delivery-year-summary-card's table-card-header is position: sticky, designed around its
        compact single-row desktop layout. On mobile it now spans a wrapped title, subtitle,
        abbreviated totals, and a wrapped button row — tall enough that while sticky it permanently
        covers whatever content is directly beneath it, most visibly January's block (the first one,
        with nothing above it to scroll past first). It was never actually missing data, just hidden
        under this. Drop the sticky behavior on mobile rather than fight its height. */
-    .delivery-year-summary-card .table-card-header {
+body.is-mobile-screen .delivery-year-summary-card .table-card-header {
         position: static;
         margin: 0 0 1rem 0;
         padding: 0;
     }
-
-    /* Personal/Joint Dashboard list — same "keep only what's needed to read a row at a glance"
+/* Personal/Joint Dashboard list — same "keep only what's needed to read a row at a glance"
        treatment as the Savings ledger above, extended here per explicit user request, 2026-08-03
        (previously the only genuinely mobile-optimized page in the app was Delivery Earnings; the
        Dashboard list was unreadable — 8 desktop-width columns with no hiding at all). Personal and
@@ -4547,42 +4604,53 @@ body.maximized-calendar .day-transaction-item {
        keep Date/Description/Amount/Running Balance/Actions, hide Day (redundant with the date right
        next to it, same reasoning Delivery already uses) and Type (redundant with the amount's own
        sign/color) and Starting Balance (Running Balance already tells the running story). */
-    body[data-dashboard-type="personal"] #list-view-table-container th:nth-child(2),
-    body[data-dashboard-type="personal"] #list-view-table-container td:nth-child(2),
-    body[data-dashboard-type="personal"] #list-view-table-container th:nth-child(4),
-    body[data-dashboard-type="personal"] #list-view-table-container td:nth-child(4),
-    body[data-dashboard-type="personal"] #list-view-table-container th:nth-child(5),
-    body[data-dashboard-type="personal"] #list-view-table-container td:nth-child(5) {
+/* Asia's list table (renderAsiaList()) uses the identical Date/Day/Description/Type/Starting
+       Balance/Amount/Running Balance/Actions column layout as Personal's — same hide treatment. */
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container th:nth-child(2),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container td:nth-child(2),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container th:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container td:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container th:nth-child(5),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container td:nth-child(5),
+    
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container th:nth-child(2),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container td:nth-child(2),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container th:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container td:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container th:nth-child(5),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container td:nth-child(5) {
         display: none;
     }
-    /* Joint: Date, Description, Jason, Asia, Starting Balance, Debit/Credit, Running Balance,
+/* Joint: Date, Description, Jason, Asia, Starting Balance, Debit/Credit, Running Balance,
        Actions — keep Date/Description/Debit-Credit/Running Balance/Actions, hide the per-payer
        Jason/Asia split and Starting Balance (the per-payer breakdown needs the desktop view to read
        well, same reasoning the Bill Splitter's own mobile treatment above already uses). */
-    body[data-dashboard-type="joint"] #list-view-table-container th:nth-child(3),
-    body[data-dashboard-type="joint"] #list-view-table-container td:nth-child(3),
-    body[data-dashboard-type="joint"] #list-view-table-container th:nth-child(4),
-    body[data-dashboard-type="joint"] #list-view-table-container td:nth-child(4),
-    body[data-dashboard-type="joint"] #list-view-table-container th:nth-child(5),
-    body[data-dashboard-type="joint"] #list-view-table-container td:nth-child(5) {
+body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container th:nth-child(3),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container td:nth-child(3),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container th:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container td:nth-child(4),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container th:nth-child(5),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container td:nth-child(5) {
         display: none;
     }
-    /* Per explicit user request, 2026-08-03: drop the Actions column entirely on mobile (its Delete
+/* Per explicit user request, 2026-08-03: drop the Actions column entirely on mobile (its Delete
        button was eating width Description badly needed and was itself a cause of the overlap bug
        above) — tapping a row now opens the same Edit Transaction modal double-click already opens on
        desktop, and that modal has its own Delete button. See the .editable-row 'click' listeners
        added alongside the existing 'dblclick' ones (isMobileViewport()-gated) in renderPersonalList(),
        renderJointList(), renderCardList() and renderCCCardList() in app.js. */
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(8),
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(8),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(8),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(8),
-    #dashboard-card-list-table th:nth-child(7),
-    #dashboard-card-list-table td:nth-child(7) {
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(8),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(8),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table th:nth-child(8),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table td:nth-child(8),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(8),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(8),
+    body.is-mobile-screen #dashboard-card-list-table th:nth-child(7),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(7) {
         display: none;
     }
-    #list-view-table-container .data-table th,
-    #list-view-table-container .data-table td {
+body.is-mobile-screen #list-view-table-container .data-table th,
+    body.is-mobile-screen #list-view-table-container .data-table td {
         /* Tighter than the 0.5rem this started at — with Actions gone (2026-08-03) the remaining
            columns are still narrow enough that padding was eating a disproportionate share of each
            cell's width and forcing awkward mid-token line breaks (e.g. "07/0"/"2/26" instead of
@@ -4590,14 +4658,14 @@ body.maximized-calendar .day-transaction-item {
         padding: 0.4rem 0.3rem;
         font-size: 0.82rem;
     }
-    /* Shrink the Delete button itself so the Actions column doesn't need as much width in the
+/* Shrink the Delete button itself so the Actions column doesn't need as much width in the
        first place — same reasoning as trimming the recurring/manual/source badges above. */
-    #list-view-table-container .data-table td .action-btn,
-    #cc-list-view-table-container .data-table td .action-btn {
+body.is-mobile-screen #list-view-table-container .data-table td .action-btn,
+    body.is-mobile-screen #cc-list-view-table-container .data-table td .action-btn {
         padding: 0.25rem 0.4rem !important;
         font-size: 0.72rem !important;
     }
-    /* The desktop nowrap rule (~1622) is deliberate there — dates/amounts/the Delete button all look
+/* The desktop nowrap rule (~1622) is deliberate there — dates/amounts/the Delete button all look
        broken wrapped at an arbitrary character, so desktop instead sizes each column wide enough to
        never need to. That budget doesn't exist on a ~260px-wide phone screen even after trimming to
        5 columns: confirmed real bug, 2026-08-03, "-$1,390.92" et al still overflowed their
@@ -4605,26 +4673,26 @@ body.maximized-calendar .day-transaction-item {
        onto one line no matter how narrow that line is. Wrapping a date or dollar amount onto two
        lines on mobile reads far better than that overlap, so this deliberately un-does the desktop
        nowrap rule below 900px width — same day-boundary column, just narrower. */
-    #list-view-table-container .personal-list-table th:nth-child(1),
-    #list-view-table-container .personal-list-table td:nth-child(1),
-    #list-view-table-container .personal-list-table th:nth-child(6),
-    #list-view-table-container .personal-list-table td:nth-child(6),
-    #list-view-table-container .personal-list-table th:nth-child(7),
-    #list-view-table-container .personal-list-table td:nth-child(7),
-    #list-view-table-container .personal-list-table th:nth-child(8),
-    #list-view-table-container .personal-list-table td:nth-child(8),
-    #list-view-table-container .joint-list-table th:nth-child(1),
-    #list-view-table-container .joint-list-table td:nth-child(1),
-    #list-view-table-container .joint-list-table th:nth-child(6),
-    #list-view-table-container .joint-list-table td:nth-child(6),
-    #list-view-table-container .joint-list-table th:nth-child(7),
-    #list-view-table-container .joint-list-table td:nth-child(7),
-    #list-view-table-container .joint-list-table th:nth-child(8),
-    #list-view-table-container .joint-list-table td:nth-child(8) {
+body.is-mobile-screen #list-view-table-container .personal-list-table th:nth-child(1),
+    body.is-mobile-screen #list-view-table-container .personal-list-table td:nth-child(1),
+    body.is-mobile-screen #list-view-table-container .personal-list-table th:nth-child(6),
+    body.is-mobile-screen #list-view-table-container .personal-list-table td:nth-child(6),
+    body.is-mobile-screen #list-view-table-container .personal-list-table th:nth-child(7),
+    body.is-mobile-screen #list-view-table-container .personal-list-table td:nth-child(7),
+    body.is-mobile-screen #list-view-table-container .personal-list-table th:nth-child(8),
+    body.is-mobile-screen #list-view-table-container .personal-list-table td:nth-child(8),
+    body.is-mobile-screen #list-view-table-container .joint-list-table th:nth-child(1),
+    body.is-mobile-screen #list-view-table-container .joint-list-table td:nth-child(1),
+    body.is-mobile-screen #list-view-table-container .joint-list-table th:nth-child(6),
+    body.is-mobile-screen #list-view-table-container .joint-list-table td:nth-child(6),
+    body.is-mobile-screen #list-view-table-container .joint-list-table th:nth-child(7),
+    body.is-mobile-screen #list-view-table-container .joint-list-table td:nth-child(7),
+    body.is-mobile-screen #list-view-table-container .joint-list-table th:nth-child(8),
+    body.is-mobile-screen #list-view-table-container .joint-list-table td:nth-child(8) {
         white-space: normal !important;
         overflow-wrap: break-word !important;
     }
-    /* #list-view-table-container .data-table is table-layout:fixed with each column's width set by
+/* #list-view-table-container .data-table is table-layout:fixed with each column's width set by
        the desktop-tuned .personal-list-table/.joint-list-table nth-child percentages above (~1645) —
        hiding a column with display:none does NOT free its width back up for table-layout:fixed, so
        without new percentages here the 5 remaining columns kept the narrow widths they had when
@@ -4632,142 +4700,147 @@ body.maximized-calendar .day-transaction-item {
        overflowed its cell and visually overlapped the next column instead of reflowing. Confirmed
        real bug, 2026-08-03 — this, not the column-hiding itself, was the actual cause of "unreadable
        on mobile." New percentages sum to 100% across just the columns still visible. */
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(1),
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(1) { width: 20%; }
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(3),
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(3) { width: 38%; }
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(6),
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(6) { width: 21%; }
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(7),
-    body[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(7) { width: 21%; }
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(1),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(1) { width: 20%; }
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(2),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(2) { width: 38%; }
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(6),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(6) { width: 21%; }
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(7),
-    body[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(7) { width: 21%; }
-
-    /* Dashboard "viewing a single card" list (renderCardList() in app.js) — the same
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(1),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(1) { width: 20%; }
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(3),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(3) { width: 38%; }
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(6),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(6) { width: 21%; }
+body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table th:nth-child(7),
+    body.is-mobile-screen[data-dashboard-type="personal"] #list-view-table-container .personal-list-table td:nth-child(7) { width: 21%; }
+body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table th:nth-child(1),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table td:nth-child(1) { width: 20%; }
+body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table th:nth-child(3),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table td:nth-child(3) { width: 38%; }
+body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table th:nth-child(6),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table td:nth-child(6) { width: 21%; }
+body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table th:nth-child(7),
+    body.is-mobile-screen[data-dashboard-type="asia"] #list-view-table-container .personal-list-table td:nth-child(7) { width: 21%; }
+body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(1),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(1) { width: 20%; }
+body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(2),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(2) { width: 38%; }
+body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(6),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(6) { width: 21%; }
+body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table th:nth-child(7),
+    body.is-mobile-screen[data-dashboard-type="joint"] #list-view-table-container .joint-list-table td:nth-child(7) { width: 21%; }
+/* Dashboard "viewing a single card" list (renderCardList() in app.js) — the same
        #list-view-table-container as Personal/Joint above but a plain, unclassed .data-table (its
        dashboardType is the card's own id, not "personal"/"joint", so it never matched either of
        those selectors and had NO mobile treatment at all until now). Gave it a dedicated
        #dashboard-card-list-table id in app.js for targeting. Columns: Date, Day, Description, Type,
        Amount, Running Balance Owed, Actions — same hide/keep/width logic as Personal above. */
-    #dashboard-card-list-table th:nth-child(2),
-    #dashboard-card-list-table td:nth-child(2),
-    #dashboard-card-list-table th:nth-child(4),
-    #dashboard-card-list-table td:nth-child(4) {
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(2),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(2),
+    body.is-mobile-screen #dashboard-card-list-table th:nth-child(4),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(4) {
         display: none;
     }
-    #dashboard-card-list-table th:nth-child(1),
-    #dashboard-card-list-table td:nth-child(1),
-    #dashboard-card-list-table th:nth-child(5),
-    #dashboard-card-list-table td:nth-child(5),
-    #dashboard-card-list-table th:nth-child(6),
-    #dashboard-card-list-table td:nth-child(6) {
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(1),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(1),
+    body.is-mobile-screen #dashboard-card-list-table th:nth-child(5),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(5),
+    body.is-mobile-screen #dashboard-card-list-table th:nth-child(6),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(6) {
         white-space: normal !important;
         overflow-wrap: break-word !important;
     }
-    #dashboard-card-list-table th:nth-child(1),
-    #dashboard-card-list-table td:nth-child(1) { width: 20%; }
-    #dashboard-card-list-table th:nth-child(3),
-    #dashboard-card-list-table td:nth-child(3) { width: 38%; }
-    #dashboard-card-list-table th:nth-child(5),
-    #dashboard-card-list-table td:nth-child(5) { width: 21%; }
-    #dashboard-card-list-table th:nth-child(6),
-    #dashboard-card-list-table td:nth-child(6) { width: 21%; }
-
-    /* Credit Card / Installment Loan ledger — same treatment, distinguished via the existing
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(1),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(1) { width: 20%; }
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(3),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(3) { width: 38%; }
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(5),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(5) { width: 21%; }
+body.is-mobile-screen #dashboard-card-list-table th:nth-child(6),
+    body.is-mobile-screen #dashboard-card-list-table td:nth-child(6) { width: 21%; }
+/* Credit Card / Installment Loan ledger — same treatment, distinguished via the existing
        .loan-dashboard-mode class (see renderCardDashboard() in app.js) instead of a new attribute.
        Loan: Date, Description, Type, Starting Balance, Amount, Estimated Ending Balance, Actions —
        hide Type and Starting Balance. */
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container th:nth-child(3),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container td:nth-child(3),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container th:nth-child(4),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container td:nth-child(4) {
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container th:nth-child(3),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container td:nth-child(3),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container th:nth-child(4),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container td:nth-child(4) {
         display: none;
     }
-    /* Credit card: Date, Merchant, Description, Owner, Trip, Starting Balance, Amount, Ending
+/* Credit card: Date, Merchant, Description, Owner, Trip, Starting Balance, Amount, Ending
        Balance, Actions — hide Owner/Trip/Starting Balance, and (mobile only) Merchant too: the Date
        cell here always bakes in the weekday name (see renderCCCardList() in app.js — unlike
        Personal/Joint, "Day" isn't a separate hideable column), so Date alone needs more width than
        those tables' Date column, and Merchant duplicates Description often enough in practice that
        it wasn't worth the squeeze it caused — confirmed real overlap/illegible-wrap bug, 2026-08-03,
        once Merchant, Description, Amount and Ending Balance all had to share the leftover width. */
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(2),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(2),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(4),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(4),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(5),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(5),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(6),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(6) {
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(2),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(2),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(4),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(4),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(5),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(5),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(6),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(6) {
         display: none;
     }
-    /* Per explicit user request, 2026-08-03: drop Actions here too — tapping a row opens the same
+/* Per explicit user request, 2026-08-03: drop Actions here too — tapping a row opens the same
        Edit Transaction modal, which has its own Delete button. See the .editable-row 'click' listener
        added in renderCCCardList() in app.js. */
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(7),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(7),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(9),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(9) {
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(7),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(7),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(9),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(9) {
         display: none;
     }
-    /* Same nowrap-overflow fix as the Dashboard list above (see its comment) — dates/dollar
+/* Same nowrap-overflow fix as the Dashboard list above (see its comment) — dates/dollar
        amounts/the Delete button would otherwise overflow their narrow mobile cell and overlap the
        next column instead of wrapping onto a second line. */
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(1),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(5),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(6),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(7),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(1),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(7),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(8),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(9) {
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(1),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(5),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(6),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(7),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(1),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(7),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(8),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(9) {
         white-space: normal !important;
         overflow-wrap: break-word !important;
     }
-    /* Same table-layout:fixed width-redistribution fix as the Dashboard list above — otherwise the
+/* Same table-layout:fixed width-redistribution fix as the Dashboard list above — otherwise the
        ledger's own numeric/Delete-button content overflows its stale narrow cell width and overlaps
        the next column. #cc-list-table has no separate loan/card class, so this reuses the same
        .loan-dashboard-mode ancestor scoping as the column-hiding rules just above. */
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(1),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(1) { width: 21%; }
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(2),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(2) { width: 39%; }
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(5),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(5) { width: 20%; }
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(6),
-    #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(6) { width: 20%; }
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(1),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(1) { width: 22%; }
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(3),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(3) { width: 36%; }
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(7),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(7) { width: 21%; }
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(8),
-    #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(8) { width: 21%; }
-    /* Unlike #list-view-table-container (~1554), this container never got table-layout:fixed — on
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(1),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(1) { width: 21%; }
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(2),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(2) { width: 39%; }
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(5),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(5) { width: 20%; }
+body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table th:nth-child(6),
+    body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(6) { width: 20%; }
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(1),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(1) { width: 22%; }
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(3),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(3) { width: 36%; }
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(7),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(7) { width: 21%; }
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(8),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(8) { width: 21%; }
+/* Unlike #list-view-table-container (~1554), this container never got table-layout:fixed — on
        desktop that's harmless (plenty of width for table-layout:auto to expand into), but on a
        ~260px-wide mobile container it let long Merchant/Description content stretch the table wider
        than its box instead of respecting the nth-child width %s below, causing real horizontal
        overflow/cutoff. Confirmed real bug, 2026-08-03. Scoped to mobile only to avoid touching
        desktop's working auto-layout sizing. */
-    #cc-list-view-table-container .data-table {
+body.is-mobile-screen #cc-list-view-table-container .data-table {
         table-layout: fixed;
     }
-    #cc-list-view-table-container .data-table td {
+body.is-mobile-screen #cc-list-view-table-container .data-table td {
         overflow-wrap: anywhere;
     }
-    #cc-list-view-table-container .data-table th,
-    #cc-list-view-table-container .data-table td {
+body.is-mobile-screen #cc-list-view-table-container .data-table th,
+    body.is-mobile-screen #cc-list-view-table-container .data-table td {
         padding: 0.4rem 0.3rem;
         font-size: 0.82rem;
     }
-
-    /* Bill Settings list — Bill Name, Classification, Estimated Cost, Payment Date, Statement Date,
+/* Bill Settings list — Bill Name, Classification, Estimated Cost, Payment Date, Statement Date,
        Auto Pay, Payment Source, Recurring, Actions — keep Bill Name/Estimated Cost/Payment Date, hide
        the rest (all reference info that needs the desktop view to read well). Actions dropped too,
        per explicit user request 2026-08-04 — tapping a row opens the same editor modal, which gained
@@ -4775,65 +4848,64 @@ body.maximized-calendar .day-transaction-item {
        !important needed on Actions specifically — same #billtracker-table-view .table-actions-cell
        { display: table-cell !important; } collision already documented below for the flex-vs-table-
        cell fix, which would otherwise force it visible regardless of specificity. */
-    #billtracker-table-view .data-table th:nth-child(2), #billtracker-table-view .data-table td:nth-child(2),
-    #billtracker-table-view .data-table th:nth-child(5), #billtracker-table-view .data-table td:nth-child(5),
-    #billtracker-table-view .data-table th:nth-child(6), #billtracker-table-view .data-table td:nth-child(6),
-    #billtracker-table-view .data-table th:nth-child(7), #billtracker-table-view .data-table td:nth-child(7),
-    #billtracker-table-view .data-table th:nth-child(8), #billtracker-table-view .data-table td:nth-child(8),
-    #billtracker-table-view .data-table th:nth-child(9), #billtracker-table-view .data-table td:nth-child(9) {
+body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(2), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(2),
+    body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(5), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(5),
+    body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(6), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(6),
+    body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(7), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(7),
+    body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(8), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(8),
+    body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(9), body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(9) {
         display: none !important;
     }
-    /* Same missing-table-layout:fixed bug as the CC ledger above (see its comment) — this table also
+/* Same missing-table-layout:fixed bug as the CC ledger above (see its comment) — this table also
        had no table-layout declared at all, so on a narrow mobile container the long Bill Name/badge
        content stretched the table past its box instead of respecting these nth-child width %s,
        pushing Estimated Cost/Payment Date/Actions off the right edge entirely. Confirmed real bug,
        2026-08-03 (previously left completely unverified on mobile). */
-    #billtracker-table-view .data-table {
+body.is-mobile-screen #billtracker-table-view .data-table {
         table-layout: fixed;
     }
-    #billtracker-table-view .data-table td {
+body.is-mobile-screen #billtracker-table-view .data-table td {
         overflow-wrap: anywhere;
     }
-    #billtracker-table-view .data-table th,
-    #billtracker-table-view .data-table td {
+body.is-mobile-screen #billtracker-table-view .data-table th,
+    body.is-mobile-screen #billtracker-table-view .data-table td {
         padding: 0.4rem 0.3rem;
         font-size: 0.82rem;
     }
-    /* Amount widened (22% → 28%) and Name narrowed to compensate — 22% wasn't quite enough room for
+/* Amount widened (22% → 28%) and Name narrowed to compensate — 22% wasn't quite enough room for
        a real dollar figure like "$1,000.00" without wrapping mid-number onto 2 lines; Name tolerates
        wrapping far better than a currency amount does. Per explicit user request, 2026-08-05. */
-    #billtracker-table-view .data-table th:nth-child(1),
-    #billtracker-table-view .data-table td:nth-child(1) { width: 49%; }
-    #billtracker-table-view .data-table th:nth-child(3),
-    #billtracker-table-view .data-table td:nth-child(3) { width: 28%; }
-    #billtracker-table-view .data-table th:nth-child(4),
-    #billtracker-table-view .data-table td:nth-child(4) { width: 23%; }
-    /* The Name cell's exclude/placeholder badges (exemptBadge/placeholderBadge in app.js) overlapped
+body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(1),
+    body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(1) { width: 49%; }
+body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(3),
+    body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(3) { width: 28%; }
+body.is-mobile-screen #billtracker-table-view .data-table th:nth-child(4),
+    body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(4) { width: 23%; }
+/* The Name cell's exclude/placeholder badges (exemptBadge/placeholderBadge in app.js) overlapped
        the Estimated Cost/Payment Date columns next to them — confirmed real bug, 2026-08-04. Column 1
        already has overflow-wrap:anywhere (~4559) for the name text itself, but .cc-source-badge and
        similar badge spans set their own white-space/inline-flex styling elsewhere that this table
        never had to override before Actions' width freed up room to actually notice the overlap.
        Forcing the whole cell and its badges to wrap normally, and letting the row grow taller instead
        of clipping/overlapping, fixes it without touching the shared badge classes used elsewhere. */
-    #billtracker-table-view .data-table td:nth-child(1) {
+body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(1) {
         white-space: normal !important;
     }
-    #billtracker-table-view .data-table td:nth-child(1) .cc-source-badge {
+body.is-mobile-screen #billtracker-table-view .data-table td:nth-child(1) .cc-source-badge {
         display: inline-block;
         white-space: normal !important;
         max-width: 100%;
         overflow-wrap: break-word;
         margin-top: 0.2rem;
     }
-    /* Header labels ("Estimated Cost", "Payment Date") kept the table's default nowrap, which
+/* Header labels ("Estimated Cost", "Payment Date") kept the table's default nowrap, which
        overflowed their 22%/23% columns and pushed the whole table past the viewport edge —
        confirmed real bug, 2026-08-04. Wrapping lets them break to two lines instead. */
-    #billtracker-table-view .data-table th {
+body.is-mobile-screen #billtracker-table-view .data-table th {
         white-space: normal !important;
         overflow-wrap: break-word;
     }
-
-    /* Loan/Card detail page mobile restructure — per explicit user request, 2026-08-04:
+/* Loan/Card detail page mobile restructure — per explicit user request, 2026-08-04:
        - Previous/Next account buttons showed the FULL NEIGHBORING account's name as their own
          button label (e.g. "← Wells Fargo Reflect Visa Card"), not just an arrow icon — confirmed
          real bug, together with the dropdown itself this routinely overflowed a phone's width by
@@ -4843,98 +4915,98 @@ body.maximized-calendar .day-transaction-item {
          #savings-header-view-toggle below) — state.ccViewMode is already forced to 'list' for every
          mobile viewport (see enforceMobileListView()), so hiding the toggle just removes the
          now-pointless "switch to what you're already looking at" control. */
-    body[data-active-tab="creditcards"] #btn-cc-account-prev,
-    body[data-active-tab="creditcards"] #btn-cc-account-next,
-    body[data-active-tab="loans"] #btn-cc-account-prev,
-    body[data-active-tab="loans"] #btn-cc-account-next,
-    body[data-active-tab="creditcards"] #cc-view-toggle,
-    body[data-active-tab="loans"] #cc-view-toggle {
+body.is-mobile-screen[data-active-tab="creditcards"] #btn-cc-account-prev,
+    body.is-mobile-screen[data-active-tab="creditcards"] #btn-cc-account-next,
+    body.is-mobile-screen[data-active-tab="loans"] #btn-cc-account-prev,
+    body.is-mobile-screen[data-active-tab="loans"] #btn-cc-account-next,
+    body.is-mobile-screen[data-active-tab="creditcards"] #cc-view-toggle,
+    body.is-mobile-screen[data-active-tab="loans"] #cc-view-toggle {
         display: none !important;
     }
-    body[data-active-tab="creditcards"] .cc-account-nav-select,
-    body[data-active-tab="loans"] .cc-account-nav-select {
+body.is-mobile-screen[data-active-tab="creditcards"] .cc-account-nav-select,
+    body.is-mobile-screen[data-active-tab="loans"] .cc-account-nav-select {
         max-width: 100%;
         width: 100%;
     }
-    /* .app-main's own `gap: 2rem` applies between ALL its direct children — invisible before,
+/* .app-main's own `gap: 2rem` applies between ALL its direct children — invisible before,
        since #app-header/#unified-header-layout used to be nested INSIDE .main-sticky-dashboard, not
        direct siblings of it (see relocateMobileCCDetailHeader()/relocateMobileStickyHeader() in
        app.js). Now that they are, that 2rem gap shows up as a big empty band below the pinned
        title/date-nav — same bug class as Dashboard's own version of this fix above. */
-    body[data-active-tab="creditcards"] .app-header.cc-account-header,
-    body[data-active-tab="loans"] .app-header.cc-account-header {
+body.is-mobile-screen[data-active-tab="creditcards"] .app-header.cc-account-header,
+    body.is-mobile-screen[data-active-tab="loans"] .app-header.cc-account-header {
         margin-top: -1.5rem;
         margin-bottom: 0.5rem;
     }
-    body[data-active-tab="creditcards"] #unified-header-layout,
-    body[data-active-tab="loans"] #unified-header-layout {
+body.is-mobile-screen[data-active-tab="creditcards"] #unified-header-layout,
+    body.is-mobile-screen[data-active-tab="loans"] #unified-header-layout {
         margin-top: -1.5rem;
     }
-    /* The card-name title is a .header-account-link (opens the issuer's website) — its underline is
+/* The card-name title is a .header-account-link (opens the issuer's website) — its underline is
        subtle at the toolbar's normal 1.55rem size, but title/date-nav now render at the much bigger
        pinned-header size on mobile (see relocateMobileCCDetailHeader()) and long names wrap to 2
        lines, each getting its own underline segment. Confirmed real bug, 2026-08-04 — scoped to just
        this pinned spot so the desktop toolbar's own (smaller, single-line) version is unaffected. */
-    body[data-active-tab="creditcards"] .header-top-row .header-account-link,
-    body[data-active-tab="loans"] .header-top-row .header-account-link {
+body.is-mobile-screen[data-active-tab="creditcards"] .header-top-row .header-account-link,
+    body.is-mobile-screen[data-active-tab="loans"] .header-top-row .header-account-link {
         text-decoration: none;
     }
-    /* Export CSV isn't a mobile action (nowhere to put the downloaded file to use) — same reasoning
+/* Export CSV isn't a mobile action (nowhere to put the downloaded file to use) — same reasoning
        as Dashboard's #btn-export-listview-csv above, per explicit user request, 2026-08-04. */
-    #btn-export-cc-list-csv {
+body.is-mobile-screen #btn-export-cc-list-csv {
         display: none !important;
     }
-    /* Reversed 2026-08-04 per explicit user request: these header "+ Add Transaction" buttons are
+/* Reversed 2026-08-04 per explicit user request: these header "+ Add Transaction" buttons are
        now the mobile add-transaction affordance (matching desktop), and the floating "+" FAB that
        used to cover this on mobile is hidden instead — see updateMobileFabVisibility() in app.js. */
-    /* Loans/Credit Cards overview List sub-view (Account/Starting Balance/Current Balance/Paid To
+/* Loans/Credit Cards overview List sub-view (Account/Starting Balance/Current Balance/Paid To
        Date/Progress/Payoff Date/Actions) — trim to just Account, Current Balance, and Payoff Date
        per explicit user request, 2026-08-04. The Delete button drops too, but the gear/settings
        button (which opens the same edit modal as tapping a Cards-view account) stays — it just
        gained its own Delete button (see #btn-delete-loan-account/deleteLoanAccount() in app.js) so
        deleting is still reachable, one tap further in instead of a second button on every row. */
-    #loan-summary-content .data-table th:nth-child(2), #loan-summary-content .data-table td:nth-child(2),
-    #loan-summary-content .data-table th:nth-child(4), #loan-summary-content .data-table td:nth-child(4),
-    #loan-summary-content .data-table th:nth-child(5), #loan-summary-content .data-table td:nth-child(5),
-    #credit-summary-content .data-table th:nth-child(2), #credit-summary-content .data-table td:nth-child(2),
-    #credit-summary-content .data-table th:nth-child(4), #credit-summary-content .data-table td:nth-child(4),
-    #credit-summary-content .data-table th:nth-child(5), #credit-summary-content .data-table td:nth-child(5) {
+body.is-mobile-screen #loan-summary-content .data-table th:nth-child(2), body.is-mobile-screen #loan-summary-content .data-table td:nth-child(2),
+    body.is-mobile-screen #loan-summary-content .data-table th:nth-child(4), body.is-mobile-screen #loan-summary-content .data-table td:nth-child(4),
+    body.is-mobile-screen #loan-summary-content .data-table th:nth-child(5), body.is-mobile-screen #loan-summary-content .data-table td:nth-child(5),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(2), body.is-mobile-screen #credit-summary-content .data-table td:nth-child(2),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(4), body.is-mobile-screen #credit-summary-content .data-table td:nth-child(4),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(5), body.is-mobile-screen #credit-summary-content .data-table td:nth-child(5) {
         display: none !important;
     }
-    #loan-summary-content .delete-loan-btn,
-    #credit-summary-content .delete-loan-btn {
+body.is-mobile-screen #loan-summary-content .delete-loan-btn,
+    body.is-mobile-screen #credit-summary-content .delete-loan-btn {
         display: none !important;
     }
-    #loan-summary-content .data-table,
-    #credit-summary-content .data-table {
+body.is-mobile-screen #loan-summary-content .data-table,
+    body.is-mobile-screen #credit-summary-content .data-table {
         table-layout: fixed;
     }
-    #loan-summary-content .data-table th:nth-child(1),
-    #loan-summary-content .data-table td:nth-child(1),
-    #credit-summary-content .data-table th:nth-child(1),
-    #credit-summary-content .data-table td:nth-child(1) { width: 42%; white-space: normal !important; overflow-wrap: break-word !important; }
-    #loan-summary-content .data-table th:nth-child(3),
-    #loan-summary-content .data-table td:nth-child(3),
-    #credit-summary-content .data-table th:nth-child(3),
-    #credit-summary-content .data-table td:nth-child(3),
-    #loan-summary-content .data-table th:nth-child(6),
-    #loan-summary-content .data-table td:nth-child(6),
-    #credit-summary-content .data-table th:nth-child(6),
-    #credit-summary-content .data-table td:nth-child(6) {
+body.is-mobile-screen #loan-summary-content .data-table th:nth-child(1),
+    body.is-mobile-screen #loan-summary-content .data-table td:nth-child(1),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(1),
+    body.is-mobile-screen #credit-summary-content .data-table td:nth-child(1) { width: 42%; white-space: normal !important; overflow-wrap: break-word !important; }
+body.is-mobile-screen #loan-summary-content .data-table th:nth-child(3),
+    body.is-mobile-screen #loan-summary-content .data-table td:nth-child(3),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(3),
+    body.is-mobile-screen #credit-summary-content .data-table td:nth-child(3),
+    body.is-mobile-screen #loan-summary-content .data-table th:nth-child(6),
+    body.is-mobile-screen #loan-summary-content .data-table td:nth-child(6),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(6),
+    body.is-mobile-screen #credit-summary-content .data-table td:nth-child(6) {
         width: 22%;
         white-space: normal !important;
         overflow-wrap: break-word !important;
     }
-    #loan-summary-content .data-table th:nth-child(7),
-    #loan-summary-content .data-table td:nth-child(7),
-    #credit-summary-content .data-table th:nth-child(7),
-    #credit-summary-content .data-table td:nth-child(7) { width: 14%; }
-    #loan-summary-content .data-table th, #loan-summary-content .data-table td,
-    #credit-summary-content .data-table th, #credit-summary-content .data-table td {
+body.is-mobile-screen #loan-summary-content .data-table th:nth-child(7),
+    body.is-mobile-screen #loan-summary-content .data-table td:nth-child(7),
+    body.is-mobile-screen #credit-summary-content .data-table th:nth-child(7),
+    body.is-mobile-screen #credit-summary-content .data-table td:nth-child(7) { width: 14%; }
+body.is-mobile-screen #loan-summary-content .data-table th, body.is-mobile-screen #loan-summary-content .data-table td,
+    body.is-mobile-screen #credit-summary-content .data-table th, body.is-mobile-screen #credit-summary-content .data-table td {
         padding: 0.4rem 0.3rem;
         font-size: 0.82rem;
     }
-    /* #unified-header-layout is unconditionally display:none on this tab (see its rule near the top
+/* #unified-header-layout is unconditionally display:none on this tab (see its rule near the top
        of this file) because on desktop its content always relocates elsewhere (into the toolbar/
        top-right cluster) leaving it permanently empty. On mobile, relocateMobileStickyHeader() (now
        extended to this tab too, so title/date-nav can pin the same way Dashboard/Savings do) DOES
@@ -4942,51 +5014,51 @@ body.maximized-calendar .day-transaction-item {
        before relocateMobileCCDetailHeader() in app.js pulls the Month/Year scope toggle back out
        into the account slot below the pinned header. Needs to be visible for that content to render
        at all. */
-    body[data-active-tab="creditcards"] #unified-header-layout,
-    body[data-active-tab="loans"] #unified-header-layout {
+body.is-mobile-screen[data-active-tab="creditcards"] #unified-header-layout,
+    body.is-mobile-screen[data-active-tab="loans"] #unified-header-layout {
         display: flex !important;
         flex-wrap: wrap;
         justify-content: flex-end;
         gap: 0.5rem;
         position: static;
     }
-    body[data-active-tab="creditcards"] #unified-header-layout #header-right-actions,
-    body[data-active-tab="loans"] #unified-header-layout #header-right-actions {
+body.is-mobile-screen[data-active-tab="creditcards"] #unified-header-layout #header-right-actions,
+    body.is-mobile-screen[data-active-tab="loans"] #unified-header-layout #header-right-actions {
         position: static !important;
     }
-    /* Dashboard header button-wall — Personal/Joint, Today/Threshold, Month/Full Year, and the
+/* Dashboard header button-wall — Personal/Joint, Today/Threshold, Month/Full Year, and the
        cycle filter each live in their own row (inherited from the desktop layout's structure), so
        on a narrow phone they simply stack instead of fitting side by side. Shrinking each control's
        own footprint meaningfully shortens how far a user has to scroll past all of them before
        reaching real content — per explicit user request, 2026-08-03 (this was the single biggest
        contributor to "the dashboard is unreadable on mobile"). */
-    body[data-active-tab="dashboard"] #header-left-buttons-row .action-btn,
-    body[data-active-tab="dashboard"] #header-identity-toggles-host .segment-btn,
-    body[data-active-tab="dashboard"] #header-view-toggle-host .segment-btn,
-    body[data-active-tab="dashboard"] #scope-toggle-container .segment-btn,
-    body[data-active-tab="dashboard"] #cycle-filter-container .segment-btn {
+body.is-mobile-screen[data-active-tab="dashboard"] #header-left-buttons-row .action-btn,
+    body.is-mobile-screen[data-active-tab="dashboard"] #header-identity-toggles-host .segment-btn,
+    body.is-mobile-screen[data-active-tab="dashboard"] #header-view-toggle-host .segment-btn,
+    body.is-mobile-screen[data-active-tab="dashboard"] #scope-toggle-container .segment-btn,
+    body.is-mobile-screen[data-active-tab="dashboard"] #cycle-filter-container .segment-btn {
         padding: 0.3rem 0.55rem !important;
         font-size: 0.72rem !important;
         height: 28px !important;
     }
-    body[data-active-tab="dashboard"] #header-left-actions,
-    body[data-active-tab="dashboard"] #header-left-buttons-row,
-    body[data-active-tab="dashboard"] #header-identity-toggles-host {
+body.is-mobile-screen[data-active-tab="dashboard"] #header-left-actions,
+    body.is-mobile-screen[data-active-tab="dashboard"] #header-left-buttons-row,
+    body.is-mobile-screen[data-active-tab="dashboard"] #header-identity-toggles-host {
         gap: 0.35rem !important;
     }
-    /* Savings and Bill Settings' Today/Current Month button lives in #header-right-actions instead
+/* Savings and Bill Settings' Today/Current Month button lives in #header-right-actions instead
        of #header-left-actions/#header-left-buttons-row (see updateHeaderPeriodNavAndToday() in
        app.js — those two tabs specifically prepend it into hostRight) — a completely different
        container from the one every other centering rule here targets, so it was left rendering at
        its normal desktop flex position (effectively left-aligned) instead of centered like every
        other toggle row on the page. Confirmed real bug, 2026-08-05. */
-    body[data-active-tab="savings"] #header-right-actions,
-    body[data-active-tab="billtracker"] #header-right-actions {
+body.is-mobile-screen[data-active-tab="savings"] #header-right-actions,
+    body.is-mobile-screen[data-active-tab="billtracker"] #header-right-actions {
         width: 100%;
         justify-content: center;
         flex-wrap: wrap;
     }
-    /* The "deeper restructure" flagged above, now done per explicit user request, 2026-08-04:
+/* The "deeper restructure" flagged above, now done per explicit user request, 2026-08-04:
        Personal/Joint now shares a row with Today/Threshold instead of stacking above it, and Month/
        Full Year now shares a row with the cycle filter (All Days/1st-14th/15th-End) instead of
        stacking above it — 5 separate rows down to 3 (date-nav, left-actions, toggles). Both
@@ -4996,33 +5068,33 @@ body.maximized-calendar .day-transaction-item {
        share this exact same grid/class structure as Dashboard (updateGlobalTogglesPlacement() only
        gives creditcards/loans a different .unified-header-cc variant), so the same row-merge applies
        to their own Today/List/Month/Full Year and Month/1st-Cycle/15th-Cycle rows unchanged. */
-    body[data-active-tab="dashboard"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="savings"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="bills"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="delivery"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="billtracker"] #unified-header-layout.unified-header-dashboard {
+body.is-mobile-screen[data-active-tab="dashboard"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="savings"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="bills"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="delivery"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="billtracker"] #unified-header-layout.unified-header-dashboard {
         grid-template-areas:
             "period period period"
             "left left left"
             "toggles toggles toggles" !important;
         grid-template-columns: 1fr !important;
     }
-    body[data-active-tab="dashboard"] #header-left-actions,
-    body[data-active-tab="savings"] #header-left-actions,
-    body[data-active-tab="bills"] #header-left-actions,
-    body[data-active-tab="delivery"] #header-left-actions,
-    body[data-active-tab="billtracker"] #header-left-actions {
+body.is-mobile-screen[data-active-tab="dashboard"] #header-left-actions,
+    body.is-mobile-screen[data-active-tab="savings"] #header-left-actions,
+    body.is-mobile-screen[data-active-tab="bills"] #header-left-actions,
+    body.is-mobile-screen[data-active-tab="delivery"] #header-left-actions,
+    body.is-mobile-screen[data-active-tab="billtracker"] #header-left-actions {
         flex-direction: row !important;
         flex-wrap: wrap !important;
         align-items: center !important;
         justify-content: center !important;
         width: 100%;
     }
-    body[data-active-tab="dashboard"] #global-toggles-host,
-    body[data-active-tab="savings"] #global-toggles-host,
-    body[data-active-tab="bills"] #global-toggles-host,
-    body[data-active-tab="delivery"] #global-toggles-host,
-    body[data-active-tab="billtracker"] #global-toggles-host {
+body.is-mobile-screen[data-active-tab="dashboard"] #global-toggles-host,
+    body.is-mobile-screen[data-active-tab="savings"] #global-toggles-host,
+    body.is-mobile-screen[data-active-tab="bills"] #global-toggles-host,
+    body.is-mobile-screen[data-active-tab="delivery"] #global-toggles-host,
+    body.is-mobile-screen[data-active-tab="billtracker"] #global-toggles-host {
         flex-direction: row !important;
         flex-wrap: wrap !important;
         align-items: center !important;
@@ -5030,7 +5102,7 @@ body.maximized-calendar .day-transaction-item {
         justify-self: center !important;
         width: 100%;
     }
-    /* Per explicit user request, 2026-08-04: keep the title and date-nav (year/month/day) pinned
+/* Per explicit user request, 2026-08-04: keep the title and date-nav (year/month/day) pinned
        while scrolling, but WITHOUT re-pinning Personal/Joint, Today/Threshold, Month/Full Year, or
        the cycle filter — those should scroll away normally.
        First attempt gave .header-top-row and #header-period-nav their own independent
@@ -5047,31 +5119,31 @@ body.maximized-calendar .day-transaction-item {
        title+date-nav, so re-enabling ITS OWN sticky here works exactly like it already does on wider
        screens — sticking for the full height of .app-main (thousands of px), not just its own short
        box. */
-    body[data-active-tab="dashboard"] .main-sticky-dashboard,
-    body[data-active-tab="savings"] .main-sticky-dashboard,
-    body[data-active-tab="bills"] .main-sticky-dashboard,
-    body[data-active-tab="delivery"] .main-sticky-dashboard,
-    body[data-active-tab="billtracker"] .main-sticky-dashboard {
+body.is-mobile-screen[data-active-tab="dashboard"] .main-sticky-dashboard,
+    body.is-mobile-screen[data-active-tab="savings"] .main-sticky-dashboard,
+    body.is-mobile-screen[data-active-tab="bills"] .main-sticky-dashboard,
+    body.is-mobile-screen[data-active-tab="delivery"] .main-sticky-dashboard,
+    body.is-mobile-screen[data-active-tab="billtracker"] .main-sticky-dashboard {
         position: sticky !important;
         top: 0 !important;
     }
-    /* Same sticky treatment, extended to the Loan/Card detail page — see MOBILE_STICKY_HEADER_TABS
+/* Same sticky treatment, extended to the Loan/Card detail page — see MOBILE_STICKY_HEADER_TABS
        and relocateMobileCCDetailHeader() in app.js. Only pins while a specific card/loan is open
        (relocateMobileCCDetailHeader() only relocates then); the overview grid's title just sits in
        its normal spot like every other "home" page, harmless either way since it's short. */
-    body[data-active-tab="creditcards"] .main-sticky-dashboard,
-    body[data-active-tab="loans"] .main-sticky-dashboard {
+body.is-mobile-screen[data-active-tab="creditcards"] .main-sticky-dashboard,
+    body.is-mobile-screen[data-active-tab="loans"] .main-sticky-dashboard {
         position: sticky !important;
         top: 0 !important;
     }
-    /* #unified-header-layout, once relocated out of .main-sticky-dashboard above, no longer has
+/* #unified-header-layout, once relocated out of .main-sticky-dashboard above, no longer has
        #header-period-nav as a grid child — drop the "period" row from its mobile grid-template-areas
        (set ~4605) so it doesn't reserve a phantom empty row for it. */
-    body[data-active-tab="dashboard"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="savings"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="bills"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="delivery"] #unified-header-layout.unified-header-dashboard,
-    body[data-active-tab="billtracker"] #unified-header-layout.unified-header-dashboard {
+body.is-mobile-screen[data-active-tab="dashboard"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="savings"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="bills"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="delivery"] #unified-header-layout.unified-header-dashboard,
+    body.is-mobile-screen[data-active-tab="billtracker"] #unified-header-layout.unified-header-dashboard {
         grid-template-areas:
             "left left left"
             "toggles toggles toggles" !important;
@@ -5083,105 +5155,102 @@ body.maximized-calendar .day-transaction-item {
            small gap instead of fighting the shared .app-main rule with a page-specific override. */
         margin-top: -1.5rem;
     }
-    /* Per explicit user request, 2026-08-04: the metrics Hide/Show button is redundant now that the
+/* Per explicit user request, 2026-08-04: the metrics Hide/Show button is redundant now that the
        whole "Dashboard Metrics" header row toggles collapse on click (see its own listener in
        app.js) — default collapsed on mobile already happens via enforceMobileListView(), the user
        taps the header itself to expand/collapse individually from here on. */
-    body[data-active-tab="dashboard"] #btn-toggle-metrics {
+body.is-mobile-screen[data-active-tab="dashboard"] #btn-toggle-metrics {
         display: none !important;
     }
-    /* Download CSV isn't a mobile action (nowhere to put the downloaded file to use) — per explicit
+/* Download CSV isn't a mobile action (nowhere to put the downloaded file to use) — per explicit
        user request, 2026-08-04, extended 2026-08-05 to every remaining CSV button app-wide
        (Savings, Bill Settings — Dashboard and Credit Cards/Loans already had this; desktop-only,
        full stop, per explicit user request). #btn-export-billtracker-csv normally starts with the
        static `hidden` class too (JS only un-hides it outside Cards sub-view) — !important beats
        that regardless of which sub-view toggles it on. */
-    body[data-active-tab="dashboard"] #btn-export-listview-csv,
-    body[data-active-tab="savings"] #btn-export-savingslist-csv,
-    body[data-active-tab="billtracker"] #btn-export-billtracker-csv {
+body.is-mobile-screen[data-active-tab="dashboard"] #btn-export-listview-csv,
+    body.is-mobile-screen[data-active-tab="savings"] #btn-export-savingslist-csv,
+    body.is-mobile-screen[data-active-tab="billtracker"] #btn-export-billtracker-csv {
         display: none !important;
     }
-    /* Starting/Ending Balance detail lines under the ledger title pushed the search/filter row
+/* Starting/Ending Balance detail lines under the ledger title pushed the search/filter row
        further down than needed — per explicit user request, 2026-08-04, drop them so that row sits
        directly under the title. Wrapped in Dashboard's own list view id since #cc-list-view-header
        has a different, unrelated pair of ids for the same concept. */
-    body[data-active-tab="dashboard"] #list-view-starting-balance,
-    body[data-active-tab="dashboard"] #list-view-ending-balance {
+body.is-mobile-screen[data-active-tab="dashboard"] #list-view-starting-balance,
+    body.is-mobile-screen[data-active-tab="dashboard"] #list-view-ending-balance {
         display: none !important;
     }
-    /* Flatten the sticky ledger header's own border/shadow on mobile — per explicit user request,
+/* Flatten the sticky ledger header's own border/shadow on mobile — per explicit user request,
        2026-08-05, it read as a redundant box-within-a-box against the outer .glass-card's own
        border. Still position:sticky, still solid-background (needed for legibility over scrolling
        rows underneath) — just no separate outline. */
-    body[data-active-tab="dashboard"] .list-view-sticky-header {
+body.is-mobile-screen[data-active-tab="dashboard"] .list-view-sticky-header {
         border: none !important;
         box-shadow: none !important;
     }
-
-    /* Bills & Expenses (billtracker tab), mobile — per explicit user request, 2026-08-04: no Calendar
+/* Bills & Expenses (billtracker tab), mobile — per explicit user request, 2026-08-04: no Calendar
        sub-view on mobile (matches every other page's Calendar/List removal, same "no calendar option
        on a phone" reasoning), and the Hide button for the whole Cards/List/Calendar content area is
        gone too — the content always shows now rather than being collapsible, since removing the only
        button that could re-open it would otherwise strand it hidden with no way back. */
-    body[data-active-tab="billtracker"] [data-billtracker-mode="calendar"] {
+body.is-mobile-screen[data-active-tab="billtracker"] [data-billtracker-mode="calendar"] {
         display: none !important;
     }
-    body[data-active-tab="billtracker"] .collapse-toggle-btn[data-target="billtracker-list-content"] {
+body.is-mobile-screen[data-active-tab="billtracker"] .collapse-toggle-btn[data-target="billtracker-list-content"] {
         display: none !important;
     }
-    body[data-active-tab="billtracker"] #billtracker-list-content.hidden {
+body.is-mobile-screen[data-active-tab="billtracker"] #billtracker-list-content.hidden {
         display: block !important;
     }
-    /* Master Show/Hide-All isn't needed here either, same reasoning as Savings/Bill Splitter below —
+/* Master Show/Hide-All isn't needed here either, same reasoning as Savings/Bill Splitter below —
        per explicit user request. */
-    body[data-active-tab="billtracker"] #btn-master-show-hide-all {
+body.is-mobile-screen[data-active-tab="billtracker"] #btn-master-show-hide-all {
         display: none !important;
     }
-
-    /* Savings Tracker, mobile — per explicit user request, 2026-08-04: no Calendar sub-view (matches
+/* Savings Tracker, mobile — per explicit user request, 2026-08-04: no Calendar sub-view (matches
        every other page — enforceMobileListView() already forces state.savingsViewMode to 'list'), so
        remove the whole toggle rather than leave a single-option "List" button that can't do
        anything. Master Show/Hide-All isn't needed either — its two sections (Savings Metrics, Year
        Summary) already default collapsed via enforceMobileListView(), same as every other tab. */
-    body[data-active-tab="savings"] #savings-header-view-toggle {
+body.is-mobile-screen[data-active-tab="savings"] #savings-header-view-toggle {
         display: none !important;
     }
-    body[data-active-tab="savings"] #btn-master-show-hide-all {
+body.is-mobile-screen[data-active-tab="savings"] #btn-master-show-hide-all {
         display: none !important;
     }
-    /* Bill Splitter ("bills" tab), mobile — per explicit user request, 2026-08-04: same Master
+/* Bill Splitter ("bills" tab), mobile — per explicit user request, 2026-08-04: same Master
        Show/Hide-All removal — its four sections (Metrics, Manual Transfers, Joint Expenses, Personal
        Allocations) already default collapsed via enforceMobileListView(). */
-    body[data-active-tab="bills"] #btn-master-show-hide-all {
+body.is-mobile-screen[data-active-tab="bills"] #btn-master-show-hide-all {
         display: none !important;
     }
-    /* Joint Expenses' own List/Calendar toggle — removed on mobile per explicit user request,
+/* Joint Expenses' own List/Calendar toggle — removed on mobile per explicit user request,
        2026-08-04 (matches every other page's "no Calendar sub-view on mobile" precedent); state
        forced to list every mobile render in enforceMobileListView() so nothing is left stranded on
        'calendar' with no toggle left to switch back. (Its Joint/Personal ownership toggle sat right
        next to this one but is gone on every screen size now, not just mobile — see
        #joint-expenses-card in Index.html.) */
-    body[data-active-tab="bills"] #expense-calendar-view-toggle {
+body.is-mobile-screen[data-active-tab="bills"] #expense-calendar-view-toggle {
         display: none !important;
     }
-
-    /* Per explicit user request, 2026-08-03: the inline Quick-Add form (Date/Type/Description/Amount
+/* Per explicit user request, 2026-08-03: the inline Quick-Add form (Date/Type/Description/Amount
        fields plus the Add button) was taking up the entire first screen on mobile, before any actual
        transaction was visible — confirmed real complaint, not just a nice-to-have. Hidden entirely on
        mobile (regardless of its own collapsed/expanded state) in favor of the floating "+" button
        below, which opens the same form as a popup instead — see openMobileQuickAddModal() in app.js.
        Its own Hide/Show toggle is hidden too since there's nothing left inline for it to toggle. */
-    #list-view-tools-wrapper,
-    #cc-list-tools-wrapper {
+body.is-mobile-screen #list-view-tools-wrapper,
+    body.is-mobile-screen #cc-list-tools-wrapper {
         display: none !important;
     }
-    .collapse-toggle-btn[data-target="list-view-tools-wrapper"],
-    .collapse-toggle-btn[data-target="cc-list-tools-wrapper"] {
+body.is-mobile-screen .collapse-toggle-btn[data-target="list-view-tools-wrapper"],
+    body.is-mobile-screen .collapse-toggle-btn[data-target="cc-list-tools-wrapper"] {
         display: none !important;
     }
-    /* Sits just above the scroll-to-top button (index.css ~3251, 44px + 1.5rem from the edge) so the
+/* Sits just above the scroll-to-top button (index.css ~3251, 44px + 1.5rem from the edge) so the
        two never overlap. */
-    .mobile-fab-add-transaction {
+body.is-mobile-screen .mobile-fab-add-transaction {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -5200,11 +5269,10 @@ body.maximized-calendar .day-transaction-item {
         cursor: pointer;
         box-shadow: var(--glass-shadow);
     }
-    .mobile-fab-add-transaction:hover {
+body.is-mobile-screen .mobile-fab-add-transaction:hover {
         background: var(--color-primary-hover);
     }
-
-    /* Per explicit user request, 2026-08-03: the page title was landing BELOW a row of Personal/
+/* Per explicit user request, 2026-08-03: the page title was landing BELOW a row of Personal/
        Joint/List-toggle buttons on mobile instead of leading the page. Root cause — .header-title-
        compact (Index.html's .header-top-row) also carries the older, unrelated .header-title class
        from a completely different flex-column header scheme further up this file (~3100, an old
@@ -5212,19 +5280,19 @@ body.maximized-calendar .day-transaction-item {
        coincidence and shoved the title out of its natural first-child position. Reassert it back to
        the very front here, centered, with a selector specific enough (2 classes) to beat that old
        1-class rule regardless of source order. */
-    /* !important needed on align-items/justify-content — .header-top-row's own inline style
+/* !important needed on align-items/justify-content — .header-top-row's own inline style
        attribute in Index.html sets align-items:flex-start and justify-content:space-between, which
        (being inline) wins over an external stylesheet rule regardless of specificity. Confirmed real
        bug, 2026-08-04: flex-direction:column took effect but the row still keyed off the old
        flex-start/space-between, leaving the "Show" metrics-toggle button pinned to the left edge
        under the now-centered title instead of centering with everything else. */
-    .header-top-row {
+body.is-mobile-screen .header-top-row {
         flex-direction: column;
         align-items: center !important;
         justify-content: center !important;
         gap: 0.3rem;
     }
-    /* #btn-cc-back ("← Loans"/"← Back to Credit Cards") sat BELOW the big centered icon+title on
+/* #btn-cc-back ("← Loans"/"← Back to Credit Cards") sat BELOW the big centered icon+title on
        the loan/card detail page — order:-1 below puts the title before it in DOM order, and with no
        explicit order of its own the back button (order:0) fell in after. A back-navigation link
        reading below the page's own title is backwards from every standard "← Back" placement
@@ -5233,10 +5301,10 @@ body.maximized-calendar .day-transaction-item {
        reordering flex siblings can't reach in there without restructuring that shared element, which
        every other tab's title also uses). Per explicit user request, 2026-08-05 — best safe
        approximation of "next to the icon" without touching that shared structure. */
-    #btn-cc-back {
+body.is-mobile-screen #btn-cc-back {
         order: -2;
     }
-    .header-top-row .header-title-compact {
+body.is-mobile-screen .header-top-row .header-title-compact {
         order: -1;
         flex-direction: column;
         align-items: center;
@@ -5252,10 +5320,10 @@ body.maximized-calendar .day-transaction-item {
         padding: 0 3.25rem;
         box-sizing: border-box;
     }
-    .header-top-row .header-title-compact p.header-subtitle-highlight {
+body.is-mobile-screen .header-top-row .header-title-compact p.header-subtitle-highlight {
         justify-content: center;
     }
-    /* Credit Card/Loan detail pages: back button truly beside the icon+name now (a single row).
+/* Credit Card/Loan detail pages: back button truly beside the icon+name now (a single row).
        order:-2/-1 above (plus the centered-column layout) was the deliberate "safe approximation"
        used 2026-08-05 because reaching inside .header-title-compact's own <h2> to place a sibling
        felt too invasive at the time — this scoped override actually does it, since the shared
@@ -5263,23 +5331,23 @@ body.maximized-calendar .day-transaction-item {
        row-not-column context changes, so every other tab using that class is unaffected). Back
        button keeps the hamburger-clearance margin that used to live on the title (it's the leftmost
        element now, not the title). Per explicit user request, 2026-08-05. */
-    body[data-active-tab="creditcards"] .header-top-row,
-    body[data-active-tab="loans"] .header-top-row {
+body.is-mobile-screen[data-active-tab="creditcards"] .header-top-row,
+    body.is-mobile-screen[data-active-tab="loans"] .header-top-row {
         flex-direction: row;
         align-items: center !important;
         justify-content: flex-start !important;
         flex-wrap: nowrap;
         gap: 0.5rem;
     }
-    body[data-active-tab="creditcards"] #btn-cc-back,
-    body[data-active-tab="loans"] #btn-cc-back {
+body.is-mobile-screen[data-active-tab="creditcards"] #btn-cc-back,
+    body.is-mobile-screen[data-active-tab="loans"] #btn-cc-back {
         order: -1;
         flex: 0 0 auto;
         margin-left: 3.25rem;
         white-space: nowrap;
     }
-    body[data-active-tab="creditcards"] .header-top-row .header-title-compact,
-    body[data-active-tab="loans"] .header-top-row .header-title-compact {
+body.is-mobile-screen[data-active-tab="creditcards"] .header-top-row .header-title-compact,
+    body.is-mobile-screen[data-active-tab="loans"] .header-top-row .header-title-compact {
         order: 0;
         /* Stays column, NOT row — .header-title-compact's 2 children are the <h2> (icon+name) and
            the <p> stat-chip subtitle BELOW it (Balance/APR/Payoff etc. for these two tabs
@@ -5294,27 +5362,26 @@ body.maximized-calendar .day-transaction-item {
         min-width: 0;
         padding: 0;
     }
-    body[data-active-tab="creditcards"] .header-top-row .header-title-compact p.header-subtitle-highlight,
-    body[data-active-tab="loans"] .header-top-row .header-title-compact p.header-subtitle-highlight {
+body.is-mobile-screen[data-active-tab="creditcards"] .header-top-row .header-title-compact p.header-subtitle-highlight,
+    body.is-mobile-screen[data-active-tab="loans"] .header-top-row .header-title-compact p.header-subtitle-highlight {
         justify-content: flex-start;
     }
-    /* Calendar/List toggle has nothing left to toggle on mobile — enforceMobileListView() (app.js)
+/* Calendar/List toggle has nothing left to toggle on mobile — enforceMobileListView() (app.js)
        already forces every view into List mode below this breakpoint since Calendar is unreadable
        at phone width. Per explicit user request, 2026-08-03. */
-    #header-view-toggle-host {
+body.is-mobile-screen #header-view-toggle-host {
         display: none !important;
     }
-    /* Tighter vertical rhythm through the whole sticky header — per explicit user request,
+/* Tighter vertical rhythm through the whole sticky header — per explicit user request,
        2026-08-03 ("a lot of dead space"). */
-    .main-sticky-dashboard {
+body.is-mobile-screen .main-sticky-dashboard {
         gap: 0.3rem !important;
         padding-bottom: 0.5rem !important;
     }
-    #unified-header-layout {
+body.is-mobile-screen #unified-header-layout {
         gap: 0.5rem 0.4rem !important;
     }
-
-    /* Bill Splitter's Joint Expenses and Personal Allocations tables, mobile — per explicit user
+/* Bill Splitter's Joint Expenses and Personal Allocations tables, mobile — per explicit user
        request, 2026-08-04: remove the Edit/Delete Actions column (tapping a row opens the same
        editor modal now, which gained its own Delete button — see deleteBillSplitterItemInteractive/
        deleteAllocationInteractive and #btn-delete-bill/#btn-delete-alloc in app.js) and trim down to
@@ -5325,57 +5392,57 @@ body.maximized-calendar .day-transaction-item {
        (#joint-expenses-content .table-actions-cell, #personal-allocations-content
        .table-actions-cell { display: table-cell !important; }) forces it visible regardless of
        specificity otherwise. */
-    #joint-expenses-content .data-table th:nth-child(2),
-    #joint-expenses-content .data-table td:nth-child(2),
-    #joint-expenses-content .data-table th:nth-child(3),
-    #joint-expenses-content .data-table td:nth-child(3),
-    #joint-expenses-content .data-table th:nth-child(5),
-    #joint-expenses-content .data-table td:nth-child(5),
-    #joint-expenses-content .data-table th:nth-child(6),
-    #joint-expenses-content .data-table td:nth-child(6),
-    #joint-expenses-content .data-table th:nth-child(8),
-    #joint-expenses-content .data-table td:nth-child(8),
-    #joint-expenses-content .data-table th:nth-child(9),
-    #joint-expenses-content .data-table td:nth-child(9),
-    #joint-expenses-content .data-table th:nth-child(10),
-    #joint-expenses-content .data-table td:nth-child(10),
-    #joint-expenses-content .data-table th:nth-child(11),
-    #joint-expenses-content .data-table td:nth-child(11),
-    #joint-expenses-content .data-table th:nth-child(12),
-    #joint-expenses-content .data-table td:nth-child(12) {
+body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(2),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(2),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(3),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(3),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(5),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(5),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(6),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(6),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(8),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(8),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(9),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(9),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(10),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(10),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(11),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(11),
+    body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(12),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(12) {
         display: none !important;
     }
-    #joint-expenses-content .data-table th:nth-child(1),
-    #joint-expenses-content .data-table td:nth-child(1) { width: 42%; white-space: normal !important; overflow-wrap: break-word !important; }
-    #joint-expenses-content .data-table th:nth-child(4),
-    #joint-expenses-content .data-table td:nth-child(4) { width: 25%; }
-    #joint-expenses-content .data-table th:nth-child(7),
-    #joint-expenses-content .data-table td:nth-child(7) { width: 33%; white-space: normal !important; overflow-wrap: break-word !important; }
-
-    #personal-allocations-content .data-table th:nth-child(3),
-    #personal-allocations-content .data-table td:nth-child(3),
-    #personal-allocations-content .data-table th:nth-child(4),
-    #personal-allocations-content .data-table td:nth-child(4),
-    #personal-allocations-content .data-table th:nth-child(5),
-    #personal-allocations-content .data-table td:nth-child(5),
-    #personal-allocations-content .data-table th:nth-child(7),
-    #personal-allocations-content .data-table td:nth-child(7) {
+body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(1),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(1) { width: 42%; white-space: normal !important; overflow-wrap: break-word !important; }
+body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(4),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(4) { width: 25%; }
+body.is-mobile-screen #joint-expenses-content .data-table th:nth-child(7),
+    body.is-mobile-screen #joint-expenses-content .data-table td:nth-child(7) { width: 33%; white-space: normal !important; overflow-wrap: break-word !important; }
+body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(3),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(3),
+    body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(4),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(4),
+    body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(5),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(5),
+    body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(7),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(7) {
         display: none !important;
     }
-    #personal-allocations-content .data-table th:nth-child(1),
-    #personal-allocations-content .data-table td:nth-child(1) { width: 10%; }
-    #personal-allocations-content .data-table th:nth-child(2),
-    #personal-allocations-content .data-table td:nth-child(2) { width: 55%; white-space: normal !important; overflow-wrap: break-word !important; }
-    #personal-allocations-content .data-table th:nth-child(6),
-    #personal-allocations-content .data-table td:nth-child(6) { width: 35%; white-space: normal !important; overflow-wrap: break-word !important; }
-    #joint-expenses-content .data-table th,
-    #joint-expenses-content .data-table td,
-    #personal-allocations-content .data-table th,
-    #personal-allocations-content .data-table td {
+body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(1),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(1) { width: 10%; }
+body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(2),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(2) { width: 55%; white-space: normal !important; overflow-wrap: break-word !important; }
+body.is-mobile-screen #personal-allocations-content .data-table th:nth-child(6),
+    body.is-mobile-screen #personal-allocations-content .data-table td:nth-child(6) { width: 35%; white-space: normal !important; overflow-wrap: break-word !important; }
+body.is-mobile-screen #joint-expenses-content .data-table th,
+    body.is-mobile-screen #joint-expenses-content .data-table td,
+    body.is-mobile-screen #personal-allocations-content .data-table th,
+    body.is-mobile-screen #personal-allocations-content .data-table td {
         padding: 0.4rem 0.3rem;
         font-size: 0.8rem;
     }
-}
+
+
 
 /* CREDIT CARD PAYOFF ESTIMATOR GRAPHIC/CHART STYLES */
 .cc-payoff-estimator-card {
@@ -5801,7 +5868,7 @@ body.maximized-calendar .day-transaction-item {
 }
 
 /* Direction Toggle Controls (Charge vs Deposit) */
-.direction-toggle-group {
+.direction-toggle-group, .savings-type-toggle-group {
     display: flex;
     background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.15));
@@ -5845,6 +5912,16 @@ body.maximized-calendar .day-transaction-item {
     color: #86efac;
     border: 1px solid rgba(34, 197, 94, 0.45);
     box-shadow: 0 2px 8px rgba(34, 197, 94, 0.25);
+}
+
+/* Savings Entry Type's 3rd option (Interest) — the Charge/Deposit toggle elsewhere is always
+   binary, but Interest isn't "money moving in/out of a checking account" the way Deposit/Withdrawal
+   are, so it gets its own color rather than reusing active-deposit's green. */
+.direction-btn.active-interest {
+    background: rgba(59, 130, 246, 0.22);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
 }
 
 /* Long-press row-detail overlay (see initLongPressDetailOverlay() in app.js) — per explicit user
@@ -5913,5 +5990,3 @@ body.maximized-calendar .day-transaction-item {
     .mobile-row-detail-overlay { align-items: center; }
     .mobile-row-detail-card { border-radius: 16px; }
 }
-
-
