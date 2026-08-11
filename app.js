@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-11 10:53';
+const BUILD_VERSION = '2026-08-11 12:58';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -13471,7 +13471,15 @@ function getPersonalTransferSimulationAnchorDate() {
     Object.values(state.personalCalendar || {}).forEach(list => (list || []).forEach(tx => {
         if (tx.date && (!earliest || tx.date < earliest)) earliest = tx.date;
     }));
-    return earliest || formatLocalDate(new Date(state.currentYear, 0, 1));
+    // Real (calendar) current year, NOT state.currentYear — the latter is just whichever year the
+    // user last navigated to in the UI, and using it here made this function's return value (and
+    // every _adjustedTransferCache entry keyed off it) silently change depending on navigation
+    // order within the same session, not on any real data. Confirmed real, 2026-08-11: viewing 2027
+    // before a month's simulation had ever been computed made that month's walk start at Jan 1 2027
+    // instead of its real earlier history, and since saveDatabase() is the only thing that clears
+    // this cache, whichever version got computed first (correct or truncated) stuck around for the
+    // rest of the session. See the matching fix in getAsiaTransferSimulationAnchorDate().
+    return earliest || formatLocalDate(new Date(new Date().getFullYear(), 0, 1));
 }
 
 // One row per real calendar day from startDateStr through endDateStr inclusive — unlike
@@ -13708,7 +13716,9 @@ function getAsiaBalanceCheckpointBeforeMonth(year, monthShort) {
         // instantly collapsed every prior day's displayed balance to $0 and every later day's to just
         // that one transaction's own amount, silently erasing months of real synthetic income from
         // the display (the underlying transaction records themselves were never touched/lost).
-        const jan1Order = (Number(state.currentYear) || new Date().getFullYear()) * 12;
+        // Real calendar year, not state.currentYear — same fix and reasoning as
+        // getAsiaTransferSimulationAnchorDate() above.
+        const jan1Order = new Date().getFullYear() * 12;
         const sortedKeys = getSortedAsiaCalendarKeys();
         let earliestKeyOrder = Infinity;
         if (sortedKeys.length) {
@@ -13950,19 +13960,31 @@ function simulateAsiaCheckingAndAdjustTransfers(daysData) {
 }
 
 // Mirrors getPersonalTransferSimulationAnchorDate() (~app.js:12120), with one deliberate difference:
-// this floors at Jan 1 of currentYear rather than only falling back to it when NO real transaction
-// exists at all. A brand-new account like Asia's checking can run for months on synthetic income
-// alone (dynamic paychecks, dynamic joint-transfer withdrawals) before its first-ever REAL manual
-// transaction — with the old "earliest real tx, else Jan 1" logic, that first manual entry became
-// the anchor and jumped the walk's start date forward past everything synthetic that came before it,
-// which getAsiaBalanceCheckpointBeforeMonth() only partially (and, before its own 2026-08-07 fix,
-// didn't at all) recover — see that function's comment for the full failure chain this caused live.
-// Anchoring at min(earliest real tx, Jan 1) instead means a first real transaction can only ever
-// pull the anchor EARLIER, never later, so every month from Jan 1 onward stays reachable by the walk.
+// this floors at Jan 1 of the REAL calendar year rather than only falling back to it when NO real
+// transaction exists at all. A brand-new account like Asia's checking can run for months on synthetic
+// income alone (dynamic paychecks, dynamic joint-transfer withdrawals) before its first-ever REAL
+// manual transaction — with the old "earliest real tx, else Jan 1" logic, that first manual entry
+// became the anchor and jumped the walk's start date forward past everything synthetic that came
+// before it, which getAsiaBalanceCheckpointBeforeMonth() only partially (and, before its own
+// 2026-08-07 fix, didn't at all) recover — see that function's comment for the full failure chain
+// this caused live. Anchoring at min(earliest real tx, Jan 1) instead means a first real transaction
+// can only ever pull the anchor EARLIER, never later, so every month from Jan 1 onward stays
+// reachable by the walk.
+//
+// Real (calendar) current year, NOT state.currentYear — bug fix, 2026-08-11: state.currentYear is
+// just whichever year the user last navigated to in the UI, and this floor (plus every
+// _asiaAdjustedTransferCache entry keyed off it, since that cache is otherwise unaware of
+// state.currentYear) silently changed depending on navigation order within the same session, not on
+// any real data. Confirmed live: viewing the Joint dashboard's 2027 Full Year list showed a
+// -$26,636.54 year-end balance while the list's own row-by-row total showed +$2,244.37 for the exact
+// same real data — a $28,880.91 gap exactly matching Asia's real 2026 joint contributions, which
+// silently vanished from any calculation first computed while state.currentYear was 2027 (floor
+// jumped to 2027-01-01, cutting off her entire 2026 history). See the matching fix in
+// getPersonalTransferSimulationAnchorDate().
 function getAsiaTransferSimulationAnchorDate() {
     const anchor = getAsiaStartingBalanceAnchor();
     if (anchor) return anchor.date;
-    let earliest = formatLocalDate(new Date(state.currentYear, 0, 1));
+    let earliest = formatLocalDate(new Date(new Date().getFullYear(), 0, 1));
     Object.values(state.asiaCalendar || {}).forEach(list => (list || []).forEach(tx => {
         if (tx.date && tx.date < earliest) earliest = tx.date;
     }));
