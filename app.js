@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-11 10:08';
+const BUILD_VERSION = '2026-08-11 10:53';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -3251,7 +3251,7 @@ function renderSplitEditorRows() {
     // are already auto-saved live by the time this renders, so the preview always reflects reality,
     // not a guess — see getSplitRowBalancePreview()'s own comment).
     container.innerHTML = _splitEditorState.pieces.map(p => {
-        const preview = getSplitRowBalancePreview(p.date);
+        const preview = getSplitRowBalancePreview(p.date, _splitEditorState.isAsia);
         const balanceText = formatSplitRowBalanceText(preview);
         return `
         <div class="form-row split-editor-row" data-piece-id="${p.id}" style="align-items:center; gap:0.5rem; margin-bottom:0.5rem; flex-wrap:wrap;">
@@ -3351,13 +3351,14 @@ function getAnchorEffectiveDate(anchorId) {
 // defensively — getPersonalAdjustedRunningBalanceAtDate() can throw for a never-visited month (a
 // separate, already-flagged pre-existing bug, see spawn_task from 2026-08-09) and a broken balance
 // preview shouldn't take down the whole editor with it.
-function getSplitRowBalancePreview(dateStr) {
+function getSplitRowBalancePreview(dateStr, isAsia) {
     if (!dateStr) return null;
     try {
         const nextDateObj = new Date(dateStr + 'T00:00:00');
         nextDateObj.setDate(nextDateObj.getDate() + 1);
-        const balance = getPersonalAdjustedRunningBalanceAtDate(formatLocalDate(nextDateObj));
-        const buffer = getPersonalMinimumBuffer();
+        const nextDateStr = formatLocalDate(nextDateObj);
+        const balance = isAsia ? getAsiaAdjustedRunningBalanceAtDate(nextDateStr) : getPersonalAdjustedRunningBalanceAtDate(nextDateStr);
+        const buffer = isAsia ? getAsiaMinimumBuffer() : getPersonalMinimumBuffer();
         return { balance, belowBuffer: balance < buffer };
     } catch (err) {
         return null;
@@ -3377,12 +3378,13 @@ function updateAnchorDateHint(anchorId) {
     const hint = document.getElementById('edit-tx-anchor-date-hint');
     const resetBtn = document.getElementById('btn-reset-anchor-date');
     if (!hint || !resetBtn) return;
-    const m = anchorId.match(/^(?:joint-xfer-jason-|xfer-)(1st|15th)-(\d{4})-([A-Za-z]+)$/);
+    const m = anchorId.match(/^(?:joint-xfer-(jason|asia)-|xfer-)(1st|15th)-(\d{4})-([A-Za-z]+)$/);
     if (!m) { hint.classList.add('hidden'); resetBtn.classList.add('hidden'); return; }
-    const [, cycle, yearStr, monthShort] = m;
+    const [, personMatch, cycle, yearStr, monthShort] = m;
+    const isAsia = personMatch === 'asia';
     const naturalDate = `${yearStr}-${String(MONTH_ORDER.indexOf(monthShort) + 1).padStart(2, '0')}-${cycle === '1st' ? '01' : '15'}`;
     const currentDate = document.getElementById('edit-tx-date').value;
-    const balanceText = formatSplitRowBalanceText(getSplitRowBalancePreview(currentDate));
+    const balanceText = formatSplitRowBalanceText(getSplitRowBalancePreview(currentDate, isAsia));
     const isOverridden = currentDate && currentDate !== naturalDate;
     hint.innerHTML = isOverridden
         ? `Natural date: ${escapeHTML(formatDateDisplay(naturalDate))}${balanceText ? ' — ' + escapeHTML(balanceText) : ''}`
@@ -3400,7 +3402,7 @@ function updateAnchorDateHint(anchorId) {
 // be scrolled to/highlighted once the group renders.
 function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDynId) {
     if (!state.dynamicOverrides) state.dynamicOverrides = {};
-    const isAnchorGroupId = id => /^(?:joint-xfer-jason-|xfer-)(1st|15th)-\d{4}-[A-Za-z]+$/.test(id);
+    const isAnchorGroupId = id => /^(?:joint-xfer-(?:jason|asia)-|xfer-)(1st|15th)-\d{4}-[A-Za-z]+$/.test(id);
     const anchorId = (parentDynId && isAnchorGroupId(parentDynId)) ? parentDynId : txId;
     const focusPieceId = (parentDynId && isAnchorGroupId(parentDynId)) ? txId : null;
     // Entering via a piece means the top Date/Description fields must show the ANCHOR's own values,
@@ -3491,14 +3493,14 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
         suggestionsBox.classList.add('hidden');
     }
 
-    // Split Transfer — only for the anchor occurrence of Jason's side of a dynamic joint transfer
-    // (xfer-*/joint-xfer-jason-*, not Asia's side, which has no personal-checking buffer concept
-    // driving a need to split). Clicking a split PIECE resolves to this SAME anchor-group view
-    // (anchorId/focusPieceId computed above) rather than a separate disconnected mini-editor — see
-    // this function's own top comment.
+    // Split Transfer — for the anchor occurrence of either side of a dynamic joint transfer
+    // (xfer-*/joint-xfer-jason-*/joint-xfer-asia-*). Clicking a split PIECE resolves to this SAME
+    // anchor-group view (anchorId/focusPieceId computed above) rather than a separate disconnected
+    // mini-editor — see this function's own top comment.
     const splitSection = document.getElementById('edit-tx-split-section');
-    const isJasonAnchor = isAnchorGroupId(effectiveTxId);
-    if (isJasonAnchor && splitSection) {
+    const isTransferAnchor = isAnchorGroupId(effectiveTxId);
+    const isAsiaAnchor = effectiveTxId.startsWith('joint-xfer-asia-');
+    if (isTransferAnchor && splitSection) {
         splitSection.classList.remove('hidden');
         let totalAmount = Math.abs(amt);
         let pieces = (Array.isArray(existing.splitPieces) ? existing.splitPieces : []).map(p => ({ ...p }));
@@ -3515,7 +3517,10 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
                 const [, cycle, yearStr, monthShort] = cycleMatch;
                 // resolveDynamicTransferGroupTotal() makes this a no-op (reconciledPieces === existing.splitPieces)
                 // whenever the user has directly typed a custom total (existing.totalManuallySet) — see its own comment.
-                const liveTotal = resolveDynamicTransferGroupTotal(existing, getCalculatedTransferForJason(Number(yearStr), monthShort, cycle));
+                const calculatedTotal = isAsiaAnchor
+                    ? getCalculatedTransferForAsia(Number(yearStr), monthShort, cycle)
+                    : getCalculatedTransferForJason(Number(yearStr), monthShort, cycle);
+                const liveTotal = resolveDynamicTransferGroupTotal(existing, calculatedTotal);
                 const reconciledPieces = reconcileSplitPiecesWithLiveTotal(liveTotal, existing);
                 if (reconciledPieces !== existing.splitPieces) {
                     totalAmount = liveTotal;
@@ -3524,7 +3529,7 @@ function openDynamicTxEditor(txId, txDate, currentDesc, currentAmount, parentDyn
                 }
             }
         }
-        _splitEditorState = { totalAmount, dynId: effectiveTxId, pieces };
+        _splitEditorState = { totalAmount, dynId: effectiveTxId, pieces, isAsia: isAsiaAnchor };
         // Persist the reconciliation immediately (mirrors persistSplitEditorState) so the
         // balance walk, badges, and tooltips agree with what this dialog shows the moment the
         // drift is detected, not just while it happens to stay open.
@@ -12438,6 +12443,9 @@ function getJointContinuousBalancesThroughMonth(year, monthShort) {
             // simulation already resolved payday-shift/override, so this is a pure sum of whatever
             // it decided landed today, not a second derivation of the same thing.
             (simAsia.transfersByDate[dateStr] || []).forEach(adj => { runningBalance += adj.amount; });
+            // Asia's own Split Transfer pieces — same reasoning as Jason's just above: they leave
+            // her checking separately, on their own dates, and must be added to the joint balance too.
+            (simAsia.splitTransfers[dateStr] || []).forEach(piece => { runningBalance += piece.amount; });
             (deferredByDate[dateStr] || []).forEach(def => { runningBalance += def.amount; });
         }
         balances[dateStr] = runningBalance;
@@ -13850,6 +13858,27 @@ function simulateAsiaCheckingAndAdjustTransfers(daysData) {
         });
     }
 
+    // Every split piece across every joint-xfer-asia-* occurrence, indexed by its own date — mirrors
+    // the splitPiecesByDate block in simulateJasonCheckingAndAdjustTransfers exactly (see that
+    // function's own comment), scoped to Asia's own anchor id prefix instead of 'xfer-'.
+    const splitPiecesByDate = {};
+    Object.entries(state.dynamicOverrides || {}).forEach(([ovrId, ovr]) => {
+        if (!ovrId.startsWith('joint-xfer-asia-') || !Array.isArray(ovr?.splitPieces) || !ovr.splitPieces.length) return;
+        const m = /^joint-xfer-asia-(1st|15th)-(\d{4})-([A-Za-z]+)$/.exec(ovrId);
+        if (!m) return;
+        const [, cycleKey, yearStr, monthShort] = m;
+        const liveTotal = resolveDynamicTransferGroupTotal(ovr, getCalculatedTransferForAsia(Number(yearStr), monthShort, cycleKey));
+        const reconciledPieces = reconcileSplitPiecesWithLiveTotal(liveTotal, ovr);
+        reconciledPieces.forEach(piece => {
+            (splitPiecesByDate[piece.date] = splitPiecesByDate[piece.date] || []).push({
+                pieceId: piece.id,
+                parentDynId: ovrId,
+                amount: ovr.deleted ? 0 : (Number(piece.amount) || 0),
+                deleted: !!ovr.deleted
+            });
+        });
+    });
+
     daysData.forEach(day => {
         const cellDateObj = new Date(day.date + 'T00:00:00');
         const cellYear = cellDateObj.getFullYear();
@@ -13864,15 +13893,38 @@ function simulateAsiaCheckingAndAdjustTransfers(daysData) {
             const matchedTx = txCache[cellKey].filter(tx => tx.date === day.date);
             matchedTx.forEach(tx => { runningBalance += tx.amount; });
 
+            // Split-transfer pieces land on their own dates, independent of the 1st/15th anchor day —
+            // mirrors the equivalent block in simulateJasonCheckingAndAdjustTransfers.
+            (splitPiecesByDate[day.date] || []).forEach(piece => {
+                const pieceBalanceAfter = runningBalance - piece.amount;
+                (adjustments.splitTransfers[day.date] = adjustments.splitTransfers[day.date] || []).push({
+                    id: piece.pieceId,
+                    parentDynId: piece.parentDynId,
+                    amount: piece.amount,
+                    description: 'Xfer to Joint (Split)',
+                    belowThreshold: !piece.deleted && pieceBalanceAfter < getAsiaMinimumBuffer(),
+                    balanceAfter: pieceBalanceAfter,
+                    deleted: piece.deleted
+                });
+                runningBalance = pieceBalanceAfter;
+            });
+
             // Post every anchor whose EFFECTIVE date (natural 1st/15th, explicit override, or
             // automatic payday shift) is today — mirrors Jason's anchorsByEffectiveDate posting
-            // block exactly, minus Split Transfer (out of scope for Asia's side).
+            // block exactly, including Split Transfer handling.
             (anchorsByEffectiveDate[day.date] || []).forEach(anchor => {
                 const { dynId, cycleKey, year: anchorYear, monthShort: anchorMonth, naturalDate, autoShiftedToPayday } = anchor;
                 const ovr = (state.dynamicOverrides || {})[dynId];
                 if (ovr && ovr.deleted) return;
                 const calculatedTotal = getCalculatedTransferForAsia(anchorYear, anchorMonth, cycleKey);
-                const amount = (ovr && ovr.amount !== undefined) ? Math.abs(ovr.amount) : calculatedTotal;
+                const hasSplit = ovr && Array.isArray(ovr.splitPieces) && ovr.splitPieces.length;
+                // Same live-total tracking as Jason's side — see the matching comment in
+                // simulateJasonCheckingAndAdjustTransfers for the full reasoning.
+                const resolvedTotal = hasSplit ? resolveDynamicTransferGroupTotal(ovr, calculatedTotal) : calculatedTotal;
+                const fullAmount = hasSplit ? resolvedTotal : ((ovr && ovr.amount !== undefined) ? Math.abs(ovr.amount) : calculatedTotal);
+                const amount = hasSplit
+                    ? computeSplitAnchorAmount(fullAmount, reconcileSplitPiecesWithLiveTotal(resolvedTotal, ovr))
+                    : fullAmount;
                 if (amount <= 0) return;
                 const balanceAfter = runningBalance - amount;
                 const entry = {
@@ -14240,15 +14292,29 @@ function renderCalendarDashboard() {
                 }
             });
 
-            // Split-transfer pieces — Jason's side only (splitting is only offered on the personal
-            // checking side, see openDynamicTxEditor's Split Transfer UI). Same amount, opposite
-            // sign convention from the personal calendar's own piece push.
+            // Split-transfer pieces — Jason's side. Same amount, opposite sign convention from the
+            // personal calendar's own piece push.
             (cellAdjustments.splitTransfers[day.date] || []).forEach(piece => {
                 if (jointBalanceAnchor && day.date <= jointBalanceAnchor.date) return;
                 day.transactions.push({
                     id: piece.id,
                     parentDynId: piece.parentDynId,
                     description: 'Jason Joint Contribution (Split)',
+                    amount: piece.amount,
+                    type: 'income',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!piece.belowThreshold,
+                    deleted: !!piece.deleted
+                });
+            });
+
+            // Split-transfer pieces — Asia's side, mirroring Jason's block just above.
+            (cellAdjustmentsAsia.splitTransfers[day.date] || []).forEach(piece => {
+                if (jointBalanceAnchor && day.date <= jointBalanceAnchor.date) return;
+                day.transactions.push({
+                    id: piece.id,
+                    parentDynId: piece.parentDynId,
+                    description: 'Asia Joint Contribution (Split)',
                     amount: piece.amount,
                     type: 'income',
                     isSplitterDynamic: true,
@@ -14348,6 +14414,22 @@ function renderCalendarDashboard() {
                     });
                 }
             }
+
+            // Split-transfer pieces — land on their own dates, independent of the 1st/15th anchor
+            // day, mirroring the Personal branch above.
+            (cellAdjustmentsAsia.splitTransfers[day.date] || []).forEach(piece => {
+                if (asiaBalanceAnchor && day.date <= asiaBalanceAnchor.date) return;
+                day.transactions.push({
+                    id: piece.id,
+                    parentDynId: piece.parentDynId,
+                    description: piece.description,
+                    amount: -piece.amount,
+                    type: 'transfer',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!piece.belowThreshold,
+                    deleted: !!piece.deleted
+                });
+            });
         });
 
         let runningBalance = getAsiaAdjustedRunningBalanceAtDate(daysData[0].date);
@@ -15505,9 +15587,12 @@ function getTransactionIndicatorBadges(tx) {
             badgeLabel = `${isDeposit ? 'Savings Deposit' : 'Savings Withdrawal'} - ${ownerName}`;
         } else if (isJoint) {
             let p = 'Jason';
-            if (tx.contributionRecipient === 'asia' || (tx.asia && Number(tx.asia) > 0) || desc.includes('asia') || (tx.id && String(tx.id).includes('asia')) || tx.owner === 'asia' || tx.balanceTransferBy === 'asia') {
+            // See the matching fix + comment in getFormattedTransferTitle() — a Split Transfer
+            // piece's own id/description never carry either name, only parentDynId does.
+            const parentId = tx.parentDynId ? String(tx.parentDynId) : '';
+            if (tx.contributionRecipient === 'asia' || (tx.asia && Number(tx.asia) > 0) || desc.includes('asia') || (tx.id && String(tx.id).includes('asia')) || parentId.includes('asia') || tx.owner === 'asia' || tx.balanceTransferBy === 'asia') {
                 p = 'Asia';
-            } else if ((tx.jason && Number(tx.jason) > 0) || desc.includes('jason') || (tx.id && String(tx.id).includes('jason')) || tx.owner === 'jason' || tx.balanceTransferBy === 'jason') {
+            } else if ((tx.jason && Number(tx.jason) > 0) || desc.includes('jason') || (tx.id && String(tx.id).includes('jason')) || parentId.includes('jason') || tx.owner === 'jason' || tx.balanceTransferBy === 'jason') {
                 p = 'Jason';
             } else if (person) {
                 p = person;
@@ -16392,10 +16477,10 @@ function renderPersonalList() {
     _updateListViewStickyOffset();
 }
 
-// Mirrors renderPersonalList() above, but for Asia's Checking — Phase 1 scope: her own manual
-// transactions + her own payroll deposits only. No transfersByDate/deferred/splitTransfers rows
-// (no anchor-withdrawal mechanism yet — Phase 2), so this is a leaner version of that function's
-// per-month loop, matching the same lean approach taken in the calendar renderer's Asia branch.
+// Mirrors renderPersonalList() above, but for Asia's Checking. Her own manual transactions +
+// payroll deposits, plus transfersByDate (Bill-Splitter withdrawal, Phase 2) and splitTransfers
+// (Split Transfer pieces, added alongside Jason's) rows. No `deferred` rows — that mechanism is
+// dead code even on Jason's side (see simulateJasonCheckingAndAdjustTransfers's own comment).
 function renderAsiaList() {
     const container = document.getElementById('list-view-table-container');
     document.getElementById('list-view-title').textContent = isMobileViewport()
@@ -16504,6 +16589,27 @@ function renderAsiaList() {
                 isSplitterDynamic: true,
                 deleted: true,
                 monthKey: key
+            });
+        });
+
+        // Split-transfer pieces — land on their own dates, independent of the 1st/15th anchor day,
+        // mirroring renderPersonalList()'s equivalent block.
+        Object.entries(monthAdjustmentsAsia.splitTransfers).forEach(([pieceDate, pieces]) => {
+            if (!pieceDate.startsWith(`${yStr}-${mPart}-`)) return;
+            if (asiaListAnchor && pieceDate <= asiaListAnchor.date) return;
+            pieces.forEach(piece => {
+                txList.push({
+                    id: piece.id,
+                    parentDynId: piece.parentDynId,
+                    date: pieceDate,
+                    description: piece.description,
+                    amount: -piece.amount,
+                    type: 'transfer',
+                    isSplitterDynamic: true,
+                    belowThreshold: !!piece.belowThreshold,
+                    deleted: !!piece.deleted,
+                    monthKey: key
+                });
             });
         });
     });
@@ -17034,7 +17140,7 @@ function renderJointList() {
             });
         });
 
-        // Split-transfer pieces — Jason's side only, same amount/opposite sign convention as the
+        // Split-transfer pieces — Jason's side, same amount/opposite sign convention as the
         // personal side's own piece.
         const monthSplitTransfers = monthSim.splitTransfers;
         Object.entries(monthSplitTransfers).forEach(([pieceDate, pieces]) => {
@@ -17049,6 +17155,28 @@ function renderJointList() {
                     name: 'Jason Joint Contribution (Split)',
                     jason: piece.amount,
                     asia: 0,
+                    amount: piece.amount,
+                    isSplitterDynamic: true,
+                    belowThreshold: !!piece.belowThreshold,
+                    deleted: !!piece.deleted
+                });
+            });
+        });
+
+        // Split-transfer pieces — Asia's side, mirroring Jason's block just above.
+        const monthSplitTransfersAsia = monthSimAsia.splitTransfers;
+        Object.entries(monthSplitTransfersAsia).forEach(([pieceDate, pieces]) => {
+            if (!pieceDate.startsWith(`${year}-${mPart}-`)) return;
+            if (jointListDynamicAnchor && pieceDate <= jointListDynamicAnchor.date) return;
+            pieces.forEach(piece => {
+                dynamicTxs.push({
+                    id: piece.id,
+                    parentDynId: piece.parentDynId,
+                    date: pieceDate,
+                    type: 'contribution',
+                    name: 'Asia Joint Contribution (Split)',
+                    jason: 0,
+                    asia: piece.amount,
                     amount: piece.amount,
                     isSplitterDynamic: true,
                     belowThreshold: !!piece.belowThreshold,
@@ -18478,9 +18606,16 @@ function getFormattedTransferTitle(tx, isJointLedgerView = false) {
 
     if (isJoint) {
         let person = 'Jason';
-        if (tx.contributionRecipient === 'asia' || (tx.asia && Number(tx.asia) > 0) || desc.includes('asia') || (tx.id && String(tx.id).includes('asia')) || tx.owner === 'asia') {
+        // A Split Transfer piece's own id ("split-<random>") and description ("Xfer to Joint
+        // (Split)") never carry either name — parentDynId is the reliable signal there
+        // ("joint-xfer-asia-..."/"xfer-..."), same id family the isJoint check above already
+        // reads. Without this, every Asia split piece silently fell through to the 'Jason'
+        // default below, which only ever looked correct because Jason's own split pieces hit the
+        // same fallback and coincidentally matched it — confirmed real, 2026-08-11.
+        const parentId = tx.parentDynId ? String(tx.parentDynId) : '';
+        if (tx.contributionRecipient === 'asia' || (tx.asia && Number(tx.asia) > 0) || desc.includes('asia') || (tx.id && String(tx.id).includes('asia')) || parentId.includes('asia') || tx.owner === 'asia') {
             person = 'Asia';
-        } else if ((tx.jason && Number(tx.jason) > 0) || desc.includes('jason') || (tx.id && String(tx.id).includes('jason')) || tx.owner === 'jason') {
+        } else if ((tx.jason && Number(tx.jason) > 0) || desc.includes('jason') || (tx.id && String(tx.id).includes('jason')) || parentId.includes('jason') || tx.owner === 'jason') {
             person = 'Jason';
         }
 
