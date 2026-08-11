@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-10 18:12';
+const BUILD_VERSION = '2026-08-11 10:08';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -13259,6 +13259,30 @@ function simulateJasonCheckingAndAdjustTransfers(daysData) {
             });
             scanCursor.setMonth(scanCursor.getMonth() + 1);
         }
+        // Bug fix, 2026-08-11: the walk above only scans months from the range start THROUGH
+        // scanEnd — an anchor whose NATURAL month is AFTER scanEnd (e.g. a September transfer) but
+        // whose dynamicOverrides date moves it BACKWARD into this window (e.g. to August 20) was
+        // never discovered, since the loop never reaches September when simulating August. The
+        // transfer vanished entirely: correctly suppressed from its natural date (a later month's own
+        // walk sees the override and skips it), but never added at its overridden date either
+        // (this month's walk doesn't know a future month's anchor even exists). Confirmed real, live,
+        // 2026-08-11 — an Asia transfer moved from 9/1 to 8/20 disappeared from the Joint ledger
+        // entirely and the Joint Remaining Balance card kept showing its pre-edit, now-stale value.
+        // Scan dynamicOverrides directly for any xfer-* anchor the loop above didn't already cover
+        // whose override date falls within this exact window.
+        const rangeStartStr = daysData[0].date;
+        const rangeEndStr = daysData[daysData.length - 1].date;
+        Object.keys(state.dynamicOverrides || {}).forEach(dynId => {
+            const m = /^xfer-(1st|15th)-(\d{4})-([A-Za-z]+)$/.exec(dynId);
+            if (!m) return;
+            const [, cycleKey, yearStr, monthShort] = m;
+            const naturalMonthStart = new Date(Number(yearStr), MONTH_ORDER.indexOf(monthShort), 1);
+            if (naturalMonthStart <= scanEnd) return; // already covered by the walk above
+            const ovr = state.dynamicOverrides[dynId];
+            if (!ovr?.date || ovr.date < rangeStartStr || ovr.date > rangeEndStr) return;
+            const naturalDate = `${yearStr}-${String(MONTH_ORDER.indexOf(monthShort) + 1).padStart(2, '0')}-${cycleKey === '1st' ? '01' : '15'}`;
+            (anchorsByEffectiveDate[ovr.date] = anchorsByEffectiveDate[ovr.date] || []).push({ dynId, cycleKey, year: Number(yearStr), monthShort, naturalDate, autoShiftedToPayday: false });
+        });
     }
 
     // Every split piece across every xfer-* occurrence, indexed by its own date — a piece can fall
@@ -13806,6 +13830,24 @@ function simulateAsiaCheckingAndAdjustTransfers(daysData) {
             });
             scanCursor.setMonth(scanCursor.getMonth() + 1);
         }
+        // Bug fix, 2026-08-11 — see the matching comment in simulateJasonCheckingAndAdjustTransfers():
+        // an anchor whose natural month is AFTER scanEnd but whose override date moves it backward
+        // into this window was never discovered by the walk above, so the transfer vanished entirely
+        // instead of relocating. Confirmed real, live — a September Asia transfer moved to 8/20
+        // disappeared from the Joint ledger and the Joint Remaining Balance card went stale.
+        const rangeStartStr = daysData[0].date;
+        const rangeEndStr = daysData[daysData.length - 1].date;
+        Object.keys(state.dynamicOverrides || {}).forEach(dynId => {
+            const m = /^joint-xfer-asia-(1st|15th)-(\d{4})-([A-Za-z]+)$/.exec(dynId);
+            if (!m) return;
+            const [, cycleKey, yearStr, monthShort] = m;
+            const naturalMonthStart = new Date(Number(yearStr), MONTH_ORDER.indexOf(monthShort), 1);
+            if (naturalMonthStart <= scanEnd) return; // already covered by the walk above
+            const ovr = state.dynamicOverrides[dynId];
+            if (!ovr?.date || ovr.date < rangeStartStr || ovr.date > rangeEndStr) return;
+            const naturalDate = `${yearStr}-${String(MONTH_ORDER.indexOf(monthShort) + 1).padStart(2, '0')}-${cycleKey === '1st' ? '01' : '15'}`;
+            (anchorsByEffectiveDate[ovr.date] = anchorsByEffectiveDate[ovr.date] || []).push({ dynId, cycleKey, year: Number(yearStr), monthShort, naturalDate, autoShiftedToPayday: false });
+        });
     }
 
     daysData.forEach(day => {
