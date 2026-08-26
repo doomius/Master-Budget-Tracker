@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-26 09:29';
+const BUILD_VERSION = '2026-08-26 10:58';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -34692,6 +34692,19 @@ function renderCardDashboard(cardId) {
     relocateMobileStickyHeader();
     relocateMobileCCDetailHeader();
     relocateMobileCCListViewControls();
+    // relocateMobileStickyHeader()'s own "not mobile" branch unconditionally prepends
+    // #header-period-nav back into #unified-header-layout — the correct default restore for every
+    // OTHER tab that function supports, but WRONG here: #unified-header-layout is unconditionally
+    // display:none for creditcards/loans on every screen size (see its own rule in index.css, "always
+    // empty here" — the real desktop home for periodNav on this page is inside the toolbar's
+    // accountSlot, placed by placeCreditCardToolbar(true) above), so periodNav being prepended back
+    // into unifiedLayout right after that made the whole year/month/day date-nav invisible on desktop.
+    // Confirmed real regression, 2026-08-26 ("how do I move between months/years") — introduced by
+    // yesterday's fix that first added the relocateMobileStickyHeader() call above. Re-running
+    // placeCreditCardToolbar(true) here (idempotent, safe to call twice) re-asserts the correct
+    // desktop placement as the final word; on mobile its own `if (!isMobileViewport())` guard makes
+    // this a no-op, leaving relocateMobileStickyHeader()'s correct mobile placement untouched.
+    placeCreditCardToolbar(true);
 
     // Keep one planner instance shared by calendar and ledger views, directly below the metrics.
     const payoffHost = document.getElementById('cc-payoff-planner-host');
