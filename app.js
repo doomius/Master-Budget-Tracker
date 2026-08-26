@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-26 10:58';
+const BUILD_VERSION = '2026-08-26 12:31';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25373,10 +25373,27 @@ function renderVacationTab() {
     const addonCat = (trip.categories || []).find(c => c.key === 'addons');
     let addonTotalCost = 0;
     folioCalculated.processedAddons.forEach(ad => {
-        const cost = Number(ad.netCost) || 0;
+        // calcCruiseFolioAndPerksBreakdown() hardcodes netCost to 0 for any addon flagged prepaid —
+        // correct for what that function actually answers ("how much is still owed on the SHIP
+        // FOLIO," and a prepaid item owes the ship nothing), but wrong here: this tile answers "what
+        // does this trip cost in total," where a prepaid item's full cost still counts, it just
+        // belongs in the Pre-Paid Expenses bucket instead of In-Trip Budgeted. Using netCost
+        // unconditionally made a prepaid add-on's cost vanish from every total the moment it was
+        // marked prepaid, with no payment date needed to trigger it. Confirmed real bug, 2026-08-26
+        // ("select pre paid... the cost is not included under total estimates"). Non-prepaid addons
+        // still use netCost as before — a genuinely perk-covered item (daily free coffee, bar tab
+        // credit, OBC) really does cost less/nothing, and that discount should still reduce the total.
+        const cost = (ad.prepaid || ad.isPrepaid) ? (Number(ad.totalRawCost) || 0) : (Number(ad.netCost) || 0);
         addonTotalCost += cost;
         const label = `Add-On (${ad.name || 'Add-On'})`;
-        if (ad.isBooked || ad.paymentDate || ad.prepaidTxId || ad.isPrepaid || ad.prepaid) {
+        // Matches every other item type's own Pre-Paid-vs-Budgeted split above (lodging/flights/
+        // excursions/activities all key off an actual payment date or booked transaction, never a
+        // mere "prepaid" category flag) — being flagged "prepaid" is a plan, not a payment. Until the
+        // user actually books it (a real payment date, isBooked, or a real prepaidTxId), it stays in
+        // In-Trip Budgeted as a pending estimate; only an actually-booked item moves to Pre-Paid
+        // Expenses. Previously ad.isPrepaid/ad.prepaid alone moved it to Pre-Paid immediately, where
+        // its (zeroed) netCost then disappeared instead of showing as a pending estimate at all.
+        if (ad.isBooked || ad.paymentDate || ad.prepaidTxId) {
             prepaidTotal += cost;
             addBreakdown(prepaidBreakdown, label, cost, ad.paymentSource);
         } else if (!trip.isFolioSettled) {
@@ -25458,7 +25475,13 @@ function renderVacationTab() {
             if (cat.key === 'cruiseCost') {
                 const amt = getVacationCategoryActualAmount(cat, trip); actualTotal += amt; addBreakdown(actualBreakdown, cat.label || cat.key, amt, cat.prepaidTxSource || cat.plannedSource);
             } else if (cat.key === 'addons') {
-                if (!trip.isFolioSettled) { const amt = recalcVacationCategoryActualTotal(cat); actualTotal += amt; addBreakdown(actualBreakdown, cat.label || 'Trip Add-Ons', amt, cat.plannedSource); }
+                // Individually-booked add-ons are handled in their own unconditional loop right after
+                // this trip.categories.forEach closes (matching excursions/prePostActivities below) —
+                // trip.addons[] items exist independent of whether a trip even HAS an explicit
+                // "addons" category object (most don't), so gating that logic on finding one here
+                // meant it silently never ran for any such trip. This branch only needs to preserve
+                // the category's own manual "Log Actual" tally, if the user ever used that instead.
+                if (!trip.isFolioSettled) { const amt = recalcVacationCategoryActualTotal(cat); if (amt > 0.005) { actualTotal += amt; addBreakdown(actualBreakdown, cat.label || 'Trip Add-Ons', amt, cat.plannedSource); } }
             } else if (cat.prepaid) {
                 if (cat.prepaidTxId) { const amt = getVacationCategoryActualAmount(cat, trip); actualTotal += amt; addBreakdown(actualBreakdown, cat.label || cat.key, amt, cat.prepaidTxSource || cat.plannedSource); }
                 // Lodging/Flights actuals are itemized per-entry here (matching the Pre-Paid/
@@ -25486,6 +25509,24 @@ function renderVacationTab() {
                 const amt = recalcVacationCategoryActualTotal(cat); actualTotal += amt; addBreakdown(actualBreakdown, cat.label || cat.key, amt, cat.plannedSource);
             }
         });
+        // Individually-booked add-ons — a real, separate loop rather than nested inside the
+        // trip.categories.forEach above (like excursions/prePostActivities below), since trip.addons[]
+        // items exist independent of whether this trip even HAS an explicit "addons" category object
+        // (most don't — it's optional, only created if the user adds one via + Add Custom Category).
+        // Marking an add-on "Booked" (the checkbox literally reads "Mark as Booked & Post to Ledger")
+        // posts a real transaction via applyVacationItemBooking(), which stamps prepaidTxId/
+        // bookedAmount right on the addon — nothing previously read those fields for Actual Spend, so
+        // a booked add-on's real posted cost never counted here at all. Confirmed real bug, 2026-08-26
+        // ("mark it as booked and add to ledger which will then update actual spend").
+        if (!trip.isFolioSettled) {
+            (trip.addons || []).forEach(ad => {
+                const bookedAmt = Number(ad.bookedAmount ?? ad.cost) || 0;
+                if (ad.prepaidTxId && bookedAmt > 0.005) {
+                    actualTotal += bookedAmt;
+                    addBreakdown(actualBreakdown, `Add-On (${ad.name || 'Add-On'})`, bookedAmt, ad.prepaidTxSource || ad.paymentSource);
+                }
+            });
+        }
         (trip.excursions || []).forEach(ex => {
             if ((ex.paymentDate || ex.prepaidTxId) && Number(ex.cost) > 0 && (!ex.linkedCategoryKey || !(trip.categories || []).some(c => c.key === ex.linkedCategoryKey))) {
                 const amt = Number(ex.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `${exCat?.label || 'Excursions/Tours'} (${ex.name || 'Excursion'})`, amt, ex.prepaidTxSource || ex.paymentSource);
