@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-26 12:31';
+const BUILD_VERSION = '2026-08-29 10:33';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -18502,10 +18502,6 @@ function renderPersonalList() {
     container.querySelectorAll('.editable-row').forEach(row => {
         const openEditor = () => {
             if (row.dataset.isgig === 'true') return;
-            if (row.dataset.id && row.dataset.id.startsWith('dynamic-delivery-')) {
-                switchToTab('delivery');
-                return;
-            }
             if (row.dataset.dynamic === 'true') {
                 openDynamicTxEditor(row.dataset.id, row.dataset.date, row.dataset.desc, parseFloat(row.dataset.amount) || 0, row.dataset.parentDynId || '');
                 return;
@@ -19685,12 +19681,6 @@ function renderDayHighlights(day) {
         `;
 
         itemHtml.addEventListener('dblclick', () => {
-            if (t.id && t.id.startsWith('dynamic-delivery-')) {
-                const modal = document.getElementById('day-highlights-dialog');
-                if (modal && modal.open) modal.close();
-                switchToTab('delivery');
-                return;
-            }
             if (t.isGig) {
                 if (confirm(`Would you like to delete the side gig log for ${day.date}?`)) {
                     state.deliveryEarnings = state.deliveryEarnings.filter(g => g.date !== day.date);
@@ -25460,6 +25450,8 @@ function renderVacationTab() {
         });
         (trip.lodging || []).forEach(l => {
             if ((l.isBooked || l.paymentDate || l.prepaidTxId) && Number(l.cost) > 0) { const amt = Number(l.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `Lodging (${l.name || 'Stay'})`, amt, l.prepaidTxSource || l.paymentSource); }
+            if (l.taxesFeesTxId && Number(l.taxesFeesAmount) > 0) { const amt = Number(l.taxesFeesAmount) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `Lodging (${l.name || 'Stay'}) — Taxes & Fees`, amt, l.taxesFeesTxSource || l.taxesFeesPaymentSource); }
+            if (l.inRoomChargesTxId && Number(l.inRoomChargesAmount) > 0) { const amt = Number(l.inRoomChargesAmount) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `Lodging (${l.name || 'Stay'}) — In-Room Charges`, amt, l.inRoomChargesTxSource || l.inRoomChargesPaymentSource); }
         });
         (trip.flights || []).forEach(f => {
             if ((f.isBooked || f.paymentDate || f.prepaidTxId) && Number(f.cost) > 0) { const amt = Number(f.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, 'Flight', amt, f.prepaidTxSource || f.paymentSource); }
@@ -25660,15 +25652,25 @@ function renderVacationTab() {
     // Flights
     const flightsBody = document.getElementById('vacation-flights-body');
     flightsBody.innerHTML = (trip.flights || []).map(f => {
-        const legsHtml = (f.legs || []).map(leg => {
-            const flightStr = formatFlightDetailsString(leg, { includeAirplaneIcon: false, useArrowChar: false });
-            return `<div>${escapeHTML(flightStr)}</div>`;
-        }).join('');
+        const legsFullStrs = (f.legs || []).map(leg => formatFlightDetailsString(leg, { includeAirplaneIcon: false, useArrowChar: false }));
+        // Mobile: a full leg string (times, carrier, duration) is too dense for a phone-width
+        // itinerary table — show just the route codes, with the full string still reachable via
+        // the existing long-press detail overlay (initLongPressDetailOverlay reads data-detail-value
+        // when present instead of the cell's own visible text). Desktop is unchanged. Per explicit
+        // user request.
+        const legsHtml = isMobileViewport()
+            ? (f.legs || []).map(leg => {
+                const depCode = leg.departureAirport ? String(leg.departureAirport).trim() : '';
+                const arrCode = leg.arrivalAirport ? String(leg.arrivalAirport).trim() : '';
+                const routeStr = (depCode && arrCode) ? `${depCode} → ${arrCode}` : (depCode || arrCode || '');
+                return `<div>${escapeHTML(routeStr)}</div>`;
+            }).join('')
+            : legsFullStrs.map(s => `<div>${escapeHTML(s)}</div>`).join('');
         const statusBadge = formatVacationStatusBadge(f.isBooked ? 'Booked' : 'Planned');
         return `<tr data-id="${f.id}">
             ${vacationLinkCell(f.loginUrl)}
             <td>${escapeHTML(VACATION_FLIGHT_TRIP_TYPE_LABELS[f.tripType] || f.tripType)}</td>
-            <td>${legsHtml}</td>
+            <td data-detail-value="${escapeHTML(legsFullStrs.join(' | '))}">${legsHtml}</td>
             <td>${escapeHTML(f.confirmationNumber || '')}</td>
             <td>${statusBadge}</td>
             <td>${formatVacationMoney(f.cost || 0)}</td>
@@ -25755,11 +25757,18 @@ function renderVacationTab() {
             const mapLinks = addressText
                 ? ` <a href="${escapeHTML(buildAppleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Apple Maps">📍</a> <a href="${escapeHTML(buildGoogleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Google Maps">🌐</a>`
                 : '';
+            // Mobile: the full street address is too dense for a phone-width itinerary table —
+            // show just City/State, with the full address still reachable via the existing
+            // long-press detail overlay (data-detail-value on the cell). Desktop keeps the full
+            // address inline as before. Per explicit user request.
+            const cityStateText = [d.city, d.state].filter(Boolean).join(', ');
+            const addressDisplay = isMobileViewport() ? (cityStateText || addressText) : addressText;
             const dayTypeDisplay = isCityTrip ? (VACATION_CITY_ACTIVITY_LABELS[d.dayType] || d.dayType) : (dayTypeLabels[d.dayType] || d.dayType);
+            const portDetailValue = `${d.portName || ''}${addressText ? ' — ' + addressText : ''}`;
             return `<tr data-id="${d.id}">
             ${iconCell}
             <td>${d.date ? formatDateDisplay(d.date) : ''}</td>
-            <td>${escapeHTML(d.portName || (d.dayType === 'seaDay' ? '—' : ''))}${addressText ? `<br><span class="muted-text">${escapeHTML(addressText)}</span>${mapLinks}` : ''}</td>
+            <td data-detail-value="${escapeHTML(portDetailValue)}">${escapeHTML(d.portName || (d.dayType === 'seaDay' ? '—' : ''))}${addressDisplay ? `<br><span class="muted-text">${escapeHTML(addressDisplay)}</span>${mapLinks}` : ''}</td>
             <td>${escapeHTML(dayTypeDisplay)}</td>
             <td>${escapeHTML(d.arrivalTime || '')}</td>
             <td>${escapeHTML(d.departureTime || '')}</td>
@@ -25912,8 +25921,13 @@ function renderVacationTab() {
         const statusBadge = formatVacationStatusBadge(ex.paymentDate ? 'Booked' : 'Planned');
         const meetingSpot = ex.meetingLocation || ex.meetingSpot || '';
         const addressText = formatVacationAddress(ex);
-        const mapLinks = addressText
-            ? ` <a href="${escapeHTML(buildAppleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Apple Maps">📍</a> <a href="${escapeHTML(buildGoogleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Google Maps">🌐</a>`
+        // Meeting Spot is a free-text name (e.g. "Pier 4, Gate B") the user actually wants to
+        // navigate to — it's usually more precise than the structured address fields, which are
+        // often left blank for excursions. Prefer it for the map search; fall back to the
+        // structured address only when no meeting spot was entered. Per explicit user request.
+        const mapSearchText = meetingSpot || addressText;
+        const mapLinks = mapSearchText
+            ? ` <a href="${escapeHTML(buildAppleMapsUrl(mapSearchText))}" target="_blank" rel="noopener" title="Open in Apple Maps">📍</a> <a href="${escapeHTML(buildGoogleMapsUrl(mapSearchText))}" target="_blank" rel="noopener" title="Open in Google Maps">🌐</a>`
             : '';
         return `<tr data-id="${ex.id}">
             ${vacationLinkCell(ex.loginUrl)}
@@ -26666,7 +26680,16 @@ function renderVacationWeekGrid(trip) {
         return `<div class="vacation-week-header-cell${dateStr === todayStr ? ' today-col' : ''}">${d.toLocaleDateString('en-US', { weekday: 'short' })}<br>${d.getDate()}</div>`;
     }).join('');
 
-    document.getElementById('vacation-week-allday-row').innerHTML = '<div class="vacation-week-allday-cell" style="border-left:none;"></div>' + itins.map((itin, idx) => {
+    // Collapsible when there are multiple stacked all-day chips across the week — a single toggle
+    // in the leading label cell collapses/expands every day column at once (there's no per-day
+    // label cell to put per-column toggles into). State persists via uiCollapsedSections like every
+    // other collapse toggle in the app; the click listener is wired once in
+    // setupVacationCalendarDragAndResize() since this row's innerHTML is fully rebuilt on every
+    // render. Per explicit user request.
+    if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
+    const weekAlldayCollapsed = !!state.uiCollapsedSections.vacationAllDayWeek;
+    let weekAlldayTotalCount = 0;
+    const weekAlldayCellsHtml = itins.map((itin, idx) => {
         const dateStr = weekDates[idx];
         const chips = [];
         itin.lodgingCheckIns.filter(l => !l.checkInTime).forEach(l => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-lodging" data-event-type="lodging" data-event-id="${l.id}" data-date="${dateStr}">🏨 Check-In — ${escapeHTML(l.name || '')}</div>`));
@@ -26690,8 +26713,13 @@ function renderVacationWeekGrid(trip) {
         if (itin.consolidatedCharge) {
             chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense" title="${escapeHTML(itin.consolidatedCharge.tooltip)}">💵 Total Planned Expenses — ${formatVacationMoney(itin.consolidatedCharge.amount)}</div>`);
         }
-        return `<div class="vacation-week-allday-cell">${chips.join('')}</div>`;
+        weekAlldayTotalCount += chips.length;
+        return weekAlldayCollapsed
+            ? `<div class="vacation-week-allday-cell muted-text vacation-allday-collapsed-summary">${chips.length ? chips.length + ' hidden' : ''}</div>`
+            : `<div class="vacation-week-allday-cell">${chips.join('')}</div>`;
     }).join('');
+    const weekAlldayToggleBtn = weekAlldayTotalCount > 0 ? `<button type="button" class="vacation-allday-collapse-btn" title="${weekAlldayCollapsed ? 'Show' : 'Hide'} all-day events">${weekAlldayCollapsed ? '▶' : '▼'}</button>` : '';
+    document.getElementById('vacation-week-allday-row').innerHTML = `<div class="vacation-week-allday-cell" style="border-left:none;">${weekAlldayToggleBtn}</div>` + weekAlldayCellsHtml;
 
     const gutter = `<div class="vacation-week-time-gutter" style="height:${24 * H}px;">${VACATION_WEEK_HOUR_LABELS.map((label, h) => `<div class="vacation-week-time-label" style="top:${h * H}px;">${label}</div>`).join('')}</div>`;
     const viewTzForLocalEvents = state.activeVacationTimeZone || 'America/Chicago';
@@ -26993,7 +27021,19 @@ function renderVacationDayGrid(trip) {
 
     const alldayEl = document.getElementById('vacation-day-allday-row');
     if (alldayEl) {
-        alldayEl.innerHTML = `<div class="vacation-week-allday-cell" style="border-left:none;">All-Day</div><div class="vacation-week-allday-cell">${chips.join('') || '<span class="muted-text">No all-day events</span>'}</div>`;
+        // Collapsible when there are multiple stacked all-day chips (no start/end time) — with
+        // several untimed items on the same day these otherwise crowd out the hour-grid cards
+        // below. State persists via uiCollapsedSections like every other collapse toggle in the
+        // app; the click listener is wired once in setupVacationCalendarDragAndResize() since this
+        // row's innerHTML is fully rebuilt on every render. Per explicit user request.
+        if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
+        const alldayCollapsed = chips.length > 0 && !!state.uiCollapsedSections.vacationAllDayDay;
+        const toggleBtn = chips.length > 0 ? `<button type="button" class="vacation-allday-collapse-btn" title="${alldayCollapsed ? 'Show' : 'Hide'} all-day events">${alldayCollapsed ? '▶' : '▼'}</button>` : '';
+        const labelCell = `<div class="vacation-week-allday-cell" style="border-left:none;">All-Day${chips.length ? ` (${chips.length})` : ''}${toggleBtn}</div>`;
+        const contentCell = alldayCollapsed
+            ? `<div class="vacation-week-allday-cell muted-text vacation-allday-collapsed-summary">${chips.length} all-day event${chips.length === 1 ? '' : 's'} hidden</div>`
+            : `<div class="vacation-week-allday-cell">${chips.join('') || '<span class="muted-text">No all-day events</span>'}</div>`;
+        alldayEl.innerHTML = labelCell + contentCell;
     }
 
     const dayContainer = document.getElementById('vacation-day-hourgrid');
@@ -27465,6 +27505,24 @@ function setupVacationCalendarDragAndResize() {
             if (type && id && typeof window.openVacationEventEditModal === 'function') {
                 window.openVacationEventEditModal(type, id, date);
             }
+        });
+    });
+
+    // All-day section collapse toggles (Day/Week views) — see the renderVacationDayGrid()/
+    // renderVacationWeekGrid() comments where the button HTML is built. Wired here (not via the
+    // shared .collapse-toggle-btn[data-key] registry) because these two rows' innerHTML is fully
+    // rebuilt on every render, so a delegated listener on the static parent row is required; the
+    // dataset guard mirrors the one just above for the drag/resize containers.
+    [['vacation-day-allday-row', 'vacationAllDayDay'], ['vacation-week-allday-row', 'vacationAllDayWeek']].forEach(([rowId, key]) => {
+        const row = document.getElementById(rowId);
+        if (!row || row.dataset.collapseWired) return;
+        row.dataset.collapseWired = 'true';
+        row.addEventListener('click', (e) => {
+            if (!e.target.closest('.vacation-allday-collapse-btn')) return;
+            if (!state.uiCollapsedSections) state.uiCollapsedSections = {};
+            state.uiCollapsedSections[key] = !state.uiCollapsedSections[key];
+            saveDatabase();
+            renderVacationTab();
         });
     });
 }
@@ -38005,9 +38063,18 @@ function initLongPressDetailOverlay() {
     let pressFired = false;
     let startPoint = null;
 
+    // Vacation Day/Week hour-grid cards and all-day chips (see setupVacationCalendarDragAndResize()'s
+    // dblclick handler, which opens the edit modal for the same selector) — long-press shows a
+    // read-only view of the same event instead, without disturbing double-click-to-edit. Per
+    // explicit user request.
+    const VACATION_EVENT_SELECTOR = '.vacation-week-event, .vacation-day-event, .vacation-week-allday-chip, .vacation-chip';
+    const VACATION_EVENT_TYPE_LABELS = { flight: 'Flight', lodging: 'Lodging', cruise: 'Cruise / Port Day', excursion: 'Excursion', prepost: 'Pre/Post-Trip Activity', addon: 'Trip Add-On', 'actual-charge': 'Actual Charge' };
+
     function eligibleRow(target) {
         if (!isMobileViewport()) return null;
         if (target.closest('input, select, textarea, button, a, [contenteditable]')) return null;
+        const eventEl = target.closest(VACATION_EVENT_SELECTOR);
+        if (eventEl && !eventEl.classList.contains('vacation-event-seaday-allday') && eventEl.dataset.eventType && eventEl.dataset.eventId) return eventEl;
         const row = target.closest('tr');
         if (!row || row.closest('.hidden')) return null;
         const table = row.closest('table');
@@ -38020,7 +38087,25 @@ function initLongPressDetailOverlay() {
         return row;
     }
 
-    function buildDetailPairs(row) {
+    function buildVacationEventDetailPairs(eventEl) {
+        const type = eventEl.dataset.eventType;
+        const date = eventEl.dataset.date;
+        const pairs = [{ label: 'Type', value: VACATION_EVENT_TYPE_LABELS[type] || type || 'Event' }];
+        if (date) pairs.push({ label: 'Date', value: formatDateDisplay(date) });
+        const summary = eventEl.textContent.replace(/\s+/g, ' ').trim();
+        // The card's own `title` attribute already carries a fuller string than what's visible on
+        // the compact chip for several types (e.g. flights' full formatFlightDetailsString(), or
+        // the raw local/ship time tooltip on excursions) — surface it as a separate "Details" line
+        // rather than just repeating the visible summary text when it says something more.
+        const detail = (eventEl.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+        if (detail && detail !== summary) pairs.push({ label: 'Details', value: detail });
+        if (summary) pairs.push({ label: 'Summary', value: summary });
+        return pairs;
+    }
+
+    function buildDetailPairs(el) {
+        if (el.tagName !== 'TR') return buildVacationEventDetailPairs(el);
+        const row = el;
         const table = row.closest('table');
         const headerCells = Array.from(table.querySelectorAll('thead th'));
         const cells = Array.from(row.children).filter(c => c.tagName === 'TD');
@@ -38074,10 +38159,12 @@ function initLongPressDetailOverlay() {
         return overlay;
     }
 
-    function showOverlay(row) {
-        const pairs = buildDetailPairs(row);
+    function showOverlay(el) {
+        const pairs = buildDetailPairs(el);
         if (!pairs.length) return;
         const overlay = getOverlay();
+        const headerEl = overlay.querySelector('.mobile-row-detail-header h4');
+        if (headerEl) headerEl.textContent = el.tagName === 'TR' ? 'Transaction Details' : `${VACATION_EVENT_TYPE_LABELS[el.dataset.eventType] || 'Event'} Details`;
         overlay.querySelector('.mobile-row-detail-list').innerHTML = pairs.map(p =>
             `<div class="mobile-row-detail-item"><span class="mobile-row-detail-label">${escapeHTML(p.label)}</span><span class="mobile-row-detail-value">${escapeHTML(p.value)}</span></div>`
         ).join('');
