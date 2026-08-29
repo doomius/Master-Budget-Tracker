@@ -796,6 +796,25 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
     border-left: 1px solid var(--glass-border);
     min-width: 0;
 }
+/* Collapse/expand toggle for the all-day lane (Day/Week vacation views) — see the
+   renderVacationDayGrid()/renderVacationWeekGrid() comments for why several stacked untimed
+   items need this. Per explicit user request. */
+.vacation-allday-collapse-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0 0.25rem;
+    line-height: 1;
+    vertical-align: middle;
+}
+.vacation-allday-collapse-btn:hover { color: var(--text-primary); }
+.vacation-allday-collapsed-summary {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.4rem;
+    cursor: default;
+}
 
 /* Fixed-height scroll area for the hour body only — header/all-day stay pinned above it. Default
    scrollTop is set in JS to ~6 AM, matching Google Calendar's own default landing position.
