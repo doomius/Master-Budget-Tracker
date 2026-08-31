@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-31 09:50';
+const BUILD_VERSION = '2026-08-31 10:02';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -38354,10 +38354,34 @@ function initTapToViewDetailOverlay() {
 window.addEventListener('DOMContentLoaded', init);
 window.addEventListener('DOMContentLoaded', initTapToViewDetailOverlay);
 
+// Records when ANY <dialog> was last opened, so date-input click handlers (just below, and the
+// .ddmmyy-picker-btn enhancer's own handler near line 4822) can tell whether a click landed right
+// as a dialog appeared underneath a fast gesture, rather than being a real deliberate tap on the
+// field. Patched once, globally, rather than threading a flag through every individual showModal()
+// call site (there are dozens across this file).
+(function() {
+    const nativeShowModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function (...args) {
+        window._lastDialogOpenAt = Date.now();
+        return nativeShowModal.apply(this, args);
+    };
+})();
+
 // Enable clicking anywhere on a date input to open its native picker,
 // since the calendar icon indicator was hidden via CSS to fix layout and tab order issues.
+// Confirmed real bug, 2026-08-31 ("why when I click the edit button I see this [the native date
+// picker]... I want it to open like [the plain form]"): a fast double-tap on the new tap-to-view
+// popup's Edit button (initTapToViewDetailOverlay()) — muscle memory left over from this app's own
+// double-tap-to-edit history — landed its second tap on whatever was now on-screen once the Edit
+// dialog opened underneath it, usually this exact Date field, which then auto-opened its native
+// picker on top of the freshly-opened form. Same root mechanism as the earlier "double tap opens
+// the calendar selector" bug, just recurring through a new gesture. Skip auto-opening the picker
+// for a click landing within ~450ms of any dialog opening — a real, deliberate tap on the date
+// field after that window still opens it normally; this only swallows the stray leftover click
+// from a gesture that was actually aimed at something else a moment earlier.
 document.addEventListener('click', e => {
     if (e.target.matches('input[type="date"]')) {
+        if (Date.now() - (window._lastDialogOpenAt || 0) < 450) return;
         try {
             e.target.showPicker();
         } catch (err) {
