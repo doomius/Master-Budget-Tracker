@@ -933,6 +933,10 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
 .vacation-week-event-excursion { background: var(--color-primary); }
 .vacation-week-event-expense { background: var(--color-danger); }
 .vacation-week-event-prepost { background: #8b5cf6; }
+/* A Quick-Add entry still marked "Estimate" (not yet posted to any real ledger) — amber + dashed
+   border deliberately reads as "not real yet," distinct from the solid red of a posted actual
+   charge. Per explicit user request, 2026-08-30. */
+.vacation-week-event-estimate { background: #d97706; border: 1px dashed rgba(255, 255, 255, 0.55); }
 
 /* Timed hour-grid events only (not the all-day chip row, which never overlaps anything) get a
    translucent "glass" background instead of the solid one above — per explicit user request
@@ -957,6 +961,8 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
 .vacation-day-event.vacation-week-event-expense { background: rgba(244, 63, 94, 0.88); }
 .vacation-week-event.vacation-week-event-prepost,
 .vacation-day-event.vacation-week-event-prepost { background: rgba(139, 92, 246, 0.88); }
+.vacation-week-event.vacation-week-event-estimate,
+.vacation-day-event.vacation-week-event-estimate { background: rgba(217, 119, 6, 0.88); border: 1px dashed rgba(255, 255, 255, 0.55); }
 
 /* Continuation chip: the tail end (00:00 onward) of an event that started the day before and spills
    past midnight — see buildVacationSpilloverContinuationEvents() in app.js. Dashed top border reads
