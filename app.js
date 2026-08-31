@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-30 16:56';
+const BUILD_VERSION = '2026-08-31 09:17';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -24896,6 +24896,12 @@ function getVacationChargesForSource(sourceKey) {
             }
         } else {
             (trip.actualCharges || []).forEach((ch, idx) => {
+                // An estimate (see the Quick-Add "This is an estimate" toggle) is a plan, not real
+                // money spent yet — it must never reach the checking/card ledger until the user
+                // explicitly marks it Actual (openVacationActualChargeDialog's "Mark as Actual
+                // Spend" checkbox), at which point isEstimate flips false and the very next render
+                // picks it up here automatically. Per explicit user request, 2026-08-30.
+                if (ch.isEstimate) return;
                 const src = ch.paymentSource || trip.masterPaymentSource;
                 if (src !== sourceKey) return;
                 const amt = Number(ch.amount) || 0;
@@ -25445,6 +25451,20 @@ function renderVacationTab() {
         }
     }
 
+    // 3b. Quick-Add estimates ("This is an estimate" toggle) — a plan, not real spend yet, so it
+    // counts toward In-Trip Budgeted using the FROZEN estimatedAmount, never the (possibly later-
+    // edited) amount field. Nothing posts to the real ledger for these until promoted to Actual
+    // (see getVacationChargesForSource()'s isEstimate skip and openVacationActualChargeDialog()'s
+    // "Mark as Actual Spend" checkbox). Per explicit user request, 2026-08-30.
+    (trip.actualCharges || []).forEach(ch => {
+        if (!ch.isEstimate) return;
+        const est = Number(ch.estimatedAmount ?? ch.amount) || 0;
+        if (est <= 0.005) return;
+        const signedEst = ch.direction === 'credit' ? -est : est;
+        budgetedTotal += signedEst;
+        addBreakdown(budgetedBreakdown, `${resolveVacationLinkedCategoryLabel(trip, ch.expenseCategoryKey, 'Estimate')}: ${ch.merchant || ch.description || 'Estimate'}`, signedEst, ch.paymentSource);
+    });
+
     // 4. Total Trip Estimate (Pre-Paid + Short-Term Loan + In-Trip Budgeted + Settled Ship Folio)
     const settledFolioAmt = trip.isFolioSettled ? Number(trip.folioBookedAmount !== undefined && trip.folioBookedAmount !== null ? trip.folioBookedAmount : folioCalculated.netAddonFolioTotal) : 0;
     const totalEstimate = prepaidTotal + loanTotal + budgetedTotal + settledFolioAmt;
@@ -25458,6 +25478,10 @@ function renderVacationTab() {
 
     if (trip.useActualCharges) {
         (trip.actualCharges || []).forEach(ch => {
+            // A still-unpromoted estimate is a plan, not real spend — it's counted in the Budgeted
+            // section below instead (via ch.estimatedAmount), never here. Per explicit user
+            // request, 2026-08-30.
+            if (ch.isEstimate) return;
             const amt = ch.direction === 'credit' ? -(Number(ch.amount) || 0) : (Number(ch.amount) || 0);
             actualTotal += amt;
             addBreakdown(actualBreakdown, ch.merchant || ch.description || 'Actual Charge', amt, ch.paymentSource);
@@ -26672,7 +26696,7 @@ function buildVacationSpilloverContinuationEvents(trip, dateStr, prevItin, prevD
         pushIfSpills(ad.startTime || ad.time, ad.endTime, shipTz, 'vacation-week-event-excursion', '🍹', ad.name || 'Add-On', 'addon', ad.id);
     });
     prevItin.actualCharges.forEach(ch => {
-        pushIfSpills(ch.startTime, ch.endTime, shipTz, 'vacation-week-event-expense', '💵', ch.merchant || ch.description || 'Charge', 'actual-charge', ch.id);
+        pushIfSpills(ch.startTime, ch.endTime, shipTz, ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense', ch.isEstimate ? '📝' : '💵', `${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''}`, 'actual-charge', ch.id);
     });
     if (prevItin.cruiseDay && prevItin.cruiseDay.dayType !== 'seaDay') {
         const d = prevItin.cruiseDay;
@@ -26731,7 +26755,7 @@ function renderVacationWeekGrid(trip) {
             chips.push(`<div class="vacation-week-allday-chip vacation-week-event-excursion" data-event-type="addon" data-event-id="${ad.id}" data-date="${dateStr}">🍹 ${escapeHTML(ad.name || 'Add-On')} — ${costLabel}</div>`);
         });
         itin.actualCharges.filter(ch => !ch.startTime).forEach(ch => {
-            chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dateStr}">💵 ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
+            chips.push(`<div class="vacation-week-allday-chip ${ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense'}" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dateStr}">${ch.isEstimate ? '📝' : '💵'} ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.isEstimate ? 'Estimate' : ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
         });
         itin.charges.forEach(cat => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense">💵 ${escapeHTML(cat.label)} — ${formatVacationMoney(getVacationCategoryDisplayAmount(cat, trip))}${cat.prepaid ? (cat.prepaidTxId ? ' (Booked)' : ' (Planned)') : ''}</div>`));
         if (itin.consolidatedCharge) {
@@ -26910,8 +26934,8 @@ function renderVacationWeekGrid(trip) {
             const durationMin = (endMin !== null && endMin > startMin) ? (endMin - startMin) : 30;
             const chTimeLabel = (endMin !== null && endMin > startMin) ? `${formatVacationTimeLabel(startTime)} - ${formatVacationTimeLabel(endTime)}` : formatVacationTimeLabel(startTime);
             events.push({
-                top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: 'vacation-week-event-expense',
-                label: `💵 ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'} (${formatVacationMoney(ch.amount)})`,
+                top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense',
+                label: `${ch.isEstimate ? '📝' : '💵'} ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''} (${formatVacationMoney(ch.amount)})`,
                 tooltip: formatVacationRawTimeTooltip(baseDateStr, ch.startTime, ch.endTime, shipTz),
                 type: 'actual-charge', id: ch.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
             });
@@ -27036,7 +27060,7 @@ function renderVacationDayGrid(trip) {
         chips.push(`<div class="vacation-week-allday-chip vacation-week-event-excursion" data-event-type="addon" data-event-id="${ad.id}" data-date="${dayDateStr}">🍹 ${escapeHTML(ad.name || 'Add-On')} — ${costLabel}</div>`);
     });
     itin.actualCharges.filter(ch => !ch.startTime).forEach(ch => {
-        chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dayDateStr}">💵 ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
+        chips.push(`<div class="vacation-week-allday-chip ${ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense'}" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dayDateStr}">${ch.isEstimate ? '📝' : '💵'} ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.isEstimate ? 'Estimate' : ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
     });
     itin.charges.forEach(cat => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense">💵 ${escapeHTML(cat.label)} — ${formatVacationMoney(getVacationCategoryDisplayAmount(cat, trip))}${cat.prepaid ? (cat.prepaidTxId ? ' (Booked)' : ' (Planned)') : ''}</div>`));
     if (itin.consolidatedCharge) {
@@ -27231,8 +27255,8 @@ function renderVacationDayGrid(trip) {
         const durationMin = (endMin !== null && endMin > startMin) ? (endMin - startMin) : 30;
         const chTimeLabel = (endMin !== null && endMin > startMin) ? `${formatVacationTimeLabel(startTime)} - ${formatVacationTimeLabel(endTime)}` : formatVacationTimeLabel(startTime);
         events.push({
-            top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: 'vacation-week-event-expense',
-            label: `💵 ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'} (${formatVacationMoney(ch.amount)})`,
+            top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense',
+            label: `${ch.isEstimate ? '📝' : '💵'} ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''} (${formatVacationMoney(ch.amount)})`,
             tooltip: formatVacationRawTimeTooltip(baseDateStr, ch.startTime, ch.endTime, shipTz),
             type: 'actual-charge', id: ch.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
         });
@@ -27763,6 +27787,13 @@ function setupVacationEventListeners() {
         // had no effect and every logged charge silently saved as a Charge. Confirmed real bug,
         // 2026-08-25.
         const direction = document.getElementById('vacation-quick-direction')?.value === 'credit' ? 'credit' : 'charge';
+        // "This is an estimate" — a plan, not real money spent yet. Per explicit user request,
+        // 2026-08-30: an estimate counts toward Trip Estimate/In-Trip Budgeted only (see
+        // renderVacationTab()'s trip.actualCharges estimate block) and posts NOTHING to the real
+        // checking/card ledger (getVacationChargesForSource() skips isEstimate charges) or to the
+        // category's own actual-spend tally (skipped below, same reasoning) until the user reopens
+        // it via openVacationActualChargeDialog and checks "Mark as Actual Spend."
+        const isEstimate = !!document.getElementById('vacation-quick-is-estimate')?.checked;
 
         const actualCharge = {
             id: genVacationId('actual'),
@@ -27774,13 +27805,15 @@ function setupVacationEventListeners() {
             expenseCategoryKey,
             amount,
             direction,
-            paymentSource
+            paymentSource,
+            isEstimate,
+            estimatedAmount: isEstimate ? amount : undefined
         };
 
         if (!trip.actualCharges) trip.actualCharges = [];
         trip.actualCharges.push(actualCharge);
 
-        if (expenseCategoryKey) {
+        if (!isEstimate && expenseCategoryKey) {
             const cat = trip.categories.find(c => c.key === expenseCategoryKey);
             if (cat && !cat.prepaid) {
                 if (!cat.actualEntries) cat.actualEntries = [];
@@ -27795,7 +27828,7 @@ function setupVacationEventListeners() {
 
         saveDatabase();
         renderVacationTab();
-        logSuccess(`Logged actual transaction ${merchant ? '"' + merchant + '" ' : ''}(${formatVacationMoney(amount)}) on ${formatDateDisplay(date)}.`);
+        logSuccess(`Logged ${isEstimate ? 'estimate' : 'actual transaction'} ${merchant ? '"' + merchant + '" ' : ''}(${formatVacationMoney(amount)}) on ${formatDateDisplay(date)}.`);
 
         document.getElementById('vacation-quick-merchant').value = '';
         document.getElementById('vacation-quick-description').value = '';
@@ -27803,6 +27836,14 @@ function setupVacationEventListeners() {
         document.getElementById('vacation-quick-start-time').value = '';
         document.getElementById('vacation-quick-end-time').value = '';
         setDirectionToggleValue('vacation-quick-direction-toggle', 'vacation-quick-direction', 'charge');
+        const isEstimateEl = document.getElementById('vacation-quick-is-estimate');
+        if (isEstimateEl) isEstimateEl.checked = false;
+        const submitBtn = document.getElementById('btn-vacation-quick-submit');
+        if (submitBtn) submitBtn.textContent = '+ Log Actual Transaction';
+    });
+    document.getElementById('vacation-quick-is-estimate')?.addEventListener('change', (e) => {
+        const submitBtn = document.getElementById('btn-vacation-quick-submit');
+        if (submitBtn) submitBtn.textContent = e.target.checked ? '+ Log Estimate' : '+ Log Actual Transaction';
     });
 
     // ---- Pre & Post Cruise Activities ----
@@ -28602,6 +28643,29 @@ function setupVacationEventListeners() {
             sourceEl.value = charge.paymentSource || '';
         }
         setDirectionToggleValue('vacation-actual-charge-direction-toggle', 'vacation-actual-charge-direction', charge.direction === 'credit' ? 'credit' : 'charge');
+
+        // Estimate/Actual workflow — see the form submit handler below for the freeze/promote
+        // logic. estimatedAmount stays set forever once a charge was ever an estimate (even after
+        // promotion), so this note keeps showing "what was originally planned" as a permanent
+        // record; the "Mark as Actual" checkbox only makes sense while still unpromoted.
+        const titleEl = document.getElementById('vacation-actual-charge-dialog-title');
+        if (titleEl) titleEl.textContent = charge.isEstimate ? 'Edit Estimate' : 'Edit Actual Charge';
+        const estimatedNoteEl = document.getElementById('vacation-actual-charge-estimated-note');
+        if (estimatedNoteEl) {
+            if (charge.estimatedAmount !== undefined && charge.estimatedAmount !== null) {
+                estimatedNoteEl.textContent = charge.isEstimate
+                    ? `Currently an estimate: ${formatVacationMoney(charge.estimatedAmount)} (counts toward In-Trip Budgeted, not yet posted to any ledger).`
+                    : `Originally estimated at ${formatVacationMoney(charge.estimatedAmount)} — locked. The Amount field above is the real, editable actual spend.`;
+                estimatedNoteEl.classList.remove('hidden');
+            } else {
+                estimatedNoteEl.classList.add('hidden');
+            }
+        }
+        const markActualRowEl = document.getElementById('vacation-actual-charge-mark-actual-row');
+        if (markActualRowEl) markActualRowEl.classList.toggle('hidden', !charge.isEstimate);
+        const markActualCheckboxEl = document.getElementById('vacation-actual-charge-mark-actual');
+        if (markActualCheckboxEl) markActualCheckboxEl.checked = false;
+
         actualChargeDialog.showModal();
     };
     document.getElementById('btn-cancel-vacation-actual-charge')?.addEventListener('click', () => actualChargeDialog.close());
@@ -28632,15 +28696,52 @@ function setupVacationEventListeners() {
         charge.merchant = document.getElementById('vacation-actual-charge-merchant').value.trim();
         charge.description = document.getElementById('vacation-actual-charge-description').value.trim();
         charge.expenseCategoryKey = document.getElementById('vacation-actual-charge-category').value || '';
-        charge.amount = amount;
         charge.direction = document.getElementById('vacation-actual-charge-direction')?.value === 'credit' ? 'credit' : 'charge';
         charge.paymentSource = document.getElementById('vacation-actual-charge-source').value || trip.masterPaymentSource;
-        syncVacationActualEntryLink(trip, charge);
+
+        // Estimate/Actual workflow, per explicit user request 2026-08-30 — see
+        // openVacationActualChargeDialog()'s own comment for the full picture.
+        const wasEstimate = !!charge.isEstimate;
+        const promoteNow = wasEstimate && !!document.getElementById('vacation-actual-charge-mark-actual')?.checked;
+        if (wasEstimate && !promoteNow) {
+            // Still just a plan — revising the estimate updates both fields together, since
+            // nothing has been locked yet.
+            charge.amount = amount;
+            charge.estimatedAmount = amount;
+        } else if (promoteNow) {
+            // Freeze whatever the estimate stood at right before this save (NOT the amount just
+            // typed) — the newly typed amount becomes the real, going-forward actual figure.
+            // estimatedAmount is never touched again after this point.
+            charge.estimatedAmount = charge.amount;
+            charge.amount = amount;
+            charge.isEstimate = false;
+        } else {
+            // Never was an estimate, or was already promoted earlier — a normal edit.
+            charge.amount = amount;
+        }
+
+        if (!charge.isEstimate) {
+            // Real spend — keep the category's own actual-spend tally in sync. An estimate never
+            // got an actualEntries row pushed at creation time (see the Quick-Add submit handler),
+            // so create it here on first promotion; syncVacationActualEntryLink() below only
+            // updates an ALREADY-existing entry, it never creates one.
+            if (charge.expenseCategoryKey) {
+                const cat = trip.categories.find(c => c.key === charge.expenseCategoryKey);
+                if (cat && !cat.prepaid) {
+                    if (!cat.actualEntries) cat.actualEntries = [];
+                    const existsAnywhere = (trip.categories || []).some(c => (c.actualEntries || []).some(en => en.id === charge.id));
+                    if (!existsAnywhere) {
+                        cat.actualEntries.push({ id: charge.id, amount: charge.direction === 'credit' ? -charge.amount : charge.amount, date: charge.date, note: charge.merchant || charge.description || 'Actual Charge' });
+                    }
+                }
+            }
+            syncVacationActualEntryLink(trip, charge);
+        }
 
         saveDatabase();
         actualChargeDialog.close();
         renderVacationTab();
-        logSuccess(`Updated actual charge: ${charge.merchant || charge.description || 'Charge'} (${formatVacationMoney(charge.amount)}).`);
+        logSuccess(`Updated ${charge.isEstimate ? 'estimate' : 'actual charge'}: ${charge.merchant || charge.description || 'Charge'} (${formatVacationMoney(charge.amount)})${promoteNow ? ' — marked Actual' : ''}.`);
     });
 
     // ---- Flights ----
