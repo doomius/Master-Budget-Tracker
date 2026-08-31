@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-29 10:33';
+const BUILD_VERSION = '2026-08-30 16:56';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25225,7 +25225,14 @@ function renderVacationTab() {
     const budgetedBreakdown = [];
     const actualBreakdown = [];
     const loanBreakdown = [];
-    const addBreakdown = (arr, label, amount, source) => { if (amount > 0.005) arr.push({ label, amount, source }); };
+    // Math.abs(), not amount > 0.005: a negative amount is a real, meaningful line (a credit/refund
+    // logged as an Actual Charge with direction:'credit') that must stay visible in the breakdown
+    // tooltip even though it reduces the total — only true zero/rounding-noise amounts should be
+    // hidden. Confirmed real bug, 2026-08-30: the headline Actual Spend total already correctly
+    // netted a refund (verified: sum of trip.actualCharges with credits flipped negative matched the
+    // displayed total to the penny), but the credit's own line item silently never appeared in the
+    // breakdown list at all, making it look like the refund had no effect.
+    const addBreakdown = (arr, label, amount, source) => { if (Math.abs(amount) > 0.005) arr.push({ label, amount, source }); };
 
     // Cruise Cost / Package Base
     const cruiseCat = (trip.categories || []).find(c => c.key === 'cruiseCost');
@@ -25327,7 +25334,18 @@ function renderVacationTab() {
         exTotalCost += cost;
         const exCategoryLabel = resolveVacationLinkedCategoryLabel(trip, ex.linkedCategoryKey, exCat?.label || 'Excursions/Tours');
         const label = `${exCategoryLabel} (${ex.name || 'Excursion'})`;
-        if (ex.paymentDate || ex.prepaidTxId) {
+        // A payment date on/after the trip's own start date means this was actually paid DURING
+        // the trip (a real, already-realized expense) — not paid "in advance," so it belongs in
+        // Actual Spend only (see the excursion loops in the Actual Spend section below), never in
+        // Pre-Paid Expenses or In-Trip Budgeted. Only a payment date strictly BEFORE the trip start
+        // is genuinely pre-paid. Per explicit user request, 2026-08-30 — confirmed real bug:
+        // excursions paid mid-trip (e.g. a $175 excursion actually paid on-site) were unconditionally
+        // bucketed as Pre-Paid regardless of date, inflating Total Estimate while never reaching
+        // Actual Spend at all (see the matching useActualCharges-branch fix below).
+        const exPaidDuringOrAfterTrip = !!(ex.paymentDate && trip.startDate && ex.paymentDate >= trip.startDate);
+        if (exPaidDuringOrAfterTrip) {
+            // Already real spend, counted in Actual Spend — not part of the pre-trip estimate.
+        } else if (ex.paymentDate || ex.prepaidTxId) {
             prepaidTotal += cost;
             addBreakdown(prepaidBreakdown, label, cost, ex.paymentSource);
         } else {
@@ -25457,7 +25475,13 @@ function renderVacationTab() {
             if ((f.isBooked || f.paymentDate || f.prepaidTxId) && Number(f.cost) > 0) { const amt = Number(f.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, 'Flight', amt, f.prepaidTxSource || f.paymentSource); }
         });
         (trip.excursions || []).forEach(ex => {
-            if ((ex.paymentDate || ex.prepaidTxId) && Number(ex.cost) > 0 && !ex.linkedCategoryKey) { const amt = Number(ex.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `${exCat?.label || 'Excursions/Tours'} (${ex.name || 'Excursion'})`, amt, ex.prepaidTxSource || ex.paymentSource); }
+            // Unlike the non-useActualCharges branch below, this branch's trip.categories loop
+            // above only handles cruiseCost/prepaid categories — non-prepaid categories (Attractions,
+            // Food & Beverage, etc.) have no rollup here at all, so a linked excursion's own paid
+            // cost was never picked up ANYWHERE once `!ex.linkedCategoryKey` excluded it here too.
+            // Confirmed real bug, 2026-08-30: a paid, category-linked excursion (e.g. "Strokes Merch"
+            // -> Attractions) counted in Pre-Paid Expenses but vanished from Actual Spend entirely.
+            if ((ex.paymentDate || ex.prepaidTxId) && Number(ex.cost) > 0) { const amt = Number(ex.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `${resolveVacationLinkedCategoryLabel(trip, ex.linkedCategoryKey, exCat?.label || 'Excursions/Tours')} (${ex.name || 'Excursion'})`, amt, ex.prepaidTxSource || ex.paymentSource); }
         });
         (trip.prePostActivities || []).forEach(act => {
             if ((act.paymentDate || act.prepaidTxId) && Number(act.cost) > 0) { const amt = Number(act.cost) || 0; actualTotal += amt; addBreakdown(actualBreakdown, `${resolveVacationLinkedCategoryLabel(trip, act.expenseCategoryKey, act.type === 'pre' ? 'Pre-Trip' : 'Post-Trip')}: ${act.name || 'Activity'}`, amt, act.prepaidTxSource || act.paymentSource); }
