@@ -889,6 +889,10 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
     word-break: break-word;
     overflow-wrap: anywhere;
     color: #fff;
+    /* Removes mobile browsers' own ~300ms double-tap-to-zoom delay, so two quick taps reliably
+       synthesize a real dblclick (edit) instead of sometimes just zooming the viewport — needed
+       for tap-to-view/double-tap-to-edit to work consistently. Per explicit user request, 2026-08-31. */
+    touch-action: manipulation;
     cursor: grab;
     user-select: none;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
@@ -923,6 +927,7 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
     color: #fff;
     overflow: hidden;
     white-space: nowrap;
+    touch-action: manipulation;
     text-overflow: ellipsis;
 }
 
@@ -1083,6 +1088,7 @@ body.is-mobile-screen[data-active-tab="vacation"] #btn-vacation-day-add-transact
     border-radius: 6px;
     padding: 4px 10px;
     font-size: 1.15rem;
+    touch-action: manipulation;
     font-weight: 600;
     line-height: 1.35;
     overflow: hidden;
@@ -4209,6 +4215,14 @@ body.is-mobile-screen .mobile-sync-badge-detail:not(.hidden) {
 /* Personal/Joint/Asia checking list-view row drag-drop (see wireListRowDragDrop() in app.js) —
    mirrors the calendar view's own .day-transaction-item.dragging/.calendar-day.drag-hover pair above,
    sized for a table row instead of a chip. */
+/* Removes mobile browsers' own ~300ms double-tap-to-zoom delay, so two quick taps reliably
+   synthesize a real dblclick (edit) instead of sometimes just zooming the viewport — needed for
+   tap-to-view/double-tap-to-edit (initTapToViewDetailOverlay(), app.js) to work consistently.
+   Per explicit user request, 2026-08-31. */
+.editable-row {
+    touch-action: manipulation;
+}
+
 .editable-row.dragging {
     opacity: 0.4;
 }
