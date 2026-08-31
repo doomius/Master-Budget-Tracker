@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-31 09:39';
+const BUILD_VERSION = '2026-08-31 09:50';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -21283,9 +21283,12 @@ function renderBillsTab() {
             <td class="table-actions-cell"><button class="action-btn small-btn edit-bill-btn"${isSplit ? ' title="Editing here updates both the 1st and 15th amounts together"' : ''}>Edit</button><button class="action-btn small-btn danger-btn delete-bill-btn"${isSplit ? ' title="Deleting here removes both the 1st and 15th rows together"' : ''}>Delete</button></td>`;
         row.querySelector('.edit-bill-btn')?.addEventListener('click', () => openBillSplitterEditor(bill, cycleKey));
         row.querySelector('.delete-bill-btn')?.addEventListener('click', () => deleteBillSplitterItemInteractive(bill, cycleKey));
-        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
-        // desktop reaches via its own Edit button, and that modal has its own Delete button.
-        if (isMobileViewport()) row.addEventListener('click', () => openBillSplitterEditor(bill, cycleKey));
+        // Desktop reaches this via its own Edit button above; dblclick is the row-level equivalent
+        // every other editable row in the app already has — added so the mobile tap-to-view
+        // popup's Edit button (initTapToViewDetailOverlay(), which dispatches a synthetic dblclick
+        // rather than re-deriving "which dialog does this open") has something to trigger here too.
+        // Per explicit user request, 2026-08-31.
+        row.addEventListener('dblclick', () => openBillSplitterEditor(bill, cycleKey));
         jointBody.appendChild(row);
     });
     if (!displayBills.length) jointBody.innerHTML = `<tr><td colspan="12" class="muted-text" style="text-align:center;">${categoryFilter === 'all' ? 'No Bill Splitter items logged for this period.' : 'No items match this category filter.'}</td></tr>`;
@@ -36375,9 +36378,12 @@ function renderBillTrackerTab() {
                     </td>`;
                 row.querySelector('.edit-bill-setting-btn')?.addEventListener('click', () => openEditBillSettingModal(bill.id));
                 row.querySelector('.delete-bill-setting-btn')?.addEventListener('click', () => deleteSetting(bill));
-                // Mobile has no Actions column (see index.css) — tapping the row opens the same
-                // editor desktop reaches via its own Edit button, and that modal has its own Delete.
-                if (isMobileViewport()) row.addEventListener('click', () => openEditBillSettingModal(bill.id));
+                // Desktop reaches this via its own Edit button above; dblclick is the row-level
+                // equivalent every other editable row in the app already has — added so the mobile
+                // tap-to-view popup's Edit button (initTapToViewDetailOverlay(), which dispatches a
+                // synthetic dblclick rather than re-deriving "which dialog does this open") has
+                // something to trigger here too. Per explicit user request, 2026-08-31.
+                row.addEventListener('dblclick', () => openEditBillSettingModal(bill.id));
                 tbody.appendChild(row);
             });
         }
@@ -38199,18 +38205,23 @@ function showIntegrityAuditModal() {
 // (`input[type="date"]` → `showPicker()`, just below this function) then fired, which is exactly
 // the reported "double tap opens the calendar selector" bug. Making a single tap show a read-only
 // view instead (never opening the edit modal) removes the pre-empting click entirely.
+// Per explicit user request, 2026-08-31 (same day, follow-up): the previous tap-then-wait-to-
+// disambiguate-from-a-double-tap design added a real interaction and a fragile dependency on
+// mobile double-tap/dblclick actually firing (inconsistent across browsers even with touch-action
+// set). Replaced with something simpler and more robust: a tap shows the view popup IMMEDIATELY
+// (no delay), and that popup now carries its own Edit button — tapping it dispatches a synthetic
+// dblclick on the original element, reusing whichever real edit handler is already wired at that
+// row/card's own render site (openEditTransactionModal, openDynamicTxEditor,
+// openBillSplitterEditor, openEditBillSettingModal, openVacationEventEditModal, etc.) rather than
+// re-deriving "which dialog does this open" here. Double-tap itself is no longer a distinct
+// gesture this app relies on anywhere — it simply shows the same view popup twice, harmlessly.
 function initTapToViewDetailOverlay() {
-    // Standard "delay a single click so a following double-click can cancel it" pattern — without
-    // this, a genuine double-click/double-tap would flash this view overlay open (from each of the
-    // two constituent clicks) immediately before the real dblclick-to-edit handler (wired
-    // separately at each render site, unchanged by this function) takes over.
-    const DBLCLICK_WINDOW_MS = 300;
-    const pendingTimers = new WeakMap();
-
     // Vacation Day/Week hour-grid cards and all-day chips (see setupVacationCalendarDragAndResize()'s
-    // dblclick handler, which opens the edit modal for the same selector) — long-press shows a
-    // read-only view of the same event instead, without disturbing double-click-to-edit. Per
-    // explicit user request.
+    // dblclick handler, which opens the edit modal for the same selector) — tap shows a read-only
+    // view of the same event instead, without disturbing double-click-to-edit. Per explicit user
+    // request. Also covers Bill Splitter and Bill Tracker rows (their own former mobile
+    // tap-opens-edit-directly shortcuts were removed to match every other list in the app) — per
+    // explicit user request, 2026-08-31.
     const VACATION_EVENT_SELECTOR = '.vacation-week-event, .vacation-day-event, .vacation-week-allday-chip, .vacation-chip';
     const VACATION_EVENT_TYPE_LABELS = { flight: 'Flight', lodging: 'Lodging', cruise: 'Cruise / Port Day', excursion: 'Excursion', prepost: 'Pre/Post-Trip Activity', addon: 'Trip Add-On', 'actual-charge': 'Actual Charge' };
 
@@ -38280,7 +38291,10 @@ function initTapToViewDetailOverlay() {
             <div class="mobile-row-detail-card">
                 <div class="mobile-row-detail-header">
                     <h4>Transaction Details</h4>
-                    <button type="button" class="mobile-row-detail-close" aria-label="Close">&times;</button>
+                    <div class="mobile-row-detail-header-actions">
+                        <button type="button" class="mobile-row-detail-edit" aria-label="Edit">✏️ Edit</button>
+                        <button type="button" class="mobile-row-detail-close" aria-label="Close">&times;</button>
+                    </div>
                 </div>
                 <div class="mobile-row-detail-list"></div>
             </div>`;
@@ -38299,6 +38313,18 @@ function initTapToViewDetailOverlay() {
                 restoreScrollTop();
             }
         });
+        // Reuses whichever real dblclick-to-edit handler is already wired at the original
+        // row/card's own render site — see this function's own top-of-file comment for why a
+        // synthetic dblclick, not a re-derived "which dialog does this open" lookup, is the right
+        // approach here. If the original element was removed from the DOM by an unrelated render
+        // between opening this popup and tapping Edit (rare — same-session background sync, etc.),
+        // this silently no-ops rather than throwing.
+        overlay.querySelector('.mobile-row-detail-edit')?.addEventListener('click', () => {
+            const el = overlay._currentEl;
+            overlay.classList.add('hidden');
+            restoreScrollTop();
+            if (el && document.contains(el)) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        });
         overlay._hideScrollTop = hideScrollTop;
         return overlay;
     }
@@ -38307,6 +38333,7 @@ function initTapToViewDetailOverlay() {
         const pairs = buildDetailPairs(el);
         if (!pairs.length) return;
         const overlay = getOverlay();
+        overlay._currentEl = el;
         const headerEl = overlay.querySelector('.mobile-row-detail-header h4');
         if (headerEl) headerEl.textContent = el.tagName === 'TR' ? 'Transaction Details' : `${VACATION_EVENT_TYPE_LABELS[el.dataset.eventType] || 'Event'} Details`;
         overlay.querySelector('.mobile-row-detail-list').innerHTML = pairs.map(p =>
@@ -38318,21 +38345,8 @@ function initTapToViewDetailOverlay() {
 
     document.addEventListener('click', (e) => {
         const el = eligibleRow(e.target);
-        if (!el || pendingTimers.has(el)) return;
-        const timerId = setTimeout(() => {
-            pendingTimers.delete(el);
-            showOverlay(el);
-        }, DBLCLICK_WINDOW_MS);
-        pendingTimers.set(el, timerId);
-    });
-    // Cancels the pending view-popup so a genuine double-click/double-tap goes straight to
-    // whichever real edit handler is wired at this element's own render site (unchanged — this
-    // listener never opens edit itself, it only stops the view popup from flashing open first).
-    document.addEventListener('dblclick', (e) => {
-        const el = eligibleRow(e.target);
         if (!el) return;
-        const timerId = pendingTimers.get(el);
-        if (timerId) { clearTimeout(timerId); pendingTimers.delete(el); }
+        showOverlay(el);
     });
 }
 
