@@ -6802,6 +6802,27 @@ body.is-mobile-screen #joint-expenses-content .data-table th,
     margin-bottom: 0.75rem;
 }
 .mobile-row-detail-header h4 { margin: 0; font-size: 1rem; }
+.mobile-row-detail-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+/* Reuses the original row/card's own already-wired dblclick-to-edit handler via a synthetic
+   dblclick — see initTapToViewDetailOverlay()'s comment in app.js. Per explicit user request,
+   2026-08-31: tap-to-view now carries its own Edit action, replacing double-tap-to-edit entirely. */
+.mobile-row-detail-edit {
+    appearance: none;
+    background: var(--color-primary);
+    border: 0;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.4rem 0.65rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
 .mobile-row-detail-close {
     appearance: none;
     background: none;
