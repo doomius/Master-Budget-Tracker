@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-31 09:17';
+const BUILD_VERSION = '2026-08-31 09:39';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -17892,9 +17892,12 @@ function renderCardList() {
     container.querySelectorAll('.editable-row').forEach(row => {
         const openEditor = () => openEditTransactionModal(row.dataset.id, row.dataset.date);
         row.addEventListener('dblclick', openEditor);
-        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
-        // desktop reaches via double-click, and that modal has its own Delete button.
-        if (isMobileViewport()) row.addEventListener('click', openEditor);
+        // A single mobile tap no longer opens the editor directly — it now shows a read-only view
+        // popup instead (initTapToViewDetailOverlay()), matching desktop's tap-to-view/double-
+        // click-to-edit split. Per explicit user request, 2026-08-31 (this used to open the editor
+        // on tap, which meant the SECOND tap of a "double tap to edit" gesture landed inside the
+        // freshly-opened edit modal — usually its Date field, whose own click-to-open-native-
+        // picker listener then fired, reported as "double tap opens the calendar selector").
     });
 }
 
@@ -18509,9 +18512,9 @@ function renderPersonalList() {
             openEditTransactionModal(row.dataset.id, row.dataset.date);
         };
         row.addEventListener('dblclick', openEditor);
-        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
-        // desktop reaches via double-click, and that modal has its own Delete button.
-        if (isMobileViewport()) row.addEventListener('click', openEditor);
+        // A single mobile tap no longer opens the editor directly — see the matching comment in
+        // renderCardList() above for why (initTapToViewDetailOverlay() now shows a read-only view
+        // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'personal');
     _updateListViewStickyOffset();
@@ -18826,7 +18829,9 @@ function renderAsiaList() {
             openEditTransactionModal(row.dataset.id, row.dataset.date);
         };
         row.addEventListener('dblclick', openEditor);
-        if (isMobileViewport()) row.addEventListener('click', openEditor);
+        // A single mobile tap no longer opens the editor directly — see the matching comment in
+        // renderCardList() above for why (initTapToViewDetailOverlay() now shows a read-only view
+        // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'asia');
     _updateListViewStickyOffset();
@@ -19468,9 +19473,9 @@ function renderJointList() {
             openEditTransactionModal(row.dataset.id, row.dataset.date);
         };
         row.addEventListener('dblclick', openEditor);
-        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
-        // desktop reaches via double-click, and that modal has its own Delete button.
-        if (isMobileViewport()) row.addEventListener('click', openEditor);
+        // A single mobile tap no longer opens the editor directly — see the matching comment in
+        // renderCardList() above for why (initTapToViewDetailOverlay() now shows a read-only view
+        // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'joint');
 }
@@ -25703,7 +25708,7 @@ function renderVacationTab() {
         const legsFullStrs = (f.legs || []).map(leg => formatFlightDetailsString(leg, { includeAirplaneIcon: false, useArrowChar: false }));
         // Mobile: a full leg string (times, carrier, duration) is too dense for a phone-width
         // itinerary table — show just the route codes, with the full string still reachable via
-        // the existing long-press detail overlay (initLongPressDetailOverlay reads data-detail-value
+        // the tap-to-view detail overlay (initTapToViewDetailOverlay() reads data-detail-value
         // when present instead of the cell's own visible text). Desktop is unchanged. Per explicit
         // user request.
         const legsHtml = isMobileViewport()
@@ -25806,9 +25811,9 @@ function renderVacationTab() {
                 ? ` <a href="${escapeHTML(buildAppleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Apple Maps">📍</a> <a href="${escapeHTML(buildGoogleMapsUrl(addressText))}" target="_blank" rel="noopener" title="Open in Google Maps">🌐</a>`
                 : '';
             // Mobile: the full street address is too dense for a phone-width itinerary table —
-            // show just City/State, with the full address still reachable via the existing
-            // long-press detail overlay (data-detail-value on the cell). Desktop keeps the full
-            // address inline as before. Per explicit user request.
+            // show just City/State, with the full address still reachable via the tap-to-view
+            // detail overlay (data-detail-value on the cell). Desktop keeps the full address
+            // inline as before. Per explicit user request.
             const cityStateText = [d.city, d.state].filter(Boolean).join(', ');
             const addressDisplay = isMobileViewport() ? (cityStateText || addressText) : addressText;
             const dayTypeDisplay = isCityTrip ? (VACATION_CITY_ACTIVITY_LABELS[d.dayType] || d.dayType) : (dayTypeLabels[d.dayType] || d.dayType);
@@ -35689,9 +35694,12 @@ function renderCCCardList(cardId) {
     container.querySelectorAll('.editable-row').forEach(row => {
         const openEditor = () => openEditTransactionModal(row.dataset.id, row.dataset.date);
         row.addEventListener('dblclick', openEditor);
-        // Mobile has no Actions column (see index.css) — tapping the row opens the same editor
-        // desktop reaches via double-click, and that modal has its own Delete button.
-        if (isMobileViewport()) row.addEventListener('click', openEditor);
+        // A single mobile tap no longer opens the editor directly — it now shows a read-only view
+        // popup instead (initTapToViewDetailOverlay()), matching desktop's tap-to-view/double-
+        // click-to-edit split. Per explicit user request, 2026-08-31 (this used to open the editor
+        // on tap, which meant the SECOND tap of a "double tap to edit" gesture landed inside the
+        // freshly-opened edit modal — usually its Date field, whose own click-to-open-native-
+        // picker listener then fired, reported as "double tap opens the calendar selector").
     });
     _updateListViewStickyOffset();
 }
@@ -38181,12 +38189,23 @@ function showIntegrityAuditModal() {
 // from the DOM, so the full desktop row content (including columns hidden on mobile) is still sitting
 // right there to read back out — this just pairs each visible-or-not <td> with its <th> label and
 // shows all of them, mirroring what desktop already sees in the full table.
-function initLongPressDetailOverlay() {
-    const LONG_PRESS_MS = 550;
-    const MOVE_TOLERANCE_PX = 10;
-    let pressTimer = null;
-    let pressFired = false;
-    let startPoint = null;
+// Was long-press-to-view; per explicit user request, 2026-08-31, replaced with plain tap-to-view
+// (double-click/double-tap still edits, unchanged) — long-press felt slow/undiscoverable, and on
+// mobile a SINGLE tap on these same rows was ALSO already wired to open the edit modal directly
+// (see the several `if (isMobileViewport()) row.addEventListener('click', openEditor)` sites this
+// change removes), so double-tapping to edit fired that edit-opening click on the FIRST tap, then
+// the second tap of the same gesture landed on whatever was now on-screen in the freshly-opened
+// modal — usually its Date field, whose own global click-to-open-native-picker listener
+// (`input[type="date"]` → `showPicker()`, just below this function) then fired, which is exactly
+// the reported "double tap opens the calendar selector" bug. Making a single tap show a read-only
+// view instead (never opening the edit modal) removes the pre-empting click entirely.
+function initTapToViewDetailOverlay() {
+    // Standard "delay a single click so a following double-click can cancel it" pattern — without
+    // this, a genuine double-click/double-tap would flash this view overlay open (from each of the
+    // two constituent clicks) immediately before the real dblclick-to-edit handler (wired
+    // separately at each render site, unchanged by this function) takes over.
+    const DBLCLICK_WINDOW_MS = 300;
+    const pendingTimers = new WeakMap();
 
     // Vacation Day/Week hour-grid cards and all-day chips (see setupVacationCalendarDragAndResize()'s
     // dblclick handler, which opens the edit modal for the same selector) — long-press shows a
@@ -38297,54 +38316,29 @@ function initLongPressDetailOverlay() {
         overlay._hideScrollTop();
     }
 
-    function clearPress() {
-        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-        startPoint = null;
-    }
-
-    function onStart(e) {
-        const row = eligibleRow(e.target);
-        if (!row) return;
-        pressFired = false;
-        const point = e.touches ? e.touches[0] : e;
-        startPoint = { x: point.clientX, y: point.clientY };
-        pressTimer = setTimeout(() => {
-            pressFired = true;
-            pressTimer = null;
-            if (navigator.vibrate) navigator.vibrate(15);
-            showOverlay(row);
-        }, LONG_PRESS_MS);
-    }
-    function onMove(e) {
-        if (!pressTimer || !startPoint) return;
-        const point = e.touches ? e.touches[0] : e;
-        if (Math.abs(point.clientX - startPoint.x) > MOVE_TOLERANCE_PX || Math.abs(point.clientY - startPoint.y) > MOVE_TOLERANCE_PX) {
-            clearPress();
-        }
-    }
-    function onEnd(e) {
-        clearPress();
-        if (pressFired) {
-            // A long-press already showed the overlay — swallow the click/dblclick that would
-            // otherwise follow this same touch/mouse-up and open the edit modal instead.
-            e.preventDefault();
-            e.stopPropagation();
-            pressFired = false;
-        }
-    }
-
-    document.addEventListener('touchstart', onStart, { passive: true });
-    document.addEventListener('touchmove', onMove, { passive: true });
-    document.addEventListener('touchend', onEnd);
-    document.addEventListener('touchcancel', clearPress);
-    document.addEventListener('mousedown', onStart);
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('click', (e) => {
+        const el = eligibleRow(e.target);
+        if (!el || pendingTimers.has(el)) return;
+        const timerId = setTimeout(() => {
+            pendingTimers.delete(el);
+            showOverlay(el);
+        }, DBLCLICK_WINDOW_MS);
+        pendingTimers.set(el, timerId);
+    });
+    // Cancels the pending view-popup so a genuine double-click/double-tap goes straight to
+    // whichever real edit handler is wired at this element's own render site (unchanged — this
+    // listener never opens edit itself, it only stops the view popup from flashing open first).
+    document.addEventListener('dblclick', (e) => {
+        const el = eligibleRow(e.target);
+        if (!el) return;
+        const timerId = pendingTimers.get(el);
+        if (timerId) { clearTimeout(timerId); pendingTimers.delete(el); }
+    });
 }
 
 // --- TRIGGER INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', init);
-window.addEventListener('DOMContentLoaded', initLongPressDetailOverlay);
+window.addEventListener('DOMContentLoaded', initTapToViewDetailOverlay);
 
 // Enable clicking anywhere on a date input to open its native picker,
 // since the calendar icon indicator was hidden via CSS to fix layout and tab order issues.
