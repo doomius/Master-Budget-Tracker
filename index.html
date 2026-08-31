@@ -1588,7 +1588,15 @@
                                                 <input type="number" step="0.01" min="0.01" id="vacation-quick-amount" class="custom-input" placeholder="0.00" required>
                                             </div>
                                         </div>
-                                        <button type="submit" class="action-btn solid-btn full-width" style="margin-top:0.5rem;">+ Log Actual Transaction</button>
+                                        <!-- Per explicit user request, 2026-08-30: a way to log a planned cost now (counts toward
+                                             Trip Estimate/In-Trip Budgeted, no real transaction posted yet) and later reopen it, type
+                                             the real final cost, and mark it Actual (see openVacationActualChargeDialog's own "Mark as
+                                             Actual Spend" checkbox) — at which point the estimate is frozen for reference and the new
+                                             number becomes the real posted charge. -->
+                                        <div class="form-group">
+                                            <label class="checkbox-label"><input type="checkbox" id="vacation-quick-is-estimate"> This is an estimate (not a real charge yet)</label>
+                                        </div>
+                                        <button type="submit" class="action-btn solid-btn full-width" id="btn-vacation-quick-submit" style="margin-top:0.5rem;">+ Log Actual Transaction</button>
                                     </form>
                                     </div>
                                 </div>
@@ -3367,7 +3375,7 @@
          touches the ledger. Opened via double-clicking the charge's chip/block on the Day or Week grid. -->
     <dialog id="vacation-actual-charge-dialog" class="glass-modal">
         <form method="dialog" id="vacation-actual-charge-form">
-            <h3>Edit Actual Charge</h3>
+            <h3 id="vacation-actual-charge-dialog-title">Edit Actual Charge</h3>
             <input type="hidden" id="vacation-actual-charge-id">
             <div class="form-row">
                 <div class="form-group"><label for="vacation-actual-charge-date">Date</label><input type="date" id="vacation-actual-charge-date" required class="custom-input"></div>
@@ -3389,6 +3397,17 @@
                 </div>
             </div>
             <div class="form-group"><label for="vacation-actual-charge-amount">Amount</label><div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" step="0.01" min="0.01" id="vacation-actual-charge-amount" required class="custom-input"></div></div>
+            <!-- Estimate/Actual workflow, per explicit user request 2026-08-30 — see
+                 openVacationActualChargeDialog()/the form submit handler in app.js for the full
+                 logic. #vacation-actual-charge-estimated-note is read-only, shown whenever this
+                 charge was ever an estimate (even after being marked Actual, as a permanent
+                 record of what was originally planned). #vacation-actual-charge-mark-actual-row
+                 only shows while the charge is STILL an estimate — checking it and saving is what
+                 freezes the estimate and turns the Amount field above into the real posted charge. -->
+            <div class="form-group hidden" id="vacation-actual-charge-estimated-note" style="font-size:0.85rem; color:var(--text-secondary);"></div>
+            <div class="form-group hidden" id="vacation-actual-charge-mark-actual-row">
+                <label class="checkbox-label"><input type="checkbox" id="vacation-actual-charge-mark-actual"> Mark as Actual Spend (locks the estimate above, uses the Amount field as the real charge)</label>
+            </div>
             <div class="modal-buttons">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-vacation-actual-charge">Cancel</button>
                 <button type="button" class="action-btn danger-btn" id="btn-delete-vacation-actual-charge">Delete</button>
