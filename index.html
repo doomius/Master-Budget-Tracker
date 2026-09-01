@@ -1129,12 +1129,17 @@
                             <div class="glass-card" id="vacation-toolbar-card" style="margin-bottom: 0;">
                                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
                                     <div id="vacation-trip-nav-buttons" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                                        <!-- Hidden (not removed — renderVacationTab()/setupVacationEventListeners() still read/write
-                                             its value and options) per explicit user request, 2026-08-25: redundant now that Prev/Next
-                                             plus the trip name itself in the sticky header cover picking a trip. See index.css. -->
-                                        <select class="custom-select" id="vacation-trip-select" style="font-weight: 700; font-size: 1.05rem; min-width: 220px;"></select>
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-vacation-prev-trip" title="Previous trip">&larr; Prev</button>
+                                        <!-- Re-shown per explicit user request, 2026-09-01 (was hidden 2026-08-25 as redundant with
+                                             Prev/Next) — now the direct way to jump to a specific trip by name, since Prev/Next alone
+                                             can't skip past several trips at once. Still reused by getVacationNavTrips()-driven
+                                             Prev/Next and the archived-trip filtering, unchanged from before. -->
+                                        <select class="custom-select" id="vacation-trip-select" style="font-weight: 700; font-size: 1.05rem; min-width: 220px;"></select>
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-vacation-next-trip" title="Next trip">Next &rarr;</button>
+                                        <!-- Per explicit user request, 2026-09-01: an archived trip (see the "Archived" checkbox in
+                                             the Add/Edit Trip dialog) is skipped by Prev/Next and hidden from the selector above
+                                             unless this is checked — see getVacationNavTrips() in app.js. -->
+                                        <label class="checkbox-label" style="font-size:0.85rem; font-weight:500;" title="When off, archived trips are skipped by Prev/Next and hidden from the trip selector above."><input type="checkbox" id="vacation-show-archived-trips"> Show Archived Trips</label>
                                         <button type="button" class="action-btn small-btn solid-btn" id="btn-add-vacation-trip">+ Add Trip</button>
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-edit-vacation-trip">Edit Trip</button>
                                         <button type="button" class="action-btn small-btn outline-btn" id="btn-open-travel-docs">🛂 Travel Documents</button>
@@ -3302,6 +3307,14 @@
             <div class="form-group" style="grid-column: 1 / -1;">
                 <label class="checkbox-label"><input type="checkbox" id="vacation-trip-consolidate-placeholders" checked> Consolidate planned expenses into a single master placeholder</label>
                 <small class="muted-text" style="display:block; margin-top:2px; margin-left:1.5rem;">Combines all non-prepaid budgeted category expenses (food, excursions, etc.) into 1 master placeholder on the last day of the trip with an itemized breakdown.</small>
+            </div>
+            <!-- Per explicit user request, 2026-09-01: an archived trip is skipped by Prev/Next and
+                 hidden from the trip dropdown selector (see #vacation-trip-select and
+                 #vacation-show-archived-trips) unless "Show Archived Trips" is checked — the trip
+                 and its data are never deleted, just excluded from normal navigation. -->
+            <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="checkbox-label"><input type="checkbox" id="vacation-trip-archived"> Archived</label>
+                <small class="muted-text" style="display:block; margin-top:2px; margin-left:1.5rem;">Hides this trip from the Prev/Next navigation and trip selector unless "Show Archived Trips" is checked. Nothing is deleted.</small>
             </div>
             <div class="form-group"><label for="vacation-trip-notes-field">Notes</label><textarea id="vacation-trip-notes-field" class="custom-input" rows="2"></textarea></div>
             <div class="form-row">
