@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-01 12:49';
+const BUILD_VERSION = '2026-09-01 13:12';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -24168,6 +24168,18 @@ function getSelectedVacationTrip() {
     return (state.vacationTrips || []).find(t => t.id === state.vacationSelectedTripId) || null;
 }
 
+// Single source of truth for "which trips can be navigated to right now" — the trip
+// selector dropdown, Prev/Next buttons, and the auto-jump-away-from-a-just-archived-trip logic
+// (vacation-trip-form's submit handler) all read this so they can never silently disagree about
+// which trips are visible. Sorted by start date, same order the app has always used for Prev/Next.
+// An archived trip (trip.archived) is excluded unless state.vacationShowArchivedTrips is on — it
+// still exists in state.vacationTrips and all its data is untouched, just skipped here. Per
+// explicit user request, 2026-09-01.
+function getVacationNavTrips() {
+    const trips = state.vacationShowArchivedTrips ? (state.vacationTrips || []) : (state.vacationTrips || []).filter(t => !t.archived);
+    return [...trips].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+}
+
 function recalcVacationCategoryActualTotal(category) {
     return (category.actualEntries || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
 }
@@ -25181,10 +25193,17 @@ function renderVacationTab() {
 
     syncVacationMasterCardCharges();
 
-    const sortedTrips = [...(state.vacationTrips || [])].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
-    tripSelect.innerHTML = sortedTrips.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join('');
-    if ((state.vacationTrips || []).length && !getSelectedVacationTrip()) {
-        state.vacationSelectedTripId = sortedTrips[0].id;
+    const showArchivedEl = document.getElementById('vacation-show-archived-trips');
+    if (showArchivedEl) showArchivedEl.checked = !!state.vacationShowArchivedTrips;
+
+    const navTrips = getVacationNavTrips();
+    tripSelect.innerHTML = navTrips.map(t => `<option value="${t.id}">${escapeHTML(t.name)}${t.archived ? ' (Archived)' : ''}</option>`).join('');
+    // If nothing's selected yet, OR the currently-selected trip just became hidden (archived while
+    // it was the active trip, or "Show Archived Trips" got turned off while viewing one), jump to
+    // the first still-visible trip rather than silently keep showing a hidden trip's data with an
+    // empty/mismatched dropdown. Per explicit user request, 2026-09-01.
+    if (navTrips.length && !navTrips.some(t => t.id === state.vacationSelectedTripId)) {
+        state.vacationSelectedTripId = navTrips[0].id;
     }
     tripSelect.value = state.vacationSelectedTripId || '';
 
@@ -27624,15 +27643,24 @@ function setupVacationEventListeners() {
         saveDatabase();
         renderVacationTab();
     });
+    // Both buttons step through getVacationNavTrips() — the SAME filtered/sorted list the trip
+    // selector and renderVacationTab()'s own jump-away-from-a-hidden-trip logic use — so an
+    // archived trip (unless "Show Archived Trips" is on) is skipped entirely by Prev/Next, never
+    // just greyed out. Per explicit user request, 2026-09-01.
     document.getElementById('btn-vacation-prev-trip')?.addEventListener('click', () => {
-        const sorted = [...(state.vacationTrips || [])].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+        const sorted = getVacationNavTrips();
         const idx = sorted.findIndex(t => t.id === state.vacationSelectedTripId);
         if (idx > 0) { state.vacationSelectedTripId = sorted[idx - 1].id; jumpWeekToTripStart(sorted[idx - 1].id); saveDatabase(); renderVacationTab(); }
     });
     document.getElementById('btn-vacation-next-trip')?.addEventListener('click', () => {
-        const sorted = [...(state.vacationTrips || [])].sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+        const sorted = getVacationNavTrips();
         const idx = sorted.findIndex(t => t.id === state.vacationSelectedTripId);
         if (idx !== -1 && idx < sorted.length - 1) { state.vacationSelectedTripId = sorted[idx + 1].id; jumpWeekToTripStart(sorted[idx + 1].id); saveDatabase(); renderVacationTab(); }
+    });
+    document.getElementById('vacation-show-archived-trips')?.addEventListener('change', (e) => {
+        state.vacationShowArchivedTrips = e.target.checked;
+        saveDatabase();
+        renderVacationTab();
     });
 
     document.getElementById('vacation-summary-header')?.addEventListener('click', () => {
@@ -28168,6 +28196,8 @@ function setupVacationEventListeners() {
         document.getElementById('vacation-trip-end-date').value = trip ? trip.endDate : '';
         document.getElementById('vacation-trip-master-source').value = trip ? trip.masterPaymentSource : 'jason';
         document.getElementById('vacation-trip-international').checked = trip ? !!trip.international : false;
+        const archivedEl = document.getElementById('vacation-trip-archived');
+        if (archivedEl) archivedEl.checked = trip ? !!trip.archived : false;
         const consolidateEl = document.getElementById('vacation-trip-consolidate-placeholders');
         if (consolidateEl) consolidateEl.checked = trip ? (trip.consolidatePlaceholders !== false) : true;
         document.getElementById('vacation-trip-notes-field').value = trip ? (trip.notes || '') : '';
@@ -28271,6 +28301,7 @@ function setupVacationEventListeners() {
             tripObj.endDate = endDate;
             tripObj.masterPaymentSource = document.getElementById('vacation-trip-master-source').value;
             tripObj.international = document.getElementById('vacation-trip-international').checked;
+            tripObj.archived = document.getElementById('vacation-trip-archived')?.checked || false;
             const consolidateEl = document.getElementById('vacation-trip-consolidate-placeholders');
             if (consolidateEl) tripObj.consolidatePlaceholders = consolidateEl.checked;
             tripObj.notes = document.getElementById('vacation-trip-notes-field').value;
