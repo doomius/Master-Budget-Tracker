@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-08-31 10:02';
+const BUILD_VERSION = '2026-09-01 12:49';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25459,14 +25459,25 @@ function renderVacationTab() {
         }
     }
 
-    // 3b. Quick-Add estimates ("This is an estimate" toggle) — a plan, not real spend yet, so it
-    // counts toward In-Trip Budgeted using the FROZEN estimatedAmount, never the (possibly later-
-    // edited) amount field. Nothing posts to the real ledger for these until promoted to Actual
-    // (see getVacationChargesForSource()'s isEstimate skip and openVacationActualChargeDialog()'s
-    // "Mark as Actual Spend" checkbox). Per explicit user request, 2026-08-30.
+    // 3b. Quick-Add estimates ("This is an estimate" toggle) — the FROZEN estimatedAmount counts
+    // toward In-Trip Budgeted/Total Trip Estimate PERMANENTLY, regardless of whether the charge has
+    // since been promoted to Actual — mirrors how Lodging/Flights/Excursions already work
+    // elsewhere in this file: a planned/booked cost keeps counting toward the budget forever, while
+    // the real posted amount separately counts toward Actual Spend, so the two can be compared
+    // (that comparison is the entire point of freezing an original estimate in the first place).
+    // Corrected real bug, 2026-08-31/09-01: this used to gate on `ch.isEstimate` (still-unpromoted
+    // only), so promoting a charge made its original estimate vanish from Budgeted/Total Estimate
+    // entirely instead of staying as the historical "what we planned" figure — user reported a
+    // locked $70 estimate (now $64.19 actual) showing nowhere in In-Trip Budgeted/Total Trip
+    // Estimate, only in Actual Spend. Gate on estimatedAmount's mere presence instead — a charge
+    // that was NEVER an estimate (no estimatedAmount) still correctly never appears here. Nothing
+    // posts to the real ledger for a still-unpromoted estimate either way (see
+    // getVacationChargesForSource()'s isEstimate skip and openVacationActualChargeDialog()'s "Mark
+    // as Actual Spend" checkbox) — only Actual Spend's own separate handling of `amount` cares
+    // about promotion status.
     (trip.actualCharges || []).forEach(ch => {
-        if (!ch.isEstimate) return;
-        const est = Number(ch.estimatedAmount ?? ch.amount) || 0;
+        if (ch.estimatedAmount === undefined || ch.estimatedAmount === null) return;
+        const est = Number(ch.estimatedAmount) || 0;
         if (est <= 0.005) return;
         const signedEst = ch.direction === 'credit' ? -est : est;
         budgetedTotal += signedEst;
@@ -28663,7 +28674,7 @@ function setupVacationEventListeners() {
             if (charge.estimatedAmount !== undefined && charge.estimatedAmount !== null) {
                 estimatedNoteEl.textContent = charge.isEstimate
                     ? `Currently an estimate: ${formatVacationMoney(charge.estimatedAmount)} (counts toward In-Trip Budgeted, not yet posted to any ledger).`
-                    : `Originally estimated at ${formatVacationMoney(charge.estimatedAmount)} — locked. The Amount field above is the real, editable actual spend.`;
+                    : `Originally estimated at ${formatVacationMoney(charge.estimatedAmount)} — locked, and still counted in In-Trip Budgeted/Total Trip Estimate as the original plan. The Amount field above is the real, separate actual spend.`;
                 estimatedNoteEl.classList.remove('hidden');
             } else {
                 estimatedNoteEl.classList.add('hidden');
@@ -38363,7 +38374,21 @@ window.addEventListener('DOMContentLoaded', initTapToViewDetailOverlay);
     const nativeShowModal = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function (...args) {
         window._lastDialogOpenAt = Date.now();
-        return nativeShowModal.apply(this, args);
+        const result = nativeShowModal.apply(this, args);
+        // The real, more direct cause of "opening a dialog immediately shows the date picker" —
+        // <dialog> auto-focuses its first focusable descendant synchronously during showModal()
+        // (per spec), and on iOS Safari, giving a native <input type="date"> keyboard FOCUS (not
+        // just a click) auto-opens its picker overlay as a side effect. Several dialogs' Date field
+        // is their first form control, so simply opening them auto-focused it and auto-opened the
+        // picker — no click involved at all, which is why the earlier click-timing guard alone
+        // didn't fix this. Blur it back off immediately (the auto-focus has already happened
+        // synchronously by the time showModal() returns) so opening a dialog never itself triggers
+        // the picker; a real, deliberate tap on the field still opens it normally afterward.
+        // Confirmed real bug, 2026-08-31 (screenshots: "Edit Estimate" opened straight into its
+        // native date-picker overlay instead of the plain form).
+        const active = document.activeElement;
+        if (active && active.matches('input[type="date"]') && this.contains(active)) active.blur();
+        return result;
     };
 })();
 
