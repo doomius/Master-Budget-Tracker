@@ -5911,14 +5911,10 @@ body.is-mobile-screen[data-active-tab="creditcards"] .main-sticky-dashboard #btn
     background: #0d111e;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
-/* The trip select dropdown is redundant now that Prev/Next plus the trip name itself (in the
-   sticky header) already cover picking a trip — hidden on every screen size, not just mobile, per
-   explicit user request, 2026-08-25. Not removed from the DOM: renderVacationTab() bails out
-   entirely if this element is missing (its own `if (!tripSelect) return` guard), and both it and
-   setupVacationEventListeners() still read/write its value and options every render. */
-#vacation-trip-select {
-    display: none !important;
-}
+/* Re-shown per explicit user request, 2026-09-01 — now the direct way to jump to a specific trip
+   by name/skip past several at once, and to reach an archived trip when "Show Archived Trips" is
+   checked. (Was hidden entirely 2026-08-25 as redundant with Prev/Next; that reasoning no longer
+   applies once trips can be filtered.) */
 /* #vacation-trip-nav-buttons (Prev/Next/+Add Trip/Edit Trip/Travel Documents), mobile only: once
    relocateMobileVacationStickyHeader() (app.js) moves it into #vacation-trip-hero-card as its own
    row below the icon+trip-name row, it needs a bit of top spacing and to wrap sensibly at phone
