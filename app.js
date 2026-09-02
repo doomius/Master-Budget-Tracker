@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-02 11:21';
+const BUILD_VERSION = '2026-09-02 14:24';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25590,7 +25590,21 @@ function renderVacationTab() {
                     });
                 }
             } else {
-                const amt = recalcVacationCategoryActualTotal(cat); actualTotal += amt; addBreakdown(actualBreakdown, cat.label || cat.key, amt, cat.plannedSource);
+                // Itemize per actualEntries row (mirrors the Lodging/Flights per-item breakdown a
+                // few lines above) instead of one aggregate category line — each entry already
+                // carries its own descriptive `note` (e.g. "Excursion: Disneyland", or whatever
+                // "Log Actual" was given), so lumping them into just the category label throws that
+                // detail away. Summing entries directly here is exactly what
+                // recalcVacationCategoryActualTotal(cat) itself does, so this can't disagree with
+                // the category's own total. Confirmed real user request, 2026-09-02 ("shouldn't
+                // this show the actual description of the charge and not just the expense category
+                // lumping all charges together").
+                (cat.actualEntries || []).forEach(entry => {
+                    const entryAmt = Number(entry.amount) || 0;
+                    if (Math.abs(entryAmt) <= 0.005) return;
+                    actualTotal += entryAmt;
+                    addBreakdown(actualBreakdown, `${cat.label || cat.key}: ${entry.note || 'Actual'}`, entryAmt, cat.plannedSource);
+                });
             }
         });
         // Individually-booked add-ons — a real, separate loop rather than nested inside the
