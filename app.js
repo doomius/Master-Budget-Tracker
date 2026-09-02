@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-02 14:38';
+const BUILD_VERSION = '2026-09-02 17:48';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -21085,18 +21085,30 @@ function renderBillsTab() {
     // 50/50 share of joint bills), Allocations (their own personal allocation entries), and Extra
     // Transfers (one-off manual transfers, added via "Extra Transfers" above), each on its own line.
     const fmtMoney = v => `$${Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    // A negative Expenses/Allocations/Extra Transfers figure is a CREDIT reducing this cycle's
+    // transfer, not an amount adding to it — displaying it the same as a positive figure (no sign,
+    // no color) made a negative Allocations read as if it were adding to the total, e.g. "Expenses:
+    // $2,902.46 / Allocations: $44.00" for a cycle whose real transfer is $2,858.46 (44 LESS than
+    // expenses, not 44 more) looks like it should sum to $2,946.46. Per explicit user request,
+    // 2026-09-02: positive figures in red (they add to what needs to be transferred), negative in
+    // green (they reduce it) — the inverse of this app's usual .positive/.negative color convention
+    // elsewhere, so colors are set directly here rather than reusing those classes, to avoid a
+    // class named "positive" rendering red.
+    // Exactly $0 neither adds to nor reduces the transfer, so it stays uncolored rather than
+    // reading as if it were a positive (red) contribution.
+    const fmtSignedMoney = v => Math.abs(v) < 0.005 ? fmtMoney(v) : `<span style="color:${v < 0 ? 'var(--color-success)' : 'var(--color-danger)'};">${v < 0 ? '-' : ''}${fmtMoney(v)}</span>`;
     // Monthly total breakdown: one line, slash-separated. Per-cycle breakdowns (below) stay one
     // item per line — they're already inside a narrow cycle box where a slash-separated line would
     // wrap awkwardly.
     const renderTransferBreakdownInline = (elId, expenses, allocations, extra) => {
         const el = document.getElementById(elId);
         if (!el) return;
-        el.innerHTML = `Expenses: ${fmtMoney(expenses)} &nbsp;/&nbsp; Allocations: ${fmtMoney(allocations)} &nbsp;/&nbsp; Extra Transfers: ${extra < 0 ? '-' : ''}${fmtMoney(extra)}`;
+        el.innerHTML = `Expenses: ${fmtSignedMoney(expenses)} &nbsp;/&nbsp; Allocations: ${fmtSignedMoney(allocations)} &nbsp;/&nbsp; Extra Transfers: ${fmtSignedMoney(extra)}`;
     };
     const renderTransferBreakdown = (elId, expenses, allocations, extra) => {
         const el = document.getElementById(elId);
         if (!el) return;
-        el.innerHTML = `Expenses: ${fmtMoney(expenses)}<br>Allocations: ${fmtMoney(allocations)}<br>Extra Transfers: ${extra < 0 ? '-' : ''}${fmtMoney(extra)}`;
+        el.innerHTML = `Expenses: ${fmtSignedMoney(expenses)}<br>Allocations: ${fmtSignedMoney(allocations)}<br>Extra Transfers: ${fmtSignedMoney(extra)}`;
     };
     renderTransferBreakdownInline('jason-transfer-breakdown',
         split1st.jointShare + split15th.jointShare,
