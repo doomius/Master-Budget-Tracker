@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-01 13:12';
+const BUILD_VERSION = '2026-09-02 11:21';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -17800,11 +17800,17 @@ function renderCardList() {
 
     let txList = [];
 
+    // A deleted recurring-bill occurrence (billOccurrenceDeleted) is a non-destructive "skip this
+    // one instance" marker, not a real transaction — renderCCCardList() (the dedicated Credit Card
+    // page's own list view) already excludes these everywhere; this function never did, so it both
+    // rendered a deleted occurrence as a real visible row AND summed it into the Running Balance
+    // Owed column. Same root cause/fix as getCardRunningBalanceAtDate()'s own bug — confirmed real,
+    // 2026-09-02.
     if (state.listScope === 'month') {
         const key = `${year}-${state.currentMonth}`;
         const txs = cardCal[key] || [];
         txs.forEach(t => {
-            txList.push({ ...t, monthKey: key });
+            if (!t.billOccurrenceDeleted) txList.push({ ...t, monthKey: key });
         });
     } else {
         // Full Year
@@ -17812,7 +17818,7 @@ function renderCardList() {
             if (key.startsWith(`${year}-`)) {
                 const txs = cardCal[key] || [];
                 txs.forEach(t => {
-                    txList.push({ ...t, monthKey: key });
+                    if (!t.billOccurrenceDeleted) txList.push({ ...t, monthKey: key });
                 });
             }
         });
@@ -32660,6 +32666,16 @@ function getCardRunningBalanceAtDate(cardId, targetDateStr) {
     sortedKeys.forEach(key => {
         const txs = cardCal[key] || [];
         txs.forEach(tx => {
+            // A deleted recurring-bill occurrence (tx.billOccurrenceDeleted) is a non-destructive
+            // "skip this one instance" marker, not a real transaction — calculateCardLedgerBalance()
+            // (the List view's own seed function) already excludes these; this function never did,
+            // so any card with at least one skipped occurrence before targetDateStr silently
+            // inflated the Calendar view's balance by that occurrence's amount while the List view
+            // stayed correct. Confirmed real bug, 2026-09-02 (user report: Amex Platinum's Calendar
+            // view showed $10,256.99 vs. the List view's correct $8,656.99 for the same date —
+            // traced to exactly $1,600 across 13 skipped "Weekend Cash"/"Addl Groceries"/"Cat Food"
+            // occurrences predating the discrepancy date, matching the gap to the penny).
+            if (tx.billOccurrenceDeleted) return;
             if (new Date(tx.date + 'T00:00:00').getTime() < targetTime) {
                 // Expenses (negative amount) increase balance owed.
                 // Payments (positive amount) decrease balance owed.
