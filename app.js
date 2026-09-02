@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-02 17:48';
+const BUILD_VERSION = '2026-09-02 18:15';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -23822,61 +23822,33 @@ function createVacationCategoriesForType(type) {
 // prepaidTxSource is frozen at booking time, separate from category.plannedSource, because the user
 // can edit plannedSource afterward before ever re-booking — removal must always target where the
 // real transaction actually lives, not wherever the category's source field currently points.
-function applyVacationPrepaidBooking(trip, category) {
+// Thin wrapper delegating to applyVacationItemBooking() — was a full parallel implementation
+// (unconditional delete+recreate on every call, no stale-tracking detection, no update-in-place)
+// until 2026-09-02, when that duplicate-implementation gap was confirmed to carry the exact same
+// risk class already fixed in applyVacationItemBooking() for Lodging/Flights/Excursions/etc. (see
+// that function's own comment and [[project-budgetify-balance-engine]]) — just without the one
+// specific bug (a missing prepaidTxSource on a shim object) that made it visibly manifest for
+// Lodging fees first. Reusing the fixed logic here, the same way applyVacationLodgingFeeBooking()
+// already does, means categories get update-in-place/stale-detection/source-move for free with no
+// second implementation to keep in sync. `options.skipPastDateConfirm` exists because the "Book
+// This"/"Re-book" button's own click handler already shows its own confirm() before ever calling
+// this — passing it there avoids double-prompting; the auto-post-on-trip-save path (cruise cost)
+// has no confirmation of its own, so it's left to get the new past-date gate normally.
+function applyVacationPrepaidBooking(trip, category, options = {}) {
     const amount = getVacationCategoryActualAmount(category, trip) || Number(category.plannedAmount) || 0;
-    const dateStr = category.plannedDate;
-    let source = category.plannedSource;
-    if (source === 'master' || !source) {
-        source = trip.masterPaymentSource || 'jason';
-    }
-    if (amount <= 0.005 || !dateStr || !source) {
-        alert('Enter a planned/booked amount, payment date, and payment source in Edit before booking this expense.');
-        return false;
-    }
-    if (category.prepaidTxId) removeVacationPrepaidTransaction(category);
-
-    const dateObj = new Date(dateStr + 'T00:00:00');
-    const y = dateObj.getFullYear();
-    const mShort = MONTH_ORDER[dateObj.getMonth()];
-    const key = `${y}-${mShort}`;
-    const description = `${trip.name}: ${category.label}`;
-    const nowStamp = Date.now();
-    let txId;
-
-    if (source === 'jason') {
-        ensureYearMonthInitialized(y, mShort);
-        txId = 'p-' + Math.random().toString(36).substr(2, 9);
-        state.personalCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationTripId: trip.id, vacationCategoryKey: category.key, vacationPlaceholder: true, createdAt: nowStamp });
-    } else if (source === 'joint') {
-        txId = 'j-' + Math.random().toString(36).substr(2, 9);
-        state.jointRegister.push({ id: txId, type: 'expense', name: description, amount: -amount, date: dateStr, vacationTripId: trip.id, vacationCategoryKey: category.key, vacationPlaceholder: true, createdAt: nowStamp });
-    } else if (source === 'asia') {
-        if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
-        txId = 'a-' + Math.random().toString(36).substr(2, 9);
-        state.asiaCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationTripId: trip.id, vacationCategoryKey: category.key, vacationPlaceholder: true, createdAt: nowStamp });
-    } else {
-        // A credit card id — mirrors cc-quick-add-form's CHARGE branch exactly.
-        const cardId = source;
-        if (!state.cardCalendars) state.cardCalendars = {};
-        if (!state.cardCalendars[cardId]) state.cardCalendars[cardId] = {};
-        if (!state.cardCalendars[cardId][key]) state.cardCalendars[cardId][key] = [];
-        const activeCard = state.loans.find(l => l.id === cardId);
-        const owner = activeCard ? (activeCard.paymentSource === 'joint' ? 'joint' : activeCard.paymentSource === 'asia' ? 'asia' : 'jason') : 'jason';
-        txId = 'c-' + Math.random().toString(36).substr(2, 9);
-        const newTransaction = {
-            id: txId, date: dateStr, merchant: trip.name, description: category.label, amount: -amount,
-            transactionKind: 'charge', owner, trip: trip.name, interestRate: activeCard ? (activeCard.interestRate || 0) : 0,
-            isRecurring: false, recurringDay: 0, recurringSeriesId: '',
-            vacationTripId: trip.id, vacationCategoryKey: category.key, vacationPlaceholder: true, createdAt: nowStamp
-        };
-        state.cardCalendars[cardId][key].push(newTransaction);
-        adjustCardCurrentBalance(cardId, newTransaction.amount);
-        refreshMaterializedCardStatementCharges(cardId);
-    }
-    category.prepaidTxId = txId;
-    category.prepaidTxSource = source;
-    category.bookedAmount = amount;
-    return true;
+    const shim = {
+        name: category.label,
+        cost: amount,
+        paymentDate: category.plannedDate,
+        paymentSource: category.plannedSource,
+        prepaidTxId: category.prepaidTxId,
+        prepaidTxSource: category.prepaidTxSource
+    };
+    const ok = applyVacationItemBooking(trip, shim, 'category', category.key, options);
+    category.prepaidTxId = shim.prepaidTxId;
+    category.prepaidTxSource = shim.prepaidTxSource;
+    if (shim.bookedAmount !== undefined) category.bookedAmount = shim.bookedAmount;
+    return ok;
 }
 
 // Removes the real transaction a prepaid category was booked as, from wherever prepaidTxSource says
@@ -23914,6 +23886,36 @@ function removeVacationPrepaidTransaction(category) {
     category.prepaidTxSource = null;
 }
 
+// Looks up the real transaction object a vacation booking (lodging/flight/excursion/etc.) is
+// tracking, wherever `source` says it lives — the read-side mirror of
+// removeVacationPrepaidTransaction()'s own per-source-type routing. Returns null if the id doesn't
+// resolve to a real, still-existing row (e.g. the user deleted it directly from the Credit
+// Card/Checking page, bypassing this record's own "Unbook" action) — callers use that to detect a
+// stale tracked id rather than silently trusting it. Per explicit user request, 2026-09-02.
+function findVacationBookedTransaction(source, id) {
+    if (!id || !source) return null;
+    if (source === 'mnvv' || id.startsWith('mnvv-')) return null; // non-ledger placeholder, nothing to find
+    if (source === 'jason') {
+        for (const k of Object.keys(state.personalCalendar || {})) {
+            const tx = (state.personalCalendar[k] || []).find(t => t.id === id);
+            if (tx) return tx;
+        }
+    } else if (source === 'joint') {
+        return (state.jointRegister || []).find(t => t.id === id) || null;
+    } else if (source === 'asia') {
+        for (const k of Object.keys(state.asiaCalendar || {})) {
+            const tx = (state.asiaCalendar[k] || []).find(t => t.id === id);
+            if (tx) return tx;
+        }
+    } else if (state.cardCalendars && state.cardCalendars[source]) {
+        for (const k of Object.keys(state.cardCalendars[source])) {
+            const tx = (state.cardCalendars[source][k] || []).find(t => t.id === id);
+            if (tx) return tx;
+        }
+    }
+    return null;
+}
+
 // Hotel check-out charges (taxes/resort fee not in the room rate, and separately mini bar/room
 // service/parking-type in-room charges) are tracked/posted independently of the room cost AND of
 // each other — a lodging entry can have its room cost booked while its fees are still unknown, or
@@ -23924,7 +23926,13 @@ function removeVacationPrepaidTransaction(category) {
 // duplicating the posting logic, since those already handle every payment source correctly.
 const VACATION_LODGING_FEE_TYPE_LABELS = { taxesFees: 'Hotel Taxes & Fees', inRoomCharges: 'Hotel In-Room Charges' };
 function applyVacationLodgingFeeBooking(trip, lodging, feeType, categoryKey) {
-    const feeItem = { name: lodging.name, feeTypeLabel: VACATION_LODGING_FEE_TYPE_LABELS[feeType], cost: lodging[`${feeType}Amount`], paymentDate: lodging[`${feeType}Date`], paymentSource: lodging[`${feeType}PaymentSource`], prepaidTxId: lodging[`${feeType}TxId`] };
+    // Confirmed real bug, 2026-09-02 ("I have found many hotel tax transactions created in the
+    // original payment methods ledger"): this shim was missing `prepaidTxSource`, so
+    // applyVacationItemBooking()'s own "remove the old transaction before creating a new one" step
+    // (removeVacationPrepaidTransaction(), which reads item.prepaidTxSource to know which ledger to
+    // search) could never find the old transaction to remove — every single save silently failed to
+    // clean up the previous one and just added another, indefinitely.
+    const feeItem = { name: lodging.name, feeTypeLabel: VACATION_LODGING_FEE_TYPE_LABELS[feeType], cost: lodging[`${feeType}Amount`], paymentDate: lodging[`${feeType}Date`], paymentSource: lodging[`${feeType}PaymentSource`], prepaidTxId: lodging[`${feeType}TxId`], prepaidTxSource: lodging[`${feeType}TxSource`] };
     const ok = applyVacationItemBooking(trip, feeItem, 'lodgingFee', categoryKey);
     lodging[`${feeType}TxId`] = feeItem.prepaidTxId;
     lodging[`${feeType}TxSource`] = feeItem.prepaidTxSource;
@@ -24279,7 +24287,7 @@ function getVacationCategoryPlannedAmount(category, trip) {
     return total;
 }
 
-function applyVacationItemBooking(trip, item, itemType, categoryKey) {
+function applyVacationItemBooking(trip, item, itemType, categoryKey, options = {}) {
     const amount = Number(item.cost) || 0;
     const dateStr = item.paymentDate;
     let source = item.paymentSource;
@@ -24290,12 +24298,6 @@ function applyVacationItemBooking(trip, item, itemType, categoryKey) {
         alert('Enter a valid amount, payment date, and payment source before marking as booked.');
         return false;
     }
-    if (item.prepaidTxId) removeVacationPrepaidTransaction(item);
-
-    const dateObj = new Date(dateStr + 'T00:00:00');
-    const y = dateObj.getFullYear();
-    const mShort = MONTH_ORDER[dateObj.getMonth()];
-    const key = `${y}-${mShort}`;
 
     let itemDesc = '';
     if (itemType === 'flight') {
@@ -24309,6 +24311,74 @@ function applyVacationItemBooking(trip, item, itemType, categoryKey) {
         itemDesc = item.name || 'Expense';
     }
     const description = `${trip.name}: ${itemDesc}`;
+
+    // Was this already booked, and does that real transaction still exist? Re-checked on every
+    // call (including a save that changes nothing) rather than trusting item.prepaidTxId blindly —
+    // confirmed real bugs, 2026-09-02: (1) this function used to unconditionally delete-then-
+    // recreate a fresh transaction on every single call, discarding the old one's identity even
+    // when nothing had changed; (2) if the user deleted the real transaction directly from the
+    // Credit Card/Checking page (bypassing this record's own tracking), item.prepaidTxId stayed
+    // stale, and the very next save silently recreated it — "I delete it and make a change... and
+    // the transaction gets added back."
+    const existingTx = item.prepaidTxId ? findVacationBookedTransaction(item.prepaidTxSource, item.prepaidTxId) : null;
+
+    if (item.prepaidTxId && !existingTx) {
+        // Tracked, but the real row is gone — deleted elsewhere. Treat as unbooked rather than
+        // silently resurrecting a transaction the user explicitly removed; falls through to the
+        // normal not-yet-booked path below, past-date confirmation included.
+        item.prepaidTxId = null;
+        item.prepaidTxSource = null;
+    } else if (existingTx && item.prepaidTxSource === source) {
+        // Still booked, same source — update the SAME real transaction in place instead of
+        // deleting and recreating a new one. This is what actually stops duplicate hotel-tax/
+        // in-room-charge/etc. transactions from piling up on every edit.
+        existingTx.date = dateStr;
+        existingTx.vacationCategoryKey = categoryKey;
+        if (source === 'joint') {
+            existingTx.name = description;
+            existingTx.amount = -amount;
+        } else if (source === 'jason' || source === 'asia') {
+            existingTx.description = description;
+            existingTx.amount = -amount;
+        } else {
+            // Credit card row — mirrors the CREATE branch's own field split (merchant/description)
+            // and must adjust the card's current balance by the DELTA, not the new amount, since
+            // the old amount's effect is already reflected in it.
+            const oldAmount = Number(existingTx.amount) || 0;
+            existingTx.merchant = trip.name;
+            existingTx.description = itemDesc;
+            existingTx.amount = -amount;
+            adjustCardCurrentBalance(source, existingTx.amount - oldAmount);
+            refreshMaterializedCardStatementCharges(source);
+        }
+        item.bookedAmount = amount;
+        return true;
+    }
+    // Otherwise: never booked, OR the source changed (existingTx is real but under the OLD source)
+    // — falls through to remove-old(if any, from its OLD source)-then-create-fresh below, which is
+    // exactly the correct "move it" behavior for a real source change.
+
+    // A genuinely NEW booking (never tracked before) dated in the past gets a confirmation first —
+    // per explicit user request, 2026-09-02 — rather than silently posting a real ledger charge for
+    // a date that's already gone by. Re-prompts on every save until answered Yes (or the date/
+    // amount is cleared), by design: nothing was actually posted, so there's nothing to remember
+    // "no" about. Does NOT re-prompt for an already-booked item just moving between payment
+    // sources — the user already confirmed that charge is real the first time.
+    if (!item.prepaidTxId && !options.skipPastDateConfirm) {
+        const todayStr = formatLocalDate(new Date());
+        if (dateStr < todayStr) {
+            const sourceLabel = source === 'joint' ? 'Joint Checking' : source === 'asia' ? "Asia's Checking" : source === 'jason' ? "Jason's Checking" : (state.loans.find(l => l.id === source)?.name || source);
+            const proceed = confirm(`${itemDesc} (${formatVacationMoney(amount)}) has a payment date of ${formatDateDisplay(dateStr)}, which is in the past.\n\nAdd this to ${sourceLabel}'s ledger now?`);
+            if (!proceed) return false;
+        }
+    }
+
+    if (item.prepaidTxId) removeVacationPrepaidTransaction(item);
+
+    const dateObj = new Date(dateStr + 'T00:00:00');
+    const y = dateObj.getFullYear();
+    const mShort = MONTH_ORDER[dateObj.getMonth()];
+    const key = `${y}-${mShort}`;
     const nowStamp = Date.now();
     let txId;
 
@@ -28412,8 +28482,10 @@ function setupVacationEventListeners() {
             // way Lodging/Flights now auto-post once a cost + date are known, rather than requiring a
             // separate manual "Book This" click in the Expenses table. Only defaults plannedDate the
             // first time; a date set later via the category's own Edit dialog is left alone.
-            // applyVacationPrepaidBooking() is safe to call on every save (it removes+recreates its
-            // own transaction), so this stays correct if the amount/source changes on a later edit.
+            // applyVacationPrepaidBooking() is safe to call on every save — it updates the existing
+            // real transaction in place if nothing changed, moves it if the source changed, and only
+            // creates fresh if it was never booked — so this stays correct as the amount/source
+            // change on later edits without piling up duplicate transactions.
             if (cruiseCostAmount > 0.005) {
                 if (!cruiseCat.plannedDate) cruiseCat.plannedDate = formatLocalDate(new Date());
                 applyVacationPrepaidBooking(tripObj, cruiseCat);
@@ -28589,10 +28661,10 @@ function setupVacationEventListeners() {
             }
             const isRebook = !!category.prepaidTxId;
             const confirmMsg = isRebook
-                ? `Re-book ${category.label} as a real ${formatVacationMoney(amount)} transaction on ${formatDateDisplay(category.plannedDate)}? This deletes the previous booked transaction and replaces it with this one.`
+                ? `Re-book ${category.label} as a real ${formatVacationMoney(amount)} transaction on ${formatDateDisplay(category.plannedDate)}? This updates the previously booked transaction (or moves it, if the payment source changed).`
                 : `Book ${category.label} as a real ${formatVacationMoney(amount)} transaction on ${formatDateDisplay(category.plannedDate)}? This posts to your real ledger.`;
             if (!confirm(confirmMsg)) return;
-            if (applyVacationPrepaidBooking(trip, category)) {
+            if (applyVacationPrepaidBooking(trip, category, { skipPastDateConfirm: true })) {
                 saveDatabase();
                 renderVacationTab();
                 logSuccess(`${isRebook ? 'Re-booked' : 'Booked'} ${category.label} for ${trip.name}: ${formatVacationMoney(amount)} on ${formatDateDisplay(category.plannedDate)}.`);
