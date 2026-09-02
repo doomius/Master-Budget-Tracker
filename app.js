@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-02 14:24';
+const BUILD_VERSION = '2026-09-02 14:38';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25603,7 +25603,21 @@ function renderVacationTab() {
                     const entryAmt = Number(entry.amount) || 0;
                     if (Math.abs(entryAmt) <= 0.005) return;
                     actualTotal += entryAmt;
-                    addBreakdown(actualBreakdown, `${cat.label || cat.key}: ${entry.note || 'Actual'}`, entryAmt, cat.plannedSource);
+                    // A stable-id excursion-linked entry (see removeExcursionLinkedEntry()'s
+                    // "excursion-<id>" id convention) has its OWN real payment source recorded on
+                    // the excursion itself — using the category's generic plannedSource for these
+                    // was wrong. Confirmed real bug, 2026-09-02: $904 of real Wells Fargo/PayPal
+                    // excursion charges (Disneyland/Lucas Museum/Oogie Boogie Bash) showed
+                    // misattributed to the trip's master card (Chase Disney Premier), which had zero
+                    // actual charges on it. Only a manually-logged entry (via "Log Actual", no
+                    // linked excursion) has no better per-entry source to fall back to.
+                    let entrySource = cat.plannedSource;
+                    if (typeof entry.id === 'string' && entry.id.startsWith('excursion-')) {
+                        const linkedExId = entry.id.slice('excursion-'.length);
+                        const linkedEx = (trip.excursions || []).find(ex => ex.id === linkedExId);
+                        if (linkedEx) entrySource = linkedEx.paymentSource || cat.plannedSource;
+                    }
+                    addBreakdown(actualBreakdown, `${cat.label || cat.key}: ${entry.note || 'Actual'}`, entryAmt, entrySource);
                 });
             }
         });
