@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-03 10:37';
+const BUILD_VERSION = '2026-09-03 11:10';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -8666,10 +8666,9 @@ function setupEventListeners() {
         document.getElementById('loan-statement-day-group')?.classList.remove('hidden');
         document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
         document.getElementById('loan-funding-date-group')?.classList.toggle('hidden', isCredit);
-        // Debt Consolidation only makes sense when adding a brand-new loan — never while editing an
-        // existing one (see openEditLoanModal(), which always force-hides this section).
-        const isAdding = document.getElementById('loan-action').value !== 'edit';
-        document.getElementById('loan-consolidation-section')?.classList.toggle('hidden', isCredit || !isAdding);
+        // Debt Consolidation is loan-only (credit cards can't fund a payoff) — available whether
+        // adding or editing since 2026-09-03, see the section's own comment in app.js.
+        document.getElementById('loan-consolidation-section')?.classList.toggle('hidden', isCredit);
         updateStoreCardFields();
     });
 
@@ -8693,12 +8692,13 @@ function setupEventListeners() {
         document.getElementById(id)?.addEventListener('input', updateMortgageMinimumPayment);
     });
 
-    document.getElementById('loan-is-consolidation')?.addEventListener('change', (e) => {
-        document.getElementById('loan-consolidation-fields')?.classList.toggle('hidden', !e.target.checked);
-        if (e.target.checked) refreshLoanConsolidationTotal();
+    document.getElementById('loan-is-consolidation')?.addEventListener('change', refreshLoanConsolidationTotal);
+    document.getElementById('loan-funding-date')?.addEventListener('change', refreshConsolidationAmountsForNewDate);
+    document.getElementById('loan-start-bal')?.addEventListener('input', refreshLoanConsolidationTotal);
+    document.getElementById('loan-consolidation-cashout')?.addEventListener('input', (e) => {
+        e.target.dataset.manual = '1';
+        refreshLoanConsolidationTotal();
     });
-    document.getElementById('loan-consolidation-transfer-date')?.addEventListener('change', refreshLoanConsolidationTotal);
-    document.getElementById('loan-consolidation-cashout')?.addEventListener('input', refreshLoanConsolidationTotal);
 
     // Toggle active promo purchase rate inputs
     document.getElementById('loan-purchase-promo-active')?.addEventListener('change', (e) => {
@@ -9052,6 +9052,7 @@ function setupEventListeners() {
                 materializeAutomaticPaymentsForward(loan.id);
 
                 logSystem(`Updated payoff target: ${name}`);
+                saveLoanConsolidationSelections(loan.id, type, name, fundingDate);
             }
         } else {
             const id = name.toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -9100,23 +9101,7 @@ function setupEventListeners() {
             if (paymentStrategy === 'custom') materializeCustomScheduleMonths(id, tempEditingCustomSchedule);
             else if (type === 'credit' && (paymentStrategy === 'balance' || paymentStrategy === 'interestSaving' || paymentStrategy === 'minimum')) materializeAutomaticPaymentsForward(id);
             logSystem(`Added payoff target: ${name} (Balance: $${current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`);
-
-            // Debt Consolidation — only ever reachable when adding a brand-new loan (see
-            // #loan-consolidation-section's visibility rules above), so this only needs handling
-            // here in the 'add' branch, never in 'edit'. start/current already reflect the
-            // consolidation total (see refreshLoanConsolidationTotal(), which drives those same
-            // fields live as accounts/date/cash-out change) — this just posts the actual payoff/
-            // cash-out transactions to match.
-            if (type === 'loan' && document.getElementById('loan-is-consolidation').checked) {
-                const transferDate = document.getElementById('loan-consolidation-transfer-date').value;
-                const accounts = getSelectedLoanConsolidationAccounts();
-                const cashOutAmount = Math.max(0, Number(document.getElementById('loan-consolidation-cashout').value) || 0);
-                const cashOutDest = document.getElementById('loan-consolidation-cashout-dest').value;
-                if (transferDate && (accounts.length || cashOutAmount > 0)) {
-                    applyDebtConsolidation(id, accounts, transferDate, cashOutAmount, cashOutDest);
-                    logSystem(`Debt consolidation: ${accounts.map(a => a.name).join(', ') || 'no accounts'}${cashOutAmount > 0 ? ` + $${cashOutAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} cash out` : ''} → ${name}`);
-                }
-            }
+            saveLoanConsolidationSelections(id, type, name, fundingDate);
         }
 
         syncMortgageLoansToAllMonths();
@@ -9777,13 +9762,16 @@ function setupEventListeners() {
         document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
         document.getElementById('loan-mortgage-fields')?.classList.add('hidden');
 
-        // Reset Debt Consolidation fields — only offered for a brand-new loan (isCredit false here
-        // means type === 'loan'), never for a new credit card.
+        // Reset Debt Consolidation fields — loan-only (isCredit false here means type === 'loan'),
+        // never for a new credit card. Needs the loan's own Funding Date, which was just reset to
+        // empty above, so the section stays collapsed (via refreshLoanConsolidationTotal's own
+        // no-funding-date message) until the user enters one.
         document.getElementById('loan-consolidation-section')?.classList.toggle('hidden', isCredit);
         document.getElementById('loan-is-consolidation').checked = false;
         document.getElementById('loan-consolidation-fields')?.classList.add('hidden');
-        document.getElementById('loan-consolidation-transfer-date').value = formatLocalDate(new Date());
-        document.getElementById('loan-consolidation-cashout').value = '0';
+        const consolidationCashoutField = document.getElementById('loan-consolidation-cashout');
+        consolidationCashoutField.value = '0';
+        consolidationCashoutField.dataset.manual = '0';
         document.getElementById('loan-consolidation-cashout-dest').value = 'jason';
         document.getElementById('loan-consolidation-cashout-dest-group')?.classList.add('hidden');
         populateLoanConsolidationAccountList();
@@ -36352,105 +36340,266 @@ function deleteLoanAccount(account) {
     return true;
 }
 
-// Debt Consolidation (Add Installment Loan only — see #loan-consolidation-section in Index.html and
-// its wiring below/in the loan-form submit handler). Per explicit user request, 2026-08-04.
+// Debt Consolidation (Installment Loans only — available both when adding a new loan and when
+// editing an existing one; see #loan-consolidation-section in Index.html). Per explicit user
+// request, 2026-08-04, restructured 2026-09-03 per explicit user request to (a) work on an
+// already-existing loan, not just a brand-new one, (b) use the loan's own Funding Date instead of a
+// separate transfer-date field, (c) split the picker into Credit Cards / Other Loans, (d) make each
+// selected payoff amount independently editable instead of always-recomputed, and (e) treat the
+// loan's Starting Balance as the fixed, user-entered total — a payoff selection subtracts from that
+// fixed pool rather than growing it, with whatever's left over becoming the (also editable) cash-out
+// amount. Confirmed design choice via explicit user answer, 2026-09-03: "fixed total, leftover
+// computed" over "total grows to match selections" (the old behavior).
 
 function populateLoanConsolidationAccountList() {
-    const list = document.getElementById('loan-consolidation-account-list');
-    list.innerHTML = '';
-    if (!state.loans.length) {
-        list.innerHTML = '<span class="muted-text">No existing credit cards or loans to consolidate.</span>';
-        return;
-    }
-    state.loans.forEach(account => {
+    const editId = document.getElementById('loan-edit-id').value;
+    const cardListEl = document.getElementById('loan-consolidation-cards-list');
+    const loanListEl = document.getElementById('loan-consolidation-loans-list');
+    if (cardListEl) cardListEl.innerHTML = '';
+    if (loanListEl) loanListEl.innerHTML = '';
+
+    const buildRow = (account) => {
         const row = document.createElement('label');
+        row.className = 'loan-consolidation-account-row';
         row.style.cssText = 'display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-weight:normal;';
-        row.innerHTML = `<input type="checkbox" class="loan-consolidation-account-checkbox" data-account-id="${account.id}"> <span>${escapeHTML(account.name)} <span class="muted-text">(Bal: $${(Number(account.currentBal) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})</span></span>`;
-        row.querySelector('input')?.addEventListener('change', refreshLoanConsolidationTotal);
-        list.appendChild(row);
-    });
+        row.innerHTML = `<input type="checkbox" class="loan-consolidation-account-checkbox" data-account-id="${account.id}"><span style="flex:1;">${escapeHTML(account.name)} <span class="muted-text">(Bal: $${(Number(account.currentBal) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})</span></span><span class="input-prefix-wrapper" style="width:110px;"><span class="input-prefix">$</span><input type="number" autocomplete="off" step="0.01" class="custom-input loan-consolidation-account-amount" data-account-id="${account.id}" disabled></span>`;
+        const checkbox = row.querySelector('.loan-consolidation-account-checkbox');
+        const amountField = row.querySelector('.loan-consolidation-account-amount');
+        checkbox.addEventListener('change', () => {
+            amountField.disabled = !checkbox.checked;
+            if (checkbox.checked) {
+                amountField.dataset.manual = '0';
+                populateConsolidationAccountAmount(account.id);
+            }
+            refreshLoanConsolidationTotal();
+        });
+        amountField.addEventListener('input', () => {
+            amountField.dataset.manual = '1';
+            refreshLoanConsolidationTotal();
+        });
+        return row;
+    };
+
+    const cardAccounts = state.loans.filter(a => a.type === 'credit' && a.id !== editId);
+    const loanAccounts = state.loans.filter(a => a.type === 'loan' && a.id !== editId);
+    if (cardListEl) {
+        if (!cardAccounts.length) cardListEl.innerHTML = '<span class="muted-text">No credit cards to pay off.</span>';
+        else cardAccounts.forEach(a => cardListEl.appendChild(buildRow(a)));
+    }
+    if (loanListEl) {
+        if (!loanAccounts.length) loanListEl.innerHTML = '<span class="muted-text">No other loans to pay off.</span>';
+        else loanAccounts.forEach(a => loanListEl.appendChild(buildRow(a)));
+    }
 }
 
-// The statement balance "as of the previous statement" relative to a given transfer date — the
-// closing date getStatementClosingDateForPayment() would use if a payment were due ON that date,
-// which is exactly the boundary the user described: "the balance as of the previous statement."
-// Works for both credit cards and installment loans — both carry their own statementDay.
-function getConsolidationPayoffAmount(account, transferDate) {
-    if (!account || !transferDate) return 0;
-    const closingDate = getStatementClosingDateForPayment(account, transferDate);
+// Pre-checks and pre-fills whichever accounts already have a real Debt Consolidation payoff/cash-out
+// transaction tagged with THIS loan's id (consolidationLoanId) — so re-opening an already-consolidated
+// loan shows what's already been done instead of looking empty. This matters because saving replaces
+// every one of this loan's consolidation transactions with whatever's currently checked (see
+// applyDebtConsolidation()'s own comment) — without pre-population, opening Edit and checking one
+// MORE account without re-checking the ones from a prior save would silently delete those prior payoffs.
+function prefillExistingLoanConsolidation(loanId) {
+    const payoffsByAccount = {};
+    state.loans.forEach(account => {
+        Object.values(state.cardCalendars?.[account.id] || {}).forEach(list => {
+            (list || []).forEach(tx => {
+                if (tx.isDebtConsolidationPayment && tx.consolidationLoanId === loanId) payoffsByAccount[account.id] = Number(tx.amount) || 0;
+            });
+        });
+    });
+    let cashOutTx = null;
+    const scanForCashOut = list => (list || []).forEach(tx => { if (tx.isDebtConsolidationCashOut && tx.consolidationLoanId === loanId) cashOutTx = tx; });
+    scanForCashOut(state.jointRegister);
+    Object.values(state.asiaCalendar || {}).forEach(scanForCashOut);
+    Object.values(state.personalCalendar || {}).forEach(scanForCashOut);
+
+    const hasExisting = Object.keys(payoffsByAccount).length > 0 || !!cashOutTx;
+    document.getElementById('loan-is-consolidation').checked = hasExisting;
+    document.getElementById('loan-consolidation-fields')?.classList.toggle('hidden', !hasExisting);
+
+    Object.entries(payoffsByAccount).forEach(([accountId, amount]) => {
+        const checkbox = document.querySelector(`.loan-consolidation-account-checkbox[data-account-id="${accountId}"]`);
+        const amountField = document.querySelector(`.loan-consolidation-account-amount[data-account-id="${accountId}"]`);
+        if (checkbox) checkbox.checked = true;
+        if (amountField) {
+            amountField.disabled = false;
+            amountField.dataset.manual = '1';
+            amountField.value = amount.toFixed(2);
+        }
+    });
+    const cashOutField = document.getElementById('loan-consolidation-cashout');
+    if (cashOutTx) {
+        cashOutField.dataset.manual = '1';
+        cashOutField.value = (Number(cashOutTx.amount) || 0).toFixed(2);
+        document.getElementById('loan-consolidation-cashout-dest').value = state.jointRegister.includes(cashOutTx) ? 'joint'
+            : Object.values(state.asiaCalendar || {}).some(list => (list || []).includes(cashOutTx)) ? 'asia' : 'jason';
+    } else {
+        cashOutField.dataset.manual = '0';
+        cashOutField.value = '0';
+    }
+    if (hasExisting) refreshLoanConsolidationTotal();
+}
+
+// The statement balance "as of the previous statement" relative to a given date — the closing date
+// getStatementClosingDateForPayment() would use if a payment were due ON that date, which is exactly
+// the boundary the user described: "the balance as of the previous statement." Works for both credit
+// cards and installment loans — both carry their own statementDay.
+function getConsolidationPayoffAmount(account, payoffDate) {
+    if (!account || !payoffDate) return 0;
+    const closingDate = getStatementClosingDateForPayment(account, payoffDate);
     return Math.max(0, calculateCardLedgerBalance(account.id, closingDate));
 }
 
-function getSelectedLoanConsolidationAccounts() {
+// Fills one account's amount field from its real ledger balance — but only if the user hasn't
+// already typed their own value into it (data-manual), so re-checking a box or changing the funding
+// date never silently clobbers a deliberate edit.
+function populateConsolidationAccountAmount(accountId) {
+    const field = document.querySelector(`.loan-consolidation-account-amount[data-account-id="${accountId}"]`);
+    if (!field || field.dataset.manual === '1') return;
+    const fundingDate = document.getElementById('loan-funding-date').value;
+    const account = state.loans.find(a => a.id === accountId);
+    field.value = (fundingDate ? getConsolidationPayoffAmount(account, fundingDate) : 0).toFixed(2);
+}
+
+// Re-populates every currently-checked (non-manually-edited) account's amount whenever the Funding
+// Date changes, since that date is what the payoff amount is computed as of.
+function refreshConsolidationAmountsForNewDate() {
+    document.querySelectorAll('.loan-consolidation-account-checkbox:checked').forEach(cb => populateConsolidationAccountAmount(cb.dataset.accountId));
+    refreshLoanConsolidationTotal();
+}
+
+function getSelectedLoanConsolidationPayoffs() {
     return Array.from(document.querySelectorAll('.loan-consolidation-account-checkbox:checked'))
-        .map(cb => state.loans.find(l => l.id === cb.dataset.accountId))
+        .map(cb => {
+            const account = state.loans.find(l => l.id === cb.dataset.accountId);
+            const amountField = document.querySelector(`.loan-consolidation-account-amount[data-account-id="${cb.dataset.accountId}"]`);
+            const amount = Math.max(0, parseFloat(amountField?.value) || 0);
+            return account ? { account, amount } : null;
+        })
         .filter(Boolean);
 }
 
 function refreshLoanConsolidationTotal() {
-    const transferDate = document.getElementById('loan-consolidation-transfer-date').value;
-    const accounts = getSelectedLoanConsolidationAccounts();
-    const payoffTotal = accounts.reduce((sum, a) => sum + getConsolidationPayoffAmount(a, transferDate), 0);
-    const cashOut = Math.max(0, Number(document.getElementById('loan-consolidation-cashout').value) || 0);
-    const total = Math.round((payoffTotal + cashOut) * 100) / 100;
-    document.getElementById('loan-consolidation-cashout-dest-group')?.classList.toggle('hidden', cashOut <= 0);
+    const enabled = document.getElementById('loan-is-consolidation').checked;
+    const fundingDate = document.getElementById('loan-funding-date').value;
+    document.getElementById('loan-consolidation-no-funding-date')?.classList.toggle('hidden', !enabled || !!fundingDate);
+    document.getElementById('loan-consolidation-fields')?.classList.toggle('hidden', !enabled || !fundingDate);
+    if (!enabled || !fundingDate) return;
+
+    const loanAmount = Math.max(0, parseFloat(document.getElementById('loan-start-bal').value) || 0);
+    const payoffs = getSelectedLoanConsolidationPayoffs();
+    const payoffTotal = Math.round(payoffs.reduce((sum, p) => sum + p.amount, 0) * 100) / 100;
+    const remainder = Math.round((loanAmount - payoffTotal) * 100) / 100;
+
+    const cashOutField = document.getElementById('loan-consolidation-cashout');
+    if (cashOutField.dataset.manual !== '1') cashOutField.value = Math.max(0, remainder).toFixed(2);
+    const cashOut = Math.max(0, parseFloat(cashOutField.value) || 0);
+    const unallocated = Math.round((remainder - cashOut) * 100) / 100;
+    document.getElementById('loan-consolidation-cashout-dest-group')?.classList.toggle('hidden', cashOut <= 0.005);
+
+    const money = v => `$${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     const summary = document.getElementById('loan-consolidation-total-summary');
-    summary.textContent = accounts.length
-        ? `Payoff total: $${payoffTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} + Cash out: $${cashOut.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} = Loan Amount: $${total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
-        : 'Select at least one account to pay off, or just enter a cash-out amount.';
-    // Drive the loan's own Starting/Current Balance fields from this total — same fields the form
-    // already saves from normally, so no separate "consolidation amount" field is needed downstream.
-    document.getElementById('loan-start-bal').value = total.toFixed(2);
-    document.getElementById('loan-current-bal').value = total.toFixed(2);
+    if (summary) {
+        let html = `Loan Amount: ${money(loanAmount)} &nbsp;|&nbsp; Payoffs: ${money(payoffTotal)} &nbsp;|&nbsp; Cash Out: ${money(cashOut)}`;
+        if (Math.abs(unallocated) > 0.005) {
+            html += unallocated < 0
+                ? ` &nbsp;|&nbsp; <span style="color:var(--color-danger);">Over Loan Amount by ${money(Math.abs(unallocated))}</span>`
+                : ` &nbsp;|&nbsp; Unallocated: ${money(unallocated)}`;
+        }
+        summary.innerHTML = html;
+    }
 }
 
-// Posts one payoff payment (funded by the new consolidation loan, not checking — see the PR
-// description in the loan-form submit handler) to each selected account, dated on the transfer
-// date, equal to that account's statement balance as of the closing date just before it. Existing
-// automatic-payment logic (ensureAutomaticCardPaymentForMonth) already skips generating a payment
-// once an account's computed balance is $0, and already only ever pays whatever the current running
-// statement balance is — so a paid-off account's future automatic payments simply stop appearing on
-// their own, and one with ongoing recurring charges keeps getting paid for just that new balance,
-// with no extra logic needed here beyond inserting this one real transaction per account.
-function applyDebtConsolidation(newLoanId, accounts, transferDate, cashOutAmount, cashOutDest) {
-    const newLoan = state.loans.find(l => l.id === newLoanId);
-    const dateObj = new Date(transferDate + 'T00:00:00');
+// Posts one payoff payment (funded by this loan, not checking) to each selected account, dated on
+// the loan's Funding Date, equal to whatever amount is shown for it (pre-filled from that account's
+// statement balance as of the closing date just before the funding date, editable by the user).
+// Existing automatic-payment logic (ensureAutomaticCardPaymentForMonth) already skips generating a
+// payment once an account's computed balance is $0, and already only ever pays whatever the current
+// running statement balance is — so a paid-off account's future automatic payments simply stop
+// appearing on their own, with no extra logic needed here beyond inserting one real transaction per
+// account. Idempotent/self-healing like every other auto-generated charge in this app: it removes
+// EVERY existing consolidation transaction tagged with this loan's id first (consolidationLoanId),
+// then recreates fresh ones for whatever's currently selected — safe to call on every save, whether
+// this is the loan's first consolidation or the user is coming back later to add one more account.
+function removeExistingLoanConsolidationTransactions(loanId) {
+    state.loans.forEach(account => {
+        Object.keys(state.cardCalendars?.[account.id] || {}).forEach(key => {
+            state.cardCalendars[account.id][key] = (state.cardCalendars[account.id][key] || []).filter(tx => !(tx.isDebtConsolidationPayment && tx.consolidationLoanId === loanId));
+        });
+    });
+    state.jointRegister = (state.jointRegister || []).filter(tx => !(tx.isDebtConsolidationCashOut && tx.consolidationLoanId === loanId));
+    Object.keys(state.asiaCalendar || {}).forEach(key => {
+        state.asiaCalendar[key] = (state.asiaCalendar[key] || []).filter(tx => !(tx.isDebtConsolidationCashOut && tx.consolidationLoanId === loanId));
+    });
+    Object.keys(state.personalCalendar || {}).forEach(key => {
+        state.personalCalendar[key] = (state.personalCalendar[key] || []).filter(tx => !(tx.isDebtConsolidationCashOut && tx.consolidationLoanId === loanId));
+    });
+}
+
+// Reads the consolidation UI's current state (whatever's checked/typed at Save time) and applies
+// it — shared by both the 'add' and 'edit' branches of the loan-form submit handler, since Debt
+// Consolidation works identically in either now. Unchecking every account and zeroing Cash Out
+// still runs applyDebtConsolidation() with empty payoffs — its own remove-existing-first behavior
+// means that's exactly how a user removes all of this loan's consolidation activity. If the loan
+// has no Funding Date (or isn't a loan at all), just clean up defensively in case one was cleared
+// after already being used, rather than silently leaving orphaned payoff transactions behind.
+function saveLoanConsolidationSelections(loanId, type, name, fundingDate) {
+    if (type !== 'loan' || !fundingDate) {
+        removeExistingLoanConsolidationTransactions(loanId);
+        return;
+    }
+    if (!document.getElementById('loan-is-consolidation').checked) {
+        removeExistingLoanConsolidationTransactions(loanId);
+        return;
+    }
+    const payoffs = getSelectedLoanConsolidationPayoffs();
+    const cashOutAmount = Math.max(0, parseFloat(document.getElementById('loan-consolidation-cashout').value) || 0);
+    const cashOutDest = document.getElementById('loan-consolidation-cashout-dest').value;
+    applyDebtConsolidation(loanId, payoffs, fundingDate, cashOutAmount, cashOutDest);
+    if (payoffs.length || cashOutAmount > 0.005) {
+        logSystem(`Debt consolidation: ${payoffs.map(p => `${p.account.name} ($${p.amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})`).join(', ') || 'no accounts'}${cashOutAmount > 0.005 ? ` + $${cashOutAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} cash out` : ''} → ${name}`);
+    }
+}
+
+function applyDebtConsolidation(loanId, payoffs, payoffDate, cashOutAmount, cashOutDest) {
+    const loan = state.loans.find(l => l.id === loanId);
+    removeExistingLoanConsolidationTransactions(loanId);
+    const dateObj = new Date(payoffDate + 'T00:00:00');
     const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
     ensureYearMonthInitialized(dateObj.getFullYear(), MONTH_ORDER[dateObj.getMonth()]);
 
-    accounts.forEach(account => {
-        const payoffAmount = getConsolidationPayoffAmount(account, transferDate);
-        if (payoffAmount <= 0.005) return;
+    payoffs.forEach(({ account, amount }) => {
+        if (amount <= 0.005) return;
         if (!state.cardCalendars[account.id]) state.cardCalendars[account.id] = {};
         if (!state.cardCalendars[account.id][key]) state.cardCalendars[account.id][key] = [];
         state.cardCalendars[account.id][key].push({
             id: 'c-' + Math.random().toString(36).substr(2, 9),
-            date: transferDate,
-            description: `Debt Consolidation Payoff (${newLoan ? newLoan.name : 'New Loan'})`,
+            date: payoffDate,
+            description: `Debt Consolidation Payoff (${loan ? loan.name : 'Loan'})`,
             merchant: account.name,
-            amount: payoffAmount,
+            amount: amount,
             transactionKind: 'payment',
             owner: account.paymentSource === 'joint' ? 'joint' : account.paymentSource === 'asia' ? 'asia' : 'jason',
             isDebtConsolidationPayment: true,
-            consolidationLoanId: newLoanId
+            consolidationLoanId: loanId
         });
-        account.currentBal = Math.max(0, (Number(account.currentBal) || 0) - payoffAmount);
+        account.currentBal = Math.max(0, (Number(account.currentBal) || 0) - amount);
         // This month's automatic payment (if any) was computed before the payoff posted — clear it
         // so ensureAutomaticCardPaymentForMonth recomputes against the now-$0 (or reduced) balance
         // instead of leaving a stale duplicate payment sitting alongside this one.
-        clearFutureAutomaticCardPayments(account.id, transferDate);
+        clearFutureAutomaticCardPayments(account.id, payoffDate);
     });
 
     if (cashOutAmount > 0.005) {
         const cashOutTx = {
             id: (cashOutDest === 'joint' ? 'j-' : cashOutDest === 'asia' ? 'a-' : 'p-') + Math.random().toString(36).substr(2, 9),
             type: cashOutDest === 'joint' ? 'income' : undefined,
-            name: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
-            description: `Debt Consolidation Cash-Out (${newLoan ? newLoan.name : 'New Loan'})`,
-            date: transferDate,
+            name: `Debt Consolidation Cash-Out (${loan ? loan.name : 'Loan'})`,
+            description: `Debt Consolidation Cash-Out (${loan ? loan.name : 'Loan'})`,
+            date: payoffDate,
             amount: Math.abs(cashOutAmount),
             isDebtConsolidationCashOut: true,
-            consolidationLoanId: newLoanId
+            consolidationLoanId: loanId
         };
         if (cashOutDest === 'joint') state.jointRegister.push(cashOutTx);
         else if (cashOutDest === 'asia') { if (!state.asiaCalendar[key]) state.asiaCalendar[key] = []; state.asiaCalendar[key].push(cashOutTx); }
@@ -36580,11 +36729,20 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
     document.getElementById('loan-mortgage-fields')?.classList.toggle('hidden', !isMortgage);
 
-    // Debt Consolidation is a one-time, creation-only action (see the loan-form submit handler) —
-    // never shown while editing an existing loan.
-    document.getElementById('loan-consolidation-section')?.classList.add('hidden');
+    // Debt Consolidation — available for an existing loan too since 2026-09-03 (see
+    // saveLoanConsolidationSelections()'s own comment). Build the picker fresh (excludes this loan
+    // itself), then pre-check/pre-fill whatever this loan has already consolidated so a later edit
+    // adds to it instead of silently erasing it on save.
+    document.getElementById('loan-consolidation-section')?.classList.toggle('hidden', isCredit);
     document.getElementById('loan-is-consolidation').checked = false;
     document.getElementById('loan-consolidation-fields')?.classList.add('hidden');
+    const consolidationCashoutFieldEdit = document.getElementById('loan-consolidation-cashout');
+    consolidationCashoutFieldEdit.value = '0';
+    consolidationCashoutFieldEdit.dataset.manual = '0';
+    if (!isCredit) {
+        populateLoanConsolidationAccountList();
+        prefillExistingLoanConsolidation(loan.id);
+    }
 
     dialog.showModal();
 }
