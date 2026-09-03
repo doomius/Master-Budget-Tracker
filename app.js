@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-02 18:15';
+const BUILD_VERSION = '2026-09-03 10:37';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -3177,6 +3177,43 @@ function migrateDatabase() {
                 loan.promos = [];
                 migrated = true;
             }
+            // deriveCardPromoBalances() (2026-09-03) needs a balanceAsOfDate anchor to know which
+            // ledger payments are "after" a promo's currently-stored currentBalance and therefore
+            // eligible to reduce it further — see that function's own comment for the bug this
+            // fixes. Every promo recorded before this shipped predates the field; backfilling it to
+            // today (the date this migration runs) is the correct anchor for a manually-entered
+            // number with no other reliable "as of" timestamp, and is a one-time no-op on every
+            // later load once every promo has it.
+            loan.promos.forEach(promo => {
+                if (promo.isXfer && promo.balanceAsOfDate === undefined) {
+                    promo.balanceAsOfDate = formatLocalDate(new Date());
+                    migrated = true;
+                }
+                // startDate similarly missing on every pre-existing promo — but unlike
+                // balanceAsOfDate, an executeBalanceTransfer()-created promo (id === its ledger
+                // transactions' shared balanceTransferId) has a REAL, discoverable execution date
+                // sitting right in its own card's ledger, so backfill from there instead of leaving
+                // it '' (eligible from the beginning of time) whenever a match is found. Confirmed a
+                // real, user-reported bug this caused, 2026-09-03: a transfer executed 2026-08-05 had
+                // no startDate, so deriveCardPromoBalances() counted it as already active for a JULY
+                // 23 statement two weeks before it happened, silently inflating that month's tracked
+                // 0%-promo balance and understating standard-rate interest by the transfer's own
+                // amount. An "existing transfer" (recordExistingBalanceTransfer, no linked ledger
+                // transaction — its whole point is predating this app's tracking) correctly finds no
+                // match and stays '' — that one genuinely doesn't have a knowable start date.
+                if (promo.isXfer && promo.startDate === undefined) {
+                    let earliestDate = '';
+                    Object.values(state.cardCalendars?.[loan.id] || {}).forEach(list => {
+                        (list || []).forEach(tx => {
+                            if (tx.balanceTransferId === promo.id && tx.date && (!earliestDate || tx.date < earliestDate)) {
+                                earliestDate = tx.date;
+                            }
+                        });
+                    });
+                    promo.startDate = earliestDate;
+                    migrated = true;
+                }
+            });
             if (loan.limit === undefined) {
                 loan.limit = loan.startBal || 5000;
                 migrated = true;
@@ -8628,6 +8665,7 @@ function setupEventListeners() {
         document.getElementById('loan-xfer-section')?.classList.toggle('hidden', !isCredit);
         document.getElementById('loan-statement-day-group')?.classList.remove('hidden');
         document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
+        document.getElementById('loan-funding-date-group')?.classList.toggle('hidden', isCredit);
         // Debt Consolidation only makes sense when adding a brand-new loan — never while editing an
         // existing one (see openEditLoanModal(), which always force-hides this section).
         const isAdding = document.getElementById('loan-action').value !== 'edit';
@@ -8809,6 +8847,10 @@ function setupEventListeners() {
                 item.rate = rate;
                 item.expDate = expDate;
                 item.transferOwner = transferOwner;
+                // The just-entered currentBalance is accurate as of right now — re-anchor so
+                // deriveCardPromoBalances() only simulates ledger payments dated AFTER this edit
+                // against it, not ones already reflected in the number the user just typed in.
+                item.balanceAsOfDate = formatLocalDate(new Date());
             }
             resetXferEditor();
             saveDatabase();
@@ -8875,6 +8917,9 @@ function setupEventListeners() {
         const storeName = isStoreCard ? document.getElementById('loan-store-name').value.trim() : '';
         const start = parseFloat(document.getElementById('loan-start-bal').value);
         const current = parseFloat(document.getElementById('loan-current-bal').value);
+        // See ensureLoanFundingPosted()/getAccountBalanceSeed()'s own comments — a not-yet-taken-out
+        // loan planned ahead of time so its payment can be budgeted before it's real.
+        const fundingDate = type === 'loan' ? document.getElementById('loan-funding-date').value : '';
         const rate = parseFloat(document.getElementById('loan-interest-rate').value) || 0;
         const due = parseInt(document.getElementById('loan-due-day').value) || 15;
         const statementDay = parseInt(document.getElementById('loan-statement-day').value) || 1;
@@ -8920,6 +8965,7 @@ function setupEventListeners() {
                 loan.isStoreCard = isStoreCard;
                 loan.storeName = storeName;
                 loan.startBal = start;
+                loan.fundingDate = fundingDate;
                 loan.currentBal = current;
                 loan.interestRate = rate;
                 loan.dueDay = due;
@@ -9019,6 +9065,7 @@ function setupEventListeners() {
                 isStoreCard: isStoreCard,
                 storeName: storeName,
                 startBal: start,
+                fundingDate: fundingDate,
                 currentBal: current,
                 interestRate: rate,
                 dueDay: due,
@@ -9708,6 +9755,9 @@ function setupEventListeners() {
         document.getElementById('loan-payment-strategy-group')?.classList.toggle('hidden', !isCredit);
         document.getElementById('loan-xfer-section')?.classList.toggle('hidden', !isCredit);
         document.getElementById('loan-statement-day-group')?.classList.remove('hidden');
+        document.getElementById('loan-funding-date-group')?.classList.toggle('hidden', isCredit);
+        const fundingDateField = document.getElementById('loan-funding-date');
+        if (fundingDateField) fundingDateField.value = '';
         document.getElementById('loan-store-card-group')?.classList.toggle('hidden', !isCredit);
         document.getElementById('loan-store-name-group')?.classList.add('hidden');
         document.getElementById('loan-store-name').required = false;
@@ -11941,6 +11991,13 @@ function renderAppImmediate() {
     // shrinks the CSS viewport, not window.screen.width) no longer flips the whole app into mobile
     // layout the way a real @media query always would have.
     _syncMobileScreenClass();
+    // Idempotent — safe to call on every render, and deliberately NOT gated by month navigation the
+    // way postInstallmentLoanInterestForMonth/rebuildDebtMonthFinance are (those only run for a month
+    // the user has actually visited/materialized). A loan's funding charge needs to exist in the
+    // ledger immediately once a fundingDate is set — regardless of how far in the future it is —
+    // so payoff projections and balance summaries reflect the planned debt right away, which is the
+    // whole point of entering it ahead of time (see ensureLoanFundingPosted()'s own comment).
+    (state.loans || []).filter(l => l.type === 'loan').forEach(ensureLoanFundingPosted);
     // Idempotent — safe to call on every render. Guarantees header-button visibility (Payroll,
     // Starting Balance, the date selector, etc.) is correct after the very first paint too, not just
     // after a tab switch or toggle click explicitly calls updateTabTitles() itself. Without this, a
@@ -17826,7 +17883,7 @@ function renderCardList() {
 
     txList.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    let balance = card.startBal || 0;
+    let balance = getAccountBalanceSeed(card);
     if (txList.length > 0) {
         balance = getCardRunningBalanceAtDate(cardId, txList[0].date);
     }
@@ -22733,7 +22790,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
                 case 'name': return (account.name || '').toLowerCase();
                 case 'startingBalance': return Number(account.startBal) || 0;
                 case 'currentBalance': return balance;
-                case 'paidToDate': return Math.max(0, (Number(account.startBal) || 0) - Math.max(0, balance));
+                case 'paidToDate': return getAccountPaidToDate(account, balance);
                 default: return '';
             }
         };
@@ -22762,7 +22819,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
         const balance = calculateCardLedgerBalance(account.id);
         account.currentBal = balance;
         const startingBalance = Number(account.startBal) || 0;
-        const paidToDate = Math.max(0, startingBalance - Math.max(0, balance));
+        const paidToDate = getAccountPaidToDate(account, balance);
         const payoffProjection = projectCardPayoffPath(account.id, 0, formatLocalDate(new Date()), 0, 0, false, 600);
         const payoffDate = payoffProjection.payoffDate || 'Payment too low';
         const icon = getDebtAccountIcon(account);
@@ -22970,6 +23027,9 @@ function recordExistingBalanceTransfer(targetId, originalAmount, currentBalance,
         amount: originalAmount,
         originalAmount,
         currentBalance,
+        // The entered currentBalance is accurate as of today — deriveCardPromoBalances() anchor,
+        // see that function's own comment.
+        balanceAsOfDate: formatLocalDate(new Date()),
         rate,
         expDate,
         isXfer: true,
@@ -23141,6 +23201,11 @@ function executeBalanceTransfer(targetId, sourceId, amount, feePct, rate, expDat
         amount: totalAdded,
         originalAmount: amount,
         currentBalance: totalAdded,
+        // totalAdded is exactly the transfer's real ledger charge posted on postDateStr — the
+        // natural startDate/balanceAsOfDate anchor for deriveCardPromoBalances(), unlike
+        // recordExistingBalanceTransfer's "today" fallback for a transfer with no known start.
+        startDate: postDateStr,
+        balanceAsOfDate: postDateStr,
         rate: rate,
         expDate: expDate,
         isXfer: true,
@@ -23468,7 +23533,7 @@ function updateTabTitles() {
         if (loan) {
             const balance = calculateCardLedgerBalance(loan.id);
             const startBal = Number(loan.startBal) || 0;
-            const paidPct = startBal > 0 ? Math.min(100, Math.max(0, ((startBal - balance) / startBal) * 100)) : 100;
+            const paidPct = getLoanPaidPercent(loan, balance);
             const apr = Number(loan.interestRate) || 0;
             const monthlyPayment = getLoanDebtPaymentAmount(loan);
             const icon = getDebtAccountIcon(loan);
@@ -30813,7 +30878,7 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
     // Loan interest accrues on each day's actual ledger balance, using APR / 365. Payments made
     // during the statement cycle therefore reduce interest for every day after they post. The
     // closing-day payment and a closing-day reconciliation are applied after interest closes.
-    let dailyBalance = Number(loan.startBal) || 0;
+    let dailyBalance = getAccountBalanceSeed(loan);
     allTransactions.forEach(tx => {
         if (tx.date > previousClosingDateStr || tx.isLoanEstimatedInterest && tx.date === closingDateStr) return;
         const amount = Number(tx.amount);
@@ -30840,7 +30905,7 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
         cursor.setDate(cursor.getDate() + 1);
     }
 
-    let balanceBeforeInterest = Number(loan.startBal) || 0;
+    let balanceBeforeInterest = getAccountBalanceSeed(loan);
     allTransactions.forEach(tx => {
         if (tx.date > closingDateStr || tx.isLoanEstimatedInterest && tx.date === closingDateStr) return;
         const amount = Number(tx.amount);
@@ -30865,6 +30930,45 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
         interestPeriodDays: accruedDays,
         dailyRate
     });
+}
+
+// One day's total credit-card interest accrual (every promo/transfer-rate bucket plus the
+// standard-rate balance), shared by postCardStatementChargesForMonth, computeAllEstimatedBalancesForCard,
+// and projectCardPayoffPath so all three day-by-day balance walks compute interest identically —
+// added 2026-09-03, replacing each one's own independent point-in-time (balance-at-statement-close
+// × monthly-rate) calculation with true daily accrual. Real card issuers use Average Daily Balance
+// (confirmed against the user's real Comerica/Elan statements' own "Method of Computing Balance
+// Subject to Interest Rate" disclosure) — a single end-of-cycle snapshot is a reasonable
+// approximation for a quiet cycle but badly understates interest for a cycle with a large mid-cycle
+// swing, since it only ever sees the balance AFTER any big payment already landed: verified live,
+// August 2026's real cycle (a balance transfer + fee early in the cycle followed by a large payment
+// near the end) computed $28.96 under the old snapshot approach vs. the real statement's $60.86 —
+// more than double, because the balance was far higher than the ending snapshot for most of the
+// cycle. `dailyBalance`/`planBalanceSum` are supplied by the caller (each of the three day-by-day
+// loops already tracks the total ledger balance and, separately, payment-plan balances, for their
+// own unrelated reasons) — this only owns the promo/transfer-rate and standard-rate portion, calling
+// deriveCardPromoBalances() fresh for the given day so a transfer that starts or expires mid-cycle
+// is picked up automatically and correctly, exactly like postCardStatementChargesForMonth's
+// point-in-time predecessor already did at the single statement-close date it used to check.
+function getCardDailyInterestAccrual(cardId, card, dateObj, dateStr, dailyBalance, planBalanceSum) {
+    let promoBalanceSum = 0;
+    let promoInterest = 0;
+    deriveCardPromoBalances(cardId, dateStr).forEach(promo => {
+        if (promo.currentBalance <= 0.005 || !promo.expDate) return;
+        if (promo.startDate && dateStr < promo.startDate) return;
+        const expTime = new Date(promo.expDate + 'T00:00:00').getTime();
+        if (dateObj.getTime() <= expTime) {
+            promoBalanceSum += promo.currentBalance;
+            promoInterest += promo.currentBalance * (Math.max(0, Number(promo.rate) || 0) / 100 / 365);
+        }
+    });
+    let purchaseDailyRate = Math.max(0, (card.paymentStrategy === 'balance' ? 0 : Number(card.interestRate) || 0)) / 100 / 365;
+    if (card.promoActive && card.promoExpDate) {
+        const promoExpTime = new Date(card.promoExpDate + 'T00:00:00').getTime();
+        if (dateObj.getTime() <= promoExpTime) purchaseDailyRate = Math.max(0, Number(card.promoRate) || 0) / 100 / 365;
+    }
+    const standardBalance = Math.max(0, dailyBalance - promoBalanceSum - Math.max(0, Number(planBalanceSum) || 0));
+    return standardBalance * purchaseDailyRate + promoInterest;
 }
 
 // Posts a card's statement-date interest and payment-plan fees as real, individually visible
@@ -30921,7 +31025,6 @@ function postCardStatementChargesForMonth(cardId, year, month) {
         if ((item.isEstimatedInterest || item.isPlanFee) && !item.overridden) cardList.splice(i, 1);
     }
 
-    const balanceBeforeCharges = calculateCardLedgerBalance(cardId, statementDateStr);
     const statementDateObj = new Date(statementDateStr + 'T00:00:00');
     // A store card's own name rarely means anything on its own calendar (it's already the only
     // account shown there) — its storeName is the more useful "merchant" to show on these
@@ -30933,13 +31036,9 @@ function postCardStatementChargesForMonth(cardId, year, month) {
     // useful, not just a combined "Payment Plan Fee(s)" total with no way to tell which plan it came
     // from or when any one of them finishes.
     const plans = deriveCardPaymentPlanBalances(cardId, statementDateStr);
-    let planFeesTotal = 0;
-    let planBalancesTotal = 0;
     plans.forEach(plan => {
         if (plan.currentBalance <= 0.005 || statementDateStr < plan.startDate) return;
-        planBalancesTotal += plan.currentBalance;
         if (Number(plan.monthlyFee) > 0.005) {
-            planFeesTotal += Number(plan.monthlyFee);
             const stableId = planFeeStableId(plan.id);
             if (state.cardChargeSkips[stableId]) return;
             if (cardList.some(tx => tx.id === stableId)) return;
@@ -30956,37 +31055,66 @@ function postCardStatementChargesForMonth(cardId, year, month) {
         }
     });
 
-    const balanceAfterFees = balanceBeforeCharges + planFeesTotal;
-    if (balanceAfterFees > 0.01 && !card.isChargeCard && card.paymentStrategy !== 'balance') {
-        const interestAccruingBalance = Math.max(0, balanceAfterFees - planBalancesTotal);
-        let promoInterest = 0;
-        let activePromosBalanceSum = 0;
-        (card.promos || []).forEach(promo => {
-            if (promo.expDate) {
-                const expTime = new Date(promo.expDate + 'T00:00:00').getTime();
-                if (statementDateObj.getTime() <= expTime) {
-                    const pBal = Number(promo.currentBalance ?? promo.amount) || 0;
-                    promoInterest += pBal * (Number(promo.rate) / 12 / 100);
-                    activePromosBalanceSum += pBal;
-                }
-            }
+    if (!card.isChargeCard && card.paymentStrategy !== 'balance') {
+        // Interest accrues on each day's actual ledger balance across the whole statement cycle
+        // (previous closing date exclusive through this statement's closing date inclusive), not on
+        // a single point-in-time snapshot — see getCardDailyInterestAccrual()'s own comment for why.
+        // Deliberately NOT gated on "balance at close > 0" the way the old point-in-time version was:
+        // a card that's fully paid off by the closing date can still owe real interest for the days
+        // earlier in the cycle when it wasn't — exactly the scenario that formula used to miss.
+        const previousMonthDate = new Date(year, monthIndex - 1, 1);
+        const previousDaysInMonth = new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth() + 1, 0).getDate();
+        const previousClosingDay = Math.min(Number(card.statementDay) || 1, previousDaysInMonth);
+        const previousClosingDate = new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth(), previousClosingDay);
+        const previousClosingDateStr = formatLocalDate(previousClosingDate);
+
+        const allTransactions = Object.values(state.cardCalendars?.[cardId] || {})
+            .flatMap(list => list || [])
+            .filter(tx => !tx.billOccurrenceDeleted && tx.date && Number.isFinite(Number(tx.amount)));
+
+        let dailyBalance = getAccountBalanceSeed(card);
+        allTransactions.forEach(tx => {
+            if (tx.date > previousClosingDateStr) return;
+            const amount = Number(tx.amount);
+            dailyBalance += amount < 0 ? Math.abs(amount) : -Math.abs(amount);
         });
-        let purchaseRate = (card.paymentStrategy === 'balance') ? 0 : (Number(card.interestRate) || 0);
-        if (card.promoActive && card.promoExpDate) {
-            const promoExpTime = new Date(card.promoExpDate + 'T00:00:00').getTime();
-            if (statementDateObj.getTime() <= promoExpTime) purchaseRate = Number(card.promoRate) || 0;
+        dailyBalance = Math.max(0, dailyBalance);
+
+        let accruedInterest = 0;
+        const cursor = new Date(previousClosingDate);
+        cursor.setDate(cursor.getDate() + 1);
+        while (cursor <= statementDateObj) {
+            const dateStr = formatLocalDate(cursor);
+            allTransactions.forEach(tx => {
+                if (tx.date !== dateStr || tx.isEstimatedInterest) return;
+                const amount = Number(tx.amount);
+                // Same convention postInstallmentLoanInterestForMonth already uses: a same-day
+                // payment on the closing date itself doesn't retroactively shrink that one day's
+                // own accrual — a plan-fee/other charge dated on the closing date still counts.
+                if (dateStr === statementDateStr && amount > 0) return;
+                dailyBalance += amount < 0 ? Math.abs(amount) : -Math.abs(amount);
+            });
+            dailyBalance = Math.max(0, dailyBalance);
+
+            let planBalanceSum = 0;
+            deriveCardPaymentPlanBalances(cardId, dateStr).forEach(plan => {
+                if (plan.currentBalance > 0.005 && dateStr >= plan.startDate) planBalanceSum += plan.currentBalance;
+            });
+
+            accruedInterest += getCardDailyInterestAccrual(cardId, card, cursor, dateStr, dailyBalance, planBalanceSum);
+            cursor.setDate(cursor.getDate() + 1);
         }
-        const nonPromoBalance = Math.max(0, interestAccruingBalance - activePromosBalanceSum);
-        const standardInterest = nonPromoBalance * (purchaseRate / 12 / 100);
-        const totalInterest = standardInterest + promoInterest;
+
+        const totalInterest = Math.round(accruedInterest * 100) / 100;
         if (totalInterest > 0.005 && !state.cardChargeSkips[interestStableId] && !cardList.some(tx => tx.id === interestStableId)) {
             cardList.push({
                 id: interestStableId,
                 date: statementDateStr,
                 description: 'Estimated Interest Charge',
                 merchant: autoChargeMerchant,
-                amount: -Math.round(totalInterest * 100) / 100,
-                isEstimatedInterest: true
+                amount: -totalInterest,
+                isEstimatedInterest: true,
+                interestMethod: 'dailyBalance'
             });
         }
     }
@@ -31051,11 +31179,114 @@ function autopopulateBillsForMonth(year, month) {
     recalculateBillCycleTotals(mBills);
 }
 
+// A loan/card's balance-walk seed — startBal, EXCEPT when a fundingDate is set, in which case the
+// seed is $0 forever and the loan's whole principal instead enters the ledger as a real, dated
+// transaction on that funding date (posted by ensureLoanFundingPosted()). Added 2026-09-03 per
+// explicit user request: a planned future loan (e.g. a consolidation loan entered ahead of time so
+// its monthly payment can be budgeted before it's real) was showing its full startBal as an
+// already-existing balance accruing interest from "the beginning of time" — there was no way to
+// tell Budgetify the debt doesn't exist yet. With fundingDate set, every consumer of `startBal` as
+// an accrual/balance seed (calculateCardLedgerBalance, getCardRunningBalanceAtDate,
+// postInstallmentLoanInterestForMonth, deriveCardPaymentPlanBalances, deriveCardPromoBalances) reads
+// through this helper instead, so a not-yet-funded loan correctly shows $0 balance and accrues no
+// interest for every month before the funding date — the ledger transaction itself, once posted,
+// naturally carries the balance and interest forward from that date on with no further special-casing
+// needed anywhere, since every one of those functions already sums real dated ledger transactions.
+function getAccountBalanceSeed(account) {
+    if (!account) return 0;
+    return account.fundingDate ? 0 : (Number(account.startBal) || 0);
+}
+
+// Shared "% of original principal paid off" calc — used by both the Loans page header and the
+// Credit Card dashboard title (previously two separately hand-copied formulas, exactly the
+// duplicate-implementation risk this app keeps tripping over). A not-yet-funded loan needs its own
+// case: with startBal unchanged (still the real original principal, only the accrual/balance SEED
+// zeroes out — see getAccountBalanceSeed()) the plain formula divides (originalAmount - 0) /
+// originalAmount and reports "100% paid" for a loan that hasn't even started, backwards from the
+// truth. Reports 0% ("not started") instead until the funding date arrives.
+function getLoanPaidPercent(loan, currentBalance) {
+    const originalAmount = Number(loan?.startBal) || 0;
+    if (loan?.fundingDate && formatLocalDate(new Date()) < loan.fundingDate) return 0;
+    if (originalAmount <= 0) return 100;
+    return Math.min(100, Math.max(0, ((originalAmount - currentBalance) / originalAmount) * 100));
+}
+
+// Dollar-amount sibling of getLoanPaidPercent(), used by the Debt Summary grid's "Paid To Date"
+// column (shared between loans and credit cards) — same not-yet-funded gate: $0 paid, not the full
+// original amount, until the funding date arrives.
+function getAccountPaidToDate(account, currentBalance) {
+    if (account?.fundingDate && formatLocalDate(new Date()) < account.fundingDate) return 0;
+    const originalAmount = Number(account?.startBal) || 0;
+    return Math.max(0, originalAmount - Math.max(0, currentBalance));
+}
+
+// Ensures a loan with a configured fundingDate has its one-time principal-disbursement charge
+// posted as a real ledger transaction — see getAccountBalanceSeed()'s comment for why. Self-healing
+// and idempotent like every other auto-generated charge in this app (stable id, `overridden` respects
+// a user's own edit, `state.cardChargeSkips` respects a user's deletion) — EXCEPT the stable id is
+// loan-scoped, not date-scoped, since a funding event is a single one-time occurrence whose date can
+// itself change (the user picking a different planned funding date) rather than one instance per
+// statement cycle. Posts for past AND future funding dates, matching every other automatic charge in
+// this app — a real disbursement that already happened (a past-dated fundingDate the user is
+// reconciling after the fact) is exactly as safe to post as one still months away.
+function ensureLoanFundingPosted(loan) {
+    if (!loan || loan.type !== 'loan') return;
+    if (!state.cardCalendars) state.cardCalendars = {};
+    if (!state.cardCalendars[loan.id]) state.cardCalendars[loan.id] = {};
+    if (!state.cardChargeSkips) state.cardChargeSkips = {};
+    const stableId = `loan-funding-${loan.id}`;
+
+    let existingTx = null;
+    let existingKey = null;
+    Object.keys(state.cardCalendars[loan.id]).forEach(key => {
+        (state.cardCalendars[loan.id][key] || []).forEach(tx => {
+            if (tx.id === stableId) { existingTx = tx; existingKey = key; }
+        });
+    });
+
+    const removeExisting = () => {
+        if (existingTx && existingKey) {
+            state.cardCalendars[loan.id][existingKey] = state.cardCalendars[loan.id][existingKey].filter(tx => tx.id !== stableId);
+        }
+    };
+
+    const fundingAmount = Math.max(0, Number(loan.startBal) || 0);
+    if (!loan.fundingDate || fundingAmount <= 0.005) {
+        // No funding date configured (or nothing to fund) — remove a previously auto-posted charge
+        // unless the user has since edited it themselves (overridden), matching every other
+        // auto-charge convention in this app: an explicit user edit always wins over self-healing.
+        if (existingTx && !existingTx.overridden) removeExisting();
+        return;
+    }
+    if (state.cardChargeSkips[stableId]) return;
+    if (existingTx && existingTx.overridden) return;
+
+    const dateObj = new Date(loan.fundingDate + 'T00:00:00');
+    if (isNaN(dateObj.getTime())) return;
+    const key = `${dateObj.getFullYear()}-${MONTH_ORDER[dateObj.getMonth()]}`;
+
+    if (existingTx && existingKey === key && existingTx.date === loan.fundingDate && Math.abs(Number(existingTx.amount) + fundingAmount) < 0.005) {
+        return; // already correct, nothing to do
+    }
+    removeExisting();
+
+    if (!state.cardCalendars[loan.id][key]) state.cardCalendars[loan.id][key] = [];
+    state.cardCalendars[loan.id][key].push({
+        id: stableId,
+        date: loan.fundingDate,
+        description: 'Loan Funding',
+        merchant: loan.name,
+        amount: -fundingAmount,
+        transactionKind: 'charge',
+        isLoanFunding: true
+    });
+}
+
 function calculateCardLedgerBalance(cardId, throughDate = formatLocalDate(new Date())) {
     const card = state.loans.find(c => c.id === cardId);
     if (!card) return 0;
 
-    let balance = Number(card.startBal) || 0;
+    let balance = getAccountBalanceSeed(card);
     const cardCal = state.cardCalendars?.[cardId] || {};
 
     Object.values(cardCal).forEach(txs => {
@@ -31120,7 +31351,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
     // chain was computed in one order while the rows were shown in another.
     allTxs.sort(compareTransactionsChronologically);
 
-    let estBalance = Number(card.startBal) || 0;
+    let estBalance = getAccountBalanceSeed(card);
     const estimates = {};
     const firstDate = new Date(allTxs[0].date + 'T00:00:00');
     const lastDate = new Date(allTxs[allTxs.length - 1].date + 'T00:00:00');
@@ -31135,6 +31366,18 @@ function computeAllEstimatedBalancesForCard(cardId) {
     let lastInterestMonthYear = '';
     const todayForGuard = new Date();
     const todayMonthIndexForGuard = todayForGuard.getFullYear() * 12 + todayForGuard.getMonth();
+    // Accrues every single day (not just on the statement day) — see getCardDailyInterestAccrual()'s
+    // comment for why a point-in-time snapshot alone badly understates a cycle with a big mid-cycle
+    // swing. Reset to 0 every time a statement boundary closes, whether or not the accumulated total
+    // actually gets applied that day (a past/already-posted month discards it — the real transaction
+    // already carries the true amount). Known, accepted small imprecision: this day's own fee (added
+    // to estBalance only inside the statement-day block below, once the guards are known) isn't
+    // reflected until the FOLLOWING day's accrual, unlike postCardStatementChargesForMonth's real
+    // posting — which already has the fee as a same-day ledger row before its loop reaches that day —
+    // a same-day-fee-interest gap of at most a few hundredths of a cent, not worth the complexity to
+    // close for a display-only estimate.
+    let accruedInterestSinceLastStatement = 0;
+    const canAccrueInterest = !card.isChargeCard && card.paymentStrategy !== 'balance' && card.type !== 'loan';
 
     while (currentDate <= lastDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -31148,6 +31391,14 @@ function computeAllEstimatedBalancesForCard(cardId) {
             estimates[tx.id] = estBalance;
         });
 
+        if (canAccrueInterest) {
+            let planBalanceSumToday = 0;
+            deriveCardPaymentPlanBalances(cardId, dateStr).forEach(plan => {
+                if (plan.currentBalance > 0.005 && dateStr >= plan.startDate) planBalanceSumToday += plan.currentBalance;
+            });
+            accruedInterestSinceLastStatement += getCardDailyInterestAccrual(cardId, card, currentDate, dateStr, estBalance, planBalanceSumToday);
+        }
+
         if (dayOfMonth === statementDay && lastInterestMonthYear !== currentMonthYear) {
             lastInterestMonthYear = currentMonthYear;
             const plansAtStatement = deriveCardPaymentPlanBalances(cardId, dateStr).filter(plan =>
@@ -31156,7 +31407,6 @@ function computeAllEstimatedBalancesForCard(cardId) {
                 && dateStr >= plan.startDate
             );
             const activePlansFees = plansAtStatement.reduce((sum, plan) => sum + (Number(plan.monthlyFee) || 0), 0);
-            const activePlansBalanceSum = plansAtStatement.reduce((sum, plan) => sum + (Number(plan.currentBalance) || 0), 0);
 
             // Posted fees and interest are already present in the day's ledger transactions.
             // Only estimate them inline for a future statement that has no generated charge rows.
@@ -31175,7 +31425,6 @@ function computeAllEstimatedBalancesForCard(cardId) {
             const isPastMonth = (currentDate.getFullYear() * 12 + currentDate.getMonth()) < todayMonthIndexForGuard;
             if (!alreadyPostedReal && card.type !== 'loan' && !isPastMonth) {
                 estBalance += activePlansFees;
-
                 // Mirror postCardStatementChargesForMonth's `card.paymentStrategy !== 'balance'`
                 // exclusion — a Full Card Balance card is paid in full every cycle by design, so it
                 // never actually carries interest, and the real posting function knows that. Without
@@ -31184,30 +31433,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
                 // invisible jump between one month's shown Ending Balance and the next month's shown
                 // Starting Balance that a Full Balance card's engine-computed payment doesn't include
                 // — confirmed as a real bug, 2026-08-02 (a $1.53 gap with no corresponding ledger row).
-                if (estBalance > 0.01 && !card.isChargeCard && card.paymentStrategy !== 'balance') {
-                    const interestAccruingBalance = Math.max(0, estBalance - activePlansBalanceSum);
-                    let promoInterest = 0;
-                    let activePromosBalanceSum = 0;
-
-                    (card.promos || []).forEach(promo => {
-                        if (!promo.expDate) return;
-                        const expTime = new Date(promo.expDate + 'T00:00:00').getTime();
-                        if (currentDate.getTime() <= expTime) {
-                            const promoBalance = Number(promo.currentBalance ?? promo.amount) || 0;
-                            promoInterest += promoBalance * (Number(promo.rate) / 12 / 100);
-                            activePromosBalanceSum += promoBalance;
-                        }
-                    });
-
-                    let purchaseRate = Number(card.interestRate) || 0;
-                    if (card.promoActive && card.promoExpDate) {
-                        const promoExpTime = new Date(card.promoExpDate + 'T00:00:00').getTime();
-                        if (currentDate.getTime() <= promoExpTime) purchaseRate = Number(card.promoRate) || 0;
-                    }
-
-                    const nonPromoBalance = Math.max(0, interestAccruingBalance - activePromosBalanceSum);
-                    estBalance += nonPromoBalance * (purchaseRate / 12 / 100) + promoInterest;
-                }
+                if (canAccrueInterest) estBalance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
             }
             // Bug fix: this used to blindly overwrite EVERY transaction dated the statement day with
             // the single post-adjustment estBalance, clobbering the correct per-transaction values
@@ -31218,6 +31444,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
             // case) has no transaction id of its own to attach to anyway — `estBalance` already
             // carries the adjustment forward correctly into every subsequent day's calculations via
             // this same `let` variable, with no need to stamp it onto any specific row here.
+            accruedInterestSinceLastStatement = 0;
         }
 
         currentDate.setDate(currentDate.getDate() + 1);
@@ -31270,7 +31497,14 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
     currentDate.setDate(currentDate.getDate() + 1);
     let lastInterestMonthYear = '';
     let totalPaid = 0;
-    let payoffDate = balance <= 0.01 ? new Date(today) : null;
+    // A $0 balance today does NOT mean "already paid off" for a loan with a fundingDate still in the
+    // future — it means the loan hasn't started yet. Leaving payoffDate null here lets the loop below
+    // find the loan's real eventual payoff date once the future funding charge and payments play out;
+    // setting it to "today" immediately (the old unconditional behavior) permanently locked it there,
+    // since the loop's own `!payoffDate` check then never fires again. See ensureLoanFundingPosted()'s
+    // own comment for the feature this supports.
+    const notYetFunded = loan.fundingDate && loan.fundingDate > todayStr;
+    let payoffDate = (balance <= 0.01 && !notYetFunded) ? new Date(today) : null;
 
     while (currentDate <= endDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -31340,7 +31574,9 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
             }
         }
 
-        if (balance <= 0.01 && !payoffDate) payoffDate = new Date(currentDate);
+        // A $0 balance on a day still before the loan's own fundingDate means "hasn't started yet,"
+        // not "paid off" — see the matching comment on payoffDate's own initialization above.
+        if (balance <= 0.01 && !payoffDate && (!loan.fundingDate || dateStr >= loan.fundingDate)) payoffDate = new Date(currentDate);
         const nextDay = new Date(currentDate);
         nextDay.setDate(nextDay.getDate() + 1);
         if (nextDay.getMonth() !== currentDate.getMonth() || currentDate.getTime() === endDate.getTime()) {
@@ -31348,7 +31584,11 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
                 monthLabel: `${MONTH_ORDER[currentDate.getMonth()]} ${currentDate.getFullYear()}`,
                 balance: Math.max(0, balance)
             });
-            if (isDynamicPayoff && balance <= 0.01) break;
+            // payoffDate, not a bare balance<=0.01 check — a $0 balance before the loan's own
+            // fundingDate means "hasn't started," not "paid off" (see payoffDate's own comments
+            // above), and breaking here on that would stop the whole projection after month one,
+            // before the future funding charge this loop hasn't reached yet ever gets a chance to run.
+            if (isDynamicPayoff && payoffDate) break;
         }
         currentDate.setDate(currentDate.getDate() + 1);
     }
@@ -31428,6 +31668,13 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
         balanceAsOfDate: todayStr
     }));
     const planMinimumAppliedByMonth = new Map();
+    // Re-anchored to todayStr the same way activePlans is above, so this projection's own future
+    // (hypothetical/not-yet-materialized) payments are always eligible for allocation regardless of
+    // whatever balanceAsOfDate the derivation left them at.
+    const activePromos = deriveCardPromoBalances(cardId, todayStr).map(promo => ({
+        ...promo,
+        balanceAsOfDate: todayStr
+    }));
     const monthlyBalances = [];
     const additionalPayments = [];
 
@@ -31439,6 +31686,19 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
     let totalPaid = 0;
     let payoffDate = null;
     let hasHitZero = balance <= 0.01;
+    // Accrues every single day, not just the statement day — see getCardDailyInterestAccrual()'s own
+    // comment for why a point-in-time snapshot alone badly understates a cycle with a big mid-cycle
+    // swing. This function can't call that shared helper directly: it needs to read the LOCAL,
+    // already-mutating activePlans/activePromos this loop keeps in sync via
+    // allocateCardPaymentAcrossPlans/Promos() above (which know about this projection's own
+    // hypothetical future payments), not deriveCardPromoBalances()'s fresh-from-the-real-ledger walk.
+    let accruedInterestSinceLastStatement = 0;
+    // Bonus fix while touching this block: unlike postCardStatementChargesForMonth and
+    // computeAllEstimatedBalancesForCard, this projection had no isChargeCard/paymentStrategy
+    // 'balance' exclusion at all — a charge card or full-balance-strategy card would silently accrue
+    // interest here that neither of those two functions would ever actually post, the same class of
+    // "two/three implementations disagree" gap documented throughout [[project-budgetify-balance-engine]].
+    const canAccrueInterest = !card.isChargeCard && card.paymentStrategy !== 'balance';
 
     while (currentDate <= endDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -31453,6 +31713,7 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
                 amount += extraScheduledAmount;
                 const actualPayment = Math.min(balance, amount);
                 allocateCardPaymentAcrossPlans(activePlans, actualPayment, balance, dateStr, planMinimumAppliedByMonth);
+                allocateCardPaymentAcrossPromos(activePromos, actualPayment, balance, dateStr);
                 balance -= actualPayment;
                 totalPaid += actualPayment;
             } else if (amount < 0) {
@@ -31472,13 +31733,18 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
             if (withinStart && withinEnd) {
                 const planBalance = activePlans.reduce((sum, plan) => sum + Math.max(0, Number(plan.currentBalance) || 0), 0);
                 const planMinimums = activePlans.reduce((sum, plan) => sum + Math.min(plan.currentBalance, Number(plan.monthlyPayment) || 0), 0);
+                // Excluded from the interestSaving target the same way planBalance already is — a 0%
+                // transfer doesn't need paying off to avoid standard interest. See
+                // calculateInterestSavingPayment()'s matching fix, 2026-09-03.
+                const promoBalance = activePromos.reduce((sum, promo) => sum + Math.max(0, Number(promo.currentBalance) || 0), 0);
                 let scheduledPayment = 0;
                 if (strategy === 'balance') scheduledPayment = balance;
                 else if (strategy === 'minimum') scheduledPayment = Number(card.monthlyMin) || 0;
-                else if (strategy === 'interestSaving') scheduledPayment = Math.max(0, balance - planBalance) + planMinimums;
+                else if (strategy === 'interestSaving') scheduledPayment = Math.max(0, balance - planBalance - promoBalance) + planMinimums;
                 scheduledPayment = Math.min(balance, Math.max(0, scheduledPayment + extraScheduledAmount));
                 if (scheduledPayment > 0.005) {
                     allocateCardPaymentAcrossPlans(activePlans, scheduledPayment, balance, dateStr, planMinimumAppliedByMonth);
+                    allocateCardPaymentAcrossPromos(activePromos, scheduledPayment, balance, dateStr);
                     balance -= scheduledPayment;
                     totalPaid += scheduledPayment;
                 }
@@ -31491,55 +31757,60 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
             if (balance > 0.01) {
                 const payment = Math.min(balance, additionalMonthlyAmount);
                 allocateCardPaymentAcrossPlans(activePlans, payment, balance, dateStr, planMinimumAppliedByMonth);
+                allocateCardPaymentAcrossPromos(activePromos, payment, balance, dateStr);
                 balance -= payment;
                 totalPaid += payment;
                 additionalPayments.push({ date: dateStr, amount: payment });
             }
         }
 
-        // 3. Apply statement interest and fees dynamically
-        if (dayOfMonth === statementDay && lastInterestMonthYear !== currentMonthYear) {
-            lastInterestMonthYear = currentMonthYear;
-            let activePlansFees = 0;
+        // 3. Accrue this one day's interest across every active rate bucket — plan-protected,
+        // promo/transfer-rate, and standard — reading the LOCAL mutable activePlans/activePromos
+        // (see the comment on accruedInterestSinceLastStatement's declaration above for why this
+        // can't just call the shared getCardDailyInterestAccrual() helper).
+        if (canAccrueInterest && balance > 0.01) {
             let activePlansBalanceSum = 0;
-
             activePlans.forEach(plan => {
-                if (dateStr >= plan.startDate && plan.currentBalance > 0.005) {
-                    activePlansFees += Number(plan.monthlyFee) || 0;
-                    activePlansBalanceSum += Number(plan.currentBalance) || 0;
+                if (dateStr >= plan.startDate && plan.currentBalance > 0.005) activePlansBalanceSum += Number(plan.currentBalance) || 0;
+            });
+
+            let promoBalanceSumToday = 0;
+            let promoInterestToday = 0;
+            // Reads the mutable activePromos this loop has been paying down via
+            // allocateCardPaymentAcrossPromos() above, not the promo's own static currentBalance
+            // — see deriveCardPromoBalances()'s comment for why that used to zero this out.
+            activePromos.forEach(promo => {
+                if (promo.currentBalance <= 0.005 || !promo.expDate) return;
+                // See postCardStatementChargesForMonth's matching startDate check/comment.
+                if (promo.startDate && dateStr < promo.startDate) return;
+                const expTime = new Date(promo.expDate + 'T00:00:00').getTime();
+                if (currentDate.getTime() <= expTime) {
+                    promoBalanceSumToday += promo.currentBalance;
+                    promoInterestToday += promo.currentBalance * (Math.max(0, Number(promo.rate) || 0) / 100 / 365);
                 }
             });
 
-            balance += activePlansFees;
-
-            if (balance > 0.01) {
-                let interestAccruingBalance = Math.max(0, balance - activePlansBalanceSum);
-                let promoInterest = 0;
-                let activePromosBalanceSum = 0;
-
-                (card.promos || []).forEach(promo => {
-                    if (promo.expDate) {
-                        const expTime = new Date(promo.expDate + 'T00:00:00').getTime();
-                        if (currentDate.getTime() <= expTime) {
-                            const pBal = Number(promo.currentBalance ?? promo.amount) || 0;
-                            promoInterest += pBal * (Number(promo.rate) / 12 / 100);
-                            activePromosBalanceSum += pBal;
-                        }
-                    }
-                });
-
-                let purchaseRate = Number(card.interestRate) || 0;
-                if (card.promoActive && card.promoExpDate) {
-                    const promoExpTime = new Date(card.promoExpDate + 'T00:00:00').getTime();
-                    if (currentDate.getTime() <= promoExpTime) {
-                        purchaseRate = Number(card.promoRate) || 0;
-                    }
-                }
-
-                const nonPromoBalance = Math.max(0, interestAccruingBalance - activePromosBalanceSum);
-                const standardInterest = nonPromoBalance * (purchaseRate / 12 / 100);
-                balance += (standardInterest + promoInterest);
+            let purchaseDailyRate = Math.max(0, Number(card.interestRate) || 0) / 100 / 365;
+            if (card.promoActive && card.promoExpDate) {
+                const promoExpTime = new Date(card.promoExpDate + 'T00:00:00').getTime();
+                if (currentDate.getTime() <= promoExpTime) purchaseDailyRate = Math.max(0, Number(card.promoRate) || 0) / 100 / 365;
             }
+
+            const standardBalanceToday = Math.max(0, balance - promoBalanceSumToday - activePlansBalanceSum);
+            accruedInterestSinceLastStatement += standardBalanceToday * purchaseDailyRate + promoInterestToday;
+        }
+
+        // 4. Close the statement: post this cycle's plan fees, then the day-by-day accrued interest
+        // total (not a fresh balance-at-close × monthly-rate snapshot).
+        if (dayOfMonth === statementDay && lastInterestMonthYear !== currentMonthYear) {
+            lastInterestMonthYear = currentMonthYear;
+            let activePlansFees = 0;
+            activePlans.forEach(plan => {
+                if (dateStr >= plan.startDate && plan.currentBalance > 0.005) activePlansFees += Number(plan.monthlyFee) || 0;
+            });
+            balance += activePlansFees;
+            if (canAccrueInterest) balance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
+            accruedInterestSinceLastStatement = 0;
         }
 
         if (balance <= 0.01 && !hasHitZero) {
@@ -32764,7 +33035,7 @@ function getCardRunningBalanceAtDate(cardId, targetDateStr) {
     const card = state.loans.find(c => c.id === cardId);
     if (!card) return 0;
 
-    let balance = card.startBal || 0;
+    let balance = getAccountBalanceSeed(card);
     const targetTime = new Date(targetDateStr + 'T00:00:00').getTime();
 
     const cardCal = state.cardCalendars[cardId] || {};
@@ -33009,7 +33280,7 @@ function deriveCardPaymentPlanBalances(cardId, throughDate, dueDateForCycleCheck
         || ((Number(a.amount) > 0 ? 1 : 0) - (Number(b.amount) > 0 ? 1 : 0))
     );
 
-    let runningBalance = Number(card.startBal) || 0;
+    let runningBalance = getAccountBalanceSeed(card);
     const minimumAppliedByMonth = new Map();
     const minimumAppliedByDate = new Map();
     txs.forEach(tx => {
@@ -33110,6 +33381,154 @@ function deriveCardPaymentPlanBalances(cardId, throughDate, dueDateForCycleCheck
     return plans;
 }
 
+function normalizeCardPromo(promo) {
+    return {
+        id: promo.id,
+        originalAmount: Math.max(0, Number(promo.originalAmount ?? promo.amount) || 0),
+        currentBalance: Math.max(0, Number(promo.currentBalance ?? promo.amount) || 0),
+        rate: Math.max(0, Number(promo.rate) || 0),
+        expDate: promo.expDate || '',
+        // '' sorts before every real date string, so an untracked startDate/balanceAsOfDate means
+        // "eligible from the beginning" rather than "eligible from today" — the opposite default
+        // normalizePaymentPlan() uses for a brand-new plan. That matters here because every existing
+        // balance-transfer promo predates this field: migrateDatabase() backfills balanceAsOfDate to
+        // the date this feature shipped (see its own comment), which is the correct anchor for those;
+        // a promo somehow still missing both after migration should not have ledger history silently
+        // reallocated against it, so '' (unconditionally eligible) is the safe fallback, not today.
+        startDate: promo.transferDate || promo.startDate || '',
+        balanceAsOfDate: promo.balanceAsOfDate || '',
+        transferOwner: promo.transferOwner || ''
+    };
+}
+
+// Allocates one real or projected card payment across a card's active balance-transfer promos —
+// the promo sibling of allocateCardPaymentAcrossPlans(), added 2026-09-03 alongside
+// deriveCardPromoBalances() (see that function's own comment for the bug this fixes). Unlike a
+// payment plan, a 0%-APR transfer has no monthly minimum of its own to protect — by CARD Act rule,
+// any amount above the card's required minimum applies to the highest-APR balance first, and a 0%
+// transfer is by definition never that. So the whole payment goes toward the standard (non-promo)
+// balance first, and only the leftover — if the standard balance hits zero — reduces promo
+// balances, soonest-to-expire first (protects the transfer with the most 0% runway remaining).
+function allocateCardPaymentAcrossPromos(promoStates, paymentAmount, cardBalanceBeforePayment, paymentDate) {
+    let unallocated = Math.max(0, Math.min(Number(paymentAmount) || 0, Math.max(0, Number(cardBalanceBeforePayment) || 0)));
+    if (unallocated <= 0.005) return 0;
+
+    // An already-expired promo (as of this payment's own date) isn't 0% anymore — it reverted to
+    // standard rate and should be freely payable like any other balance, not artificially protected
+    // by staying at the front of the payoff order. Without this check, a payment landed on paying
+    // down long-expired transfers first (their expDate sorts earliest) before ever reaching the
+    // still-active ones, which is backwards — confirmed as a real bug while verifying this function,
+    // 2026-09-03: Comerica Visa's three already-expired transfers absorbed the whole recurring
+    // payment every month, so the two genuinely active transfers never shrank and non-promo interest
+    // still fell to $0 exactly like before this fix.
+    const eligible = promoStates.filter(promo =>
+        promo.currentBalance > 0.005
+        && paymentDate > promo.balanceAsOfDate
+        && paymentDate >= promo.startDate
+        && (!promo.expDate || paymentDate <= promo.expDate)
+    );
+    const promoBalanceBefore = eligible.reduce((sum, promo) => sum + promo.currentBalance, 0);
+    const nonPromoBalanceBefore = Math.max(0, cardBalanceBeforePayment - promoBalanceBefore);
+    const towardStandard = Math.min(unallocated, nonPromoBalanceBefore);
+    unallocated -= towardStandard;
+
+    const payoffOrder = [...eligible].sort((a, b) =>
+        String(a.expDate || '9999-99-99').localeCompare(String(b.expDate || '9999-99-99'))
+        || String(a.id).localeCompare(String(b.id))
+    );
+    payoffOrder.forEach(promo => {
+        if (unallocated <= 0.005 || promo.currentBalance <= 0.005) return;
+        const allocation = Math.min(unallocated, promo.currentBalance);
+        promo.currentBalance = Math.max(0, promo.currentBalance - allocation);
+        unallocated -= allocation;
+        if (promo.currentBalance <= 0.005) {
+            promo.currentBalance = 0;
+            promo.isPaidOff = true;
+            promo.paidOffDateStr = paymentDate;
+        }
+    });
+
+    return towardStandard + (promoBalanceBefore - eligible.reduce((sum, promo) => sum + promo.currentBalance, 0));
+}
+
+// Derives each active balance-transfer promo's remaining balance from the card ledger, the same way
+// deriveCardPaymentPlanBalances() already does for payment plans — added 2026-09-03 to fix a real,
+// reported bug: promo.currentBalance was a purely manual, never-updated snapshot, while the card's
+// actual ledger balance keeps shrinking every month from real/scheduled payments. Once enough
+// payments posted for the projected ledger balance to drop BELOW the static promo total (mathematically
+// impossible in reality — you can't owe less than what's sitting untouched in 0% transfers alone),
+// postCardStatementChargesForMonth's own `Math.max(0, balance - promoSum)` safety clamp silently and
+// permanently floored the non-promo balance at $0, so standard-rate interest stopped accruing
+// forever from that point on even though a real non-covered balance still existed (confirmed live,
+// 2026-09-03: Comerica Visa correctly charged ~$9/mo standard interest in September, then $0 in
+// October/November/December once a recurring ~$1,700/mo payment pushed the projected balance below
+// the two active transfers' fixed $15,237.92 combined total).
+function deriveCardPromoBalances(cardId, throughDate) {
+    const card = state.loans.find(item => item.id === cardId);
+    if (!card) return [];
+    const promos = (card.promos || []).filter(p => p.isXfer).map(normalizeCardPromo);
+    if (!promos.length) return promos;
+
+    const validThroughDate = (throughDate && typeof throughDate === 'string') ? throughDate : formatLocalDate(new Date());
+
+    const txs = [];
+    Object.values(state.cardCalendars?.[cardId] || {}).forEach(list => {
+        (list || []).forEach(tx => {
+            if (!tx.billOccurrenceDeleted && tx.date && tx.date <= validThroughDate) txs.push(tx);
+        });
+    });
+    txs.sort((a, b) =>
+        String(a.date).localeCompare(String(b.date))
+        || ((Number(a.amount) > 0 ? 1 : 0) - (Number(b.amount) > 0 ? 1 : 0))
+    );
+
+    let runningBalance = getAccountBalanceSeed(card);
+    txs.forEach(tx => {
+        const amount = Number(tx.amount) || 0;
+        if (amount < 0) {
+            runningBalance += Math.abs(amount);
+            return;
+        }
+        if (amount <= 0) return;
+        const payment = Math.min(Math.max(0, runningBalance), amount);
+        allocateCardPaymentAcrossPromos(promos, payment, runningBalance, tx.date);
+        runningBalance -= payment;
+    });
+
+    // Same reconciliation deriveCardPaymentPlanBalances() already does for plans, mirrored here:
+    // a zero running ledger balance can't coexist with a tracked promo balance still owed, and a
+    // positive-but-smaller running balance than the tracked promo total means the promos have
+    // collectively already been paid down further than their stale stored numbers reflect — reduce
+    // the soonest-to-expire promo(s) first, same priority order allocation above already uses.
+    if (txs.length === 0) {
+        // No ledger history to reconcile against — trust each promo's own stated balance as entered.
+    } else if (runningBalance <= 0.005) {
+        promos.forEach(promo => {
+            if (validThroughDate > promo.balanceAsOfDate && validThroughDate >= promo.startDate && promo.currentBalance > 0.005) {
+                promo.currentBalance = 0;
+                promo.isPaidOff = true;
+                promo.paidOffDateStr = validThroughDate;
+            }
+        });
+    } else {
+        const eligible = promos.filter(promo => validThroughDate > promo.balanceAsOfDate && validThroughDate >= promo.startDate && promo.currentBalance > 0.005 && (!promo.expDate || validThroughDate <= promo.expDate));
+        let excessPromoBalance = Math.max(0, eligible.reduce((sum, promo) => sum + promo.currentBalance, 0) - runningBalance);
+        [...eligible].sort((a, b) => String(a.expDate || '9999-99-99').localeCompare(String(b.expDate || '9999-99-99'))).forEach(promo => {
+            if (excessPromoBalance <= 0.005) return;
+            const reduction = Math.min(excessPromoBalance, promo.currentBalance);
+            promo.currentBalance -= reduction;
+            excessPromoBalance -= reduction;
+            if (promo.currentBalance <= 0.005) {
+                promo.currentBalance = 0;
+                promo.isPaidOff = true;
+                promo.paidOffDateStr = validThroughDate;
+            }
+        });
+    }
+
+    return promos;
+}
+
 // dueDateForCycleCheck: passed straight through to deriveCardPaymentPlanBalances() — see its own
 // comment. Only ensureAutomaticCardPaymentForMonth's call supplies it.
 function calculateInterestSavingPayment(card, throughDate, dueDateForCycleCheck) {
@@ -33118,10 +33537,19 @@ function calculateInterestSavingPayment(card, throughDate, dueDateForCycleCheck)
         plan.currentBalance > 0.005 && validThroughDate >= plan.startDate
     );
     const planBalances = plans.reduce((sum, plan) => sum + plan.currentBalance, 0);
+    // A 0%-promo balance-transfer doesn't need to be paid off to avoid standard interest, so the
+    // interestSaving auto-pay target must exclude it the same way it already excludes plan balances
+    // — added 2026-09-03 alongside deriveCardPromoBalances() (see its comment) to close the same gap
+    // for this consumer: without it, an interestSaving-strategy card with an active transfer would
+    // target paying off the transfer too, defeating the point of having transferred it at 0%.
+    const promoBalances = deriveCardPromoBalances(card.id, validThroughDate)
+        .filter(promo => promo.currentBalance > 0.005 && validThroughDate >= promo.startDate && (!promo.expDate || validThroughDate <= promo.expDate))
+        .reduce((sum, promo) => sum + promo.currentBalance, 0);
 
-    // Non-plan revolving balance = ledger balance at statement minus plan principal balances
+    // Non-plan, non-promo revolving balance = ledger balance at statement minus plan principal and
+    // active promo balances
     const ledgerBal = calculateCardLedgerBalance(card.id, validThroughDate);
-    const nonPlanBalance = Math.max(0, ledgerBal - planBalances);
+    const nonPlanBalance = Math.max(0, ledgerBal - planBalances - promoBalances);
 
     // Remaining plan principal minimum due for this statement cycle
     const planPrincipalDue = plans.reduce((sum, plan) => {
@@ -34806,6 +35234,10 @@ function materializeAutomaticPaymentsForward(cardId, monthsAhead = AUTOMATIC_PAY
 function rebuildDebtMonthFinance(accountId, year, month) {
     const account = state.loans.find(item => item.id === accountId);
     if (!account) return;
+    // Must run before both the automatic-payment and interest steps below — a not-yet-funded loan's
+    // principal only exists once this posts the real ledger charge, and both of those steps read the
+    // ledger balance to decide what (if anything) to do. See ensureLoanFundingPosted()'s own comment.
+    ensureLoanFundingPosted(account);
     ensureAutomaticCardPaymentForMonth(accountId, year, month);
     if (account.type === 'loan') {
         postInstallmentLoanInterestForMonth(accountId, year, month);
@@ -35144,7 +35576,7 @@ function renderCardDashboard(cardId) {
 
     const limit = card.limit || 5000;
     const utilPct = card.isChargeCard ? null : ((card.currentBal / limit) * 100).toFixed(0);
-    const loanPaidPct = card.startBal > 0 ? Math.min(100, Math.max(0, ((card.startBal - card.currentBal) / card.startBal) * 100)) : 100;
+    const loanPaidPct = getLoanPaidPercent(card, card.currentBal);
     const accountSummary = isLoan
         ? `Original: ${formatCardBalance(Number(card.startBal) || 0)} | Balance: ${formatCardBalance(card.currentBal)} | ${loanPaidPct.toFixed(0)}% paid`
         : card.isChargeCard
@@ -35643,7 +36075,7 @@ function renderCCCardList(cardId) {
 
     const firstTxDate = txList[0]?.date;
     const dayBeforeFirstTxDate = firstTxDate ? formatLocalDate(new Date(new Date(firstTxDate + 'T00:00:00').getTime() - 86400000)) : null;
-    let filteredBalance = dayBeforeFirstTxDate ? calculateCardLedgerBalance(cardId, dayBeforeFirstTxDate) : (Number(card.startBal) || 0);
+    let filteredBalance = dayBeforeFirstTxDate ? calculateCardLedgerBalance(cardId, dayBeforeFirstTxDate) : getAccountBalanceSeed(card);
     let filteredCharges = 0;
     let filteredPayments = 0;
     let loanAdjustmentCount = 0;
@@ -36045,6 +36477,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-is-store-card').checked = !!loan.isStoreCard;
     document.getElementById('loan-store-name').value = loan.storeName || '';
     document.getElementById('loan-start-bal').value = loan.startBal;
+    document.getElementById('loan-funding-date').value = loan.fundingDate || '';
     document.getElementById('loan-current-bal').value = calculateCardLedgerBalance(loan.id);
     document.getElementById('loan-current-bal').readOnly = true;
     document.getElementById('btn-loan-settings-adjust-balance')?.classList.remove('hidden');
@@ -36103,6 +36536,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-store-name-group')?.classList.toggle('hidden', !isCredit || !loan.isStoreCard);
     document.getElementById('loan-store-name').required = isCredit && !!loan.isStoreCard;
     document.getElementById('loan-statement-day-group')?.classList.remove('hidden');
+    document.getElementById('loan-funding-date-group')?.classList.toggle('hidden', isCredit);
     document.getElementById('loan-xfer-section')?.classList.toggle('hidden', !isCredit);
     document.getElementById('loan-payment-strategy-group')?.classList.toggle('hidden', !isCredit);
     document.getElementById('loan-annual-fee-section')?.classList.toggle('hidden', !isCredit);
