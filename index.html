@@ -2610,42 +2610,46 @@
                 </div>
             </div>
 
-            <!-- Debt Consolidation (new Installment Loans only — not available when editing an
-                 existing loan, since the payoff transactions this creates only make sense at
-                 creation time). Pays off selected existing cards/loans as of their statement
-                 balance the moment this new loan is created — see the loan-form submit handler in
-                 app.js for the actual transaction creation. Per explicit user request, 2026-08-04. -->
+            <!-- Debt Consolidation (Installment Loans only — available both when adding a new loan
+                 and when editing an existing one). Uses the loan's own Funding Date as the payoff/
+                 cash-out date. The loan's Starting Balance is the fixed, directly-entered total
+                 (never overwritten by selections here) — checking an account subtracts its payoff
+                 amount from that fixed total, and whatever's left over becomes the cash-out amount,
+                 auto-computed but editable. See applyDebtConsolidation()/refreshLoanConsolidationTotal()
+                 in app.js. Per explicit user request, 2026-08-04, restructured 2026-09-03. -->
             <div id="loan-consolidation-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
                 <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
                     <input type="checkbox" id="loan-is-consolidation" style="cursor:pointer;">
                     <label for="loan-is-consolidation" style="font-family:var(--font-heading); font-weight:600; color:#a5b4fc; font-size:0.95rem; margin:0; cursor:pointer;">Debt Consolidation — pay off existing cards/loans with this loan?</label>
                 </div>
+                <div class="hidden muted-text" id="loan-consolidation-no-funding-date">Set a Funding Date above first — that date is used as the payoff/cash-out date and to look up each account's balance as of then.</div>
                 <div class="hidden" id="loan-consolidation-fields">
-                    <p class="muted-text" style="margin: 0 0 0.6rem;">Each selected account gets paid down to $0 as of the transfer date, using its statement balance as of the closing date just before that date — funded by this new loan, not your checking accounts. Future automatic payments on a paid-off account stop on their own once its balance reaches $0; if it still has new recurring charges after the transfer date, its automatic payment keeps posting for just that ongoing balance.</p>
+                    <p class="muted-text" style="margin: 0 0 0.6rem;">Each checked account is paid down by the amount shown (pre-filled from its statement balance as of the closing date just before the Funding Date — edit it if you want) — funded by this loan, not your checking accounts. Future automatic payments on a paid-off account stop on their own once its balance reaches $0. Whatever's left of the Starting Balance after selected payoffs becomes the Cash Out amount below.</p>
                     <div class="form-group">
-                        <label>Accounts to Pay Off</label>
-                        <div id="loan-consolidation-account-list" style="display:flex; flex-direction:column; gap:0.4rem; max-height:220px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; padding:0.6rem;"></div>
+                        <label>Credit Cards to Pay Off</label>
+                        <div id="loan-consolidation-cards-list" style="display:flex; flex-direction:column; gap:0.4rem; max-height:180px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; padding:0.6rem;"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Other Loans to Pay Off</label>
+                        <div id="loan-consolidation-loans-list" style="display:flex; flex-direction:column; gap:0.4rem; max-height:180px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; padding:0.6rem;"></div>
                     </div>
                     <div class="form-row">
-                        <div class="form-group">
-                            <label for="loan-consolidation-transfer-date">Transfer / Payoff Date</label>
-                            <input type="date" id="loan-consolidation-transfer-date" class="custom-input">
-                        </div>
                         <div class="form-group">
                             <label for="loan-consolidation-cashout">Cash Out Amount</label>
                             <div class="input-prefix-wrapper">
                                 <span class="input-prefix">$</span>
                                 <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-consolidation-cashout" class="custom-input" value="0">
                             </div>
+                            <small class="muted-text">Auto-filled with whatever's left of the Starting Balance after payoffs — edit to cash out less.</small>
                         </div>
-                    </div>
-                    <div class="form-group hidden" id="loan-consolidation-cashout-dest-group">
-                        <label for="loan-consolidation-cashout-dest">Deposit Cash-Out Into</label>
-                        <select id="loan-consolidation-cashout-dest" class="custom-select">
-                            <option value="jason">Jason's Checking</option>
-                            <option value="joint">Joint Checking</option>
-                            <option value="asia">Asia's Checking</option>
-                        </select>
+                        <div class="form-group hidden" id="loan-consolidation-cashout-dest-group">
+                            <label for="loan-consolidation-cashout-dest">Deposit Cash-Out Into</label>
+                            <select id="loan-consolidation-cashout-dest" class="custom-select">
+                                <option value="jason">Jason's Checking</option>
+                                <option value="joint">Joint Checking</option>
+                                <option value="asia">Asia's Checking</option>
+                            </select>
+                        </div>
                     </div>
                     <div id="loan-consolidation-total-summary" class="muted-text" style="font-weight:600;"></div>
                 </div>
