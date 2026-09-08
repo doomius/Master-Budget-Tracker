@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-03 11:10';
+const BUILD_VERSION = '2026-09-07 20:58';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -5271,7 +5271,11 @@ const AUTO_SYNC_HARD_LOCKED_OFF = false;
 // `false` 2026-08-24 (morning), per explicit user request — see the matching note above.
 // Re-affirmed `true` again 2026-08-24 (afternoon), per explicit user request — see the matching
 // note on AUTO_SYNC_HARD_LOCKED_OFF above. Flipped back to `false` 2026-08-25, per explicit user
-// request — see the matching note on AUTO_SYNC_HARD_LOCKED_OFF above.
+// request — see the matching note on AUTO_SYNC_HARD_LOCKED_OFF above. Re-affirmed `true` again
+// 2026-09-03, per explicit user request, while doing exploratory "estimating" (hypothetical/test
+// numbers) that shouldn't land in the shared Drive file — flip back to `false` when told to.
+// Flipped back to `false` 2026-09-07, per explicit user request ("turn on auto sync") — the
+// estimating pass is done and the user wants this device syncing with Google Drive again.
 const SYNC_COMPLETELY_DISABLED = false;
 
 // Disables (not just unchecks) both checkboxes whenever getAutoSyncEnabled() can't currently return
@@ -5351,6 +5355,20 @@ async function _fetchWithTimeout(url, options) {
 // _autoSyncKilledThisSession), and the debounced auto-push scheduling in saveDatabase() are all
 // unchanged from the Sheets-based design — only what happens at the actual network boundary did.
 
+// Per explicit user request, 2026-09-07: a single network blip (Apps Script cold start, transient
+// fetch failure, LockService contention from a near-simultaneous push) used to go straight to the
+// sad-face error indicator, even though retrying a moment later usually just works. Both
+// pullStateFromDrive and pushStateToDrive now retry the actual network attempt up to
+// SYNC_MAX_ATTEMPTS times, with a short growing delay between attempts, before reporting real
+// failure — only wraps the fetch/parse/json.error step itself, not the state-assignment/validation
+// logic around it, so a genuine data problem (bad JSON shape, etc.) still fails once and reports
+// immediately rather than burning through retries that would all fail the same way regardless.
+const SYNC_MAX_ATTEMPTS = 5;
+const SYNC_RETRY_BASE_DELAY_MS = 1200;
+function _syncRetryDelay(attempt) {
+    return new Promise(resolve => setTimeout(resolve, Math.min(SYNC_RETRY_BASE_DELAY_MS * attempt, 5000)));
+}
+
 async function pullStateFromDrive(respectAutoSyncToggle = false) {
     if (SYNC_COMPLETELY_DISABLED) {
         logSystem('Pull from Google Drive skipped — sync is completely disabled (SYNC_COMPLETELY_DISABLED in app.js).');
@@ -5364,9 +5382,19 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
     _syncPullInProgress = true;
     showSyncStatusFlag('pending', 'Pulling from Google Drive…');
     try {
-        const resp = await _fetchWithTimeout(url);
-        const json = await resp.json();
-        if (json.error) throw new Error(json.error);
+        let json;
+        for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+            try {
+                const resp = await _fetchWithTimeout(url);
+                json = await resp.json();
+                if (json.error) throw new Error(json.error);
+                break;
+            } catch (err) {
+                if (attempt === SYNC_MAX_ATTEMPTS) throw err;
+                showSyncStatusFlag('pending', `Pulling from Google Drive… (retry ${attempt + 1} of ${SYNC_MAX_ATTEMPTS})`);
+                await _syncRetryDelay(attempt);
+            }
+        }
         if (!json.data) {
             // The Drive file legitimately has no data yet on a genuinely brand-new deployment — but
             // an empty/null response can ALSO come from a transient server hiccup, a race with a
@@ -5479,13 +5507,22 @@ async function pushStateToDrive(forceFirstPush = false) {
     _syncPushInProgress = true;
     showSyncStatusFlag('pending', 'Pushing to Google Drive…');
     try {
-        const resp = await _fetchWithTimeout(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body
-        });
-        const json = await resp.json();
-        if (json.error) throw new Error(json.error);
+        for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+            try {
+                const resp = await _fetchWithTimeout(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body
+                });
+                const json = await resp.json();
+                if (json.error) throw new Error(json.error);
+                break;
+            } catch (err) {
+                if (attempt === SYNC_MAX_ATTEMPTS) throw err;
+                showSyncStatusFlag('pending', `Pushing to Google Drive… (retry ${attempt + 1} of ${SYNC_MAX_ATTEMPTS})`);
+                await _syncRetryDelay(attempt);
+            }
+        }
         logSuccess('Synced to Google Drive.');
         showSyncStatusFlag('success', 'Synced to Google Drive.');
     } catch (err) {
@@ -5551,10 +5588,10 @@ function showSyncStatusFlag(status, message) {
 // status/message, driven from the same single call site, but pinned bottom-left so it's visible
 // without opening the hamburger menu. Per explicit user request, 2026-08-05, updated 2026-08-24: it
 // used to fade itself out automatically a few seconds after a success; it now stays put (success OR
-// failure) exactly like the desktop flag until the next sync attempt overwrites it — the only way to
-// hide it early is the explicit Dismiss button in its own detail popover (see the
-// btn-mobile-sync-dismiss handler in setupEventListeners()), which hides just this one appearance
-// and does not suppress the next real sync attempt from showing it again.
+// failure) exactly like the desktop flag until the next sync attempt overwrites it. Updated again,
+// 2026-09-07, per explicit user request: the badge itself has no early-dismiss of its own anymore —
+// its detail popover's Dismiss button (see the btn-mobile-sync-dismiss handler in
+// setupEventListeners()) only closes that popover now, it does not hide the badge/icon.
 function updateMobileSyncBadge(status, message) {
     const badge = document.getElementById('mobile-sync-badge');
     const icon = document.getElementById('mobile-sync-badge-icon');
@@ -9304,9 +9341,10 @@ function setupEventListeners() {
 
     // Mobile floating counterpart — see updateMobileSyncBadge() in app.js and the badge's own
     // comment in Index.html. Tapping the badge opens the same detail popover pattern as the sidebar
-    // row above, with the same Sync Now/Pull Fresh actions plus a Dismiss button (mobile-only,
-    // since the badge floats over page content rather than sitting in a sidebar the user chose to
-    // open) that hides just this appearance — the next real sync attempt shows it again regardless.
+    // row above, with the same Sync Now/Pull Fresh actions plus a Dismiss button (mobile-only, since
+    // the badge floats over page content rather than sitting in a sidebar the user chose to open)
+    // that closes just this popover — see its own handler below for why it no longer also hides the
+    // badge/icon itself.
     const mobileSyncBadge = document.getElementById('mobile-sync-badge');
     const mobileSyncBadgeDetail = document.getElementById('mobile-sync-badge-detail');
     if (mobileSyncBadge && mobileSyncBadgeDetail) {
@@ -9319,14 +9357,12 @@ function setupEventListeners() {
     document.getElementById('btn-mobile-sync-push')?.addEventListener('click', () => { _syncStatusManualPush(); });
     document.getElementById('btn-mobile-sync-pull')?.addEventListener('click', () => { _syncStatusManualPull(); });
     document.getElementById('btn-mobile-sync-dismiss')?.addEventListener('click', () => {
+        // Per explicit user request, 2026-09-07: Dismiss used to also fade out and hide the badge
+        // icon itself (mobileSyncBadge), not just this popover — meaning "Dismiss" silently made the
+        // sad-face/thumbs-up/spinner indicator disappear too, which the user didn't want. It now
+        // only closes the popover; the badge icon stays exactly as-is regardless, same as the
+        // desktop sidebar's sync-status-flag never had a Dismiss button to hide itself with.
         mobileSyncBadgeDetail?.classList.add('hidden');
-        // Reuses the same fade transition the old auto-timer used to trigger — see .fading-out in
-        // index.css — then actually hides it once the fade finishes so it isn't sitting there
-        // invisibly intercepting taps over whatever's underneath. The next call to
-        // updateMobileSyncBadge() (the next real sync attempt) removes both classes and shows it
-        // again on its own.
-        mobileSyncBadge?.classList.add('fading-out');
-        setTimeout(() => mobileSyncBadge?.classList.add('hidden'), 600);
     });
 
     // One-time catch-up for any recurring bill ever backdated to a start month before it existed —
@@ -24121,7 +24157,50 @@ function removeVacationLoanPayments(loanId) {
     });
 }
 
-function syncVacationLoanPayments(loan) {
+// Defense in depth, added 2026-09-05 alongside the fix in deleteLoanAccount() (see its own comment
+// for the real bug this guards against): removeVacationLoanPayments() only ever finds payments
+// tagged with ONE specific loan.id, so if a trip's linked loan is ever lost/orphaned through some
+// OTHER path this file doesn't yet know about, its old payments would stay invisible to that
+// targeted removal — and the very next vacation-trip save, finding no linked loan, would create a
+// fresh one and post a second, duplicate set right alongside the orphaned original. Every payment
+// syncVacationLoanPayments() posts now also carries vacationTripId (in addition to vacationLoanId),
+// so this can find and remove ANY stray trip-linked loan payment regardless of which loan.id it
+// references.
+//
+// keepLoanId (added same day, after the first version of this fix — gated to only the "creating a
+// brand-new loan" branch — was confirmed live to STILL leave a duplicate in place): a trip's loan
+// can be orphaned-then-recreated MULTIPLE times over its life (this exact trip already had it happen
+// twice), and once that's happened once, the loan found by vacationTripId on a LATER, ordinary edit
+// is the newest one — the OLDER orphaned payment set is invisible to that save's own
+// syncVacationLoanPayments() (which only ever cleans up ITS OWN loan.id) and stayed duplicated
+// forever, since the "clean up before creating new" call only ever ran at the moment of creation,
+// never on a routine save of an already-linked loan. Passing the CURRENT loan's id here and calling
+// this unconditionally on every save (not just when creating fresh) removes any stray payment set
+// left over from an EARLIER orphaning event, however many times that's already happened, every time
+// — self-healing regardless of how much past damage is sitting there. Omit keepLoanId to remove
+// every trip-linked loan payment unconditionally (the "no longer financed this way at all" case).
+function removeOrphanedVacationLoanPaymentsForTrip(tripId, keepLoanId) {
+    if (!tripId) return;
+    const shouldRemove = tx => tx.vacationTripId === tripId && tx.vacationLoanId && tx.vacationLoanId !== keepLoanId;
+    Object.keys(state.personalCalendar || {}).forEach(k => {
+        state.personalCalendar[k] = (state.personalCalendar[k] || []).filter(tx => !shouldRemove(tx));
+    });
+    if (state.jointRegister) {
+        state.jointRegister = state.jointRegister.filter(tx => !shouldRemove(tx));
+    }
+    Object.keys(state.asiaCalendar || {}).forEach(k => {
+        state.asiaCalendar[k] = (state.asiaCalendar[k] || []).filter(tx => !shouldRemove(tx));
+    });
+}
+
+// options.skipPastDateConfirm: the trip-form submit handler already shows its own confirm() for a
+// brand-new trip loan in some flows — pass true there to avoid double-prompting, same convention
+// applyVacationItemBooking() already established. Left false (i.e. DO confirm) when resyncing an
+// EXISTING loan's schedule after an edit, since every call here is a blind remove-then-recreate of
+// ALL N payments — there's no per-payment tracking to tell "already confirmed once" apart from
+// "brand new," so gate on whether ANY scheduled date is already in the past rather than nagging on
+// every routine edit that doesn't touch dates already gone by.
+function syncVacationLoanPayments(loan, options = {}) {
     if (!loan) return;
     removeVacationLoanPayments(loan.id);
     if (!loan.firstPaymentDate || !loan.termMonths || !loan.payment || loan.payment <= 0) return;
@@ -24135,6 +24214,7 @@ function syncVacationLoanPayments(loan) {
     const amount = loan.payment;
     const N = loan.termMonths;
 
+    const scheduled = [];
     for (let i = 0; i < N; i++) {
         const targetDateObj = new Date(startY, startM - 1 + i, 1);
         const y = targetDateObj.getFullYear();
@@ -24142,8 +24222,22 @@ function syncVacationLoanPayments(loan) {
         const maxDays = new Date(y, mIdx + 1, 0).getDate();
         const actualDay = Math.min(startD, maxDays);
         const actualDate = new Date(y, mIdx, actualDay);
-        const dateStr = formatLocalDate(actualDate);
+        scheduled.push({ i, y, mIdx, dateStr: formatLocalDate(actualDate) });
+    }
 
+    // Per explicit user request, 2026-09-05 (see removeOrphanedVacationLoanPaymentsForTrip()'s own
+    // comment for the duplicate-payment bug this is part of fixing): posting a real past-dated
+    // payment with no confirmation is exactly how 6 months of real duplicate payments landed in the
+    // joint register unnoticed. Mirrors applyVacationItemBooking's own past-date gate.
+    const todayStr = formatLocalDate(new Date());
+    const pastCount = scheduled.filter(s => s.dateStr < todayStr).length;
+    if (pastCount > 0 && !options.skipPastDateConfirm) {
+        const sourceLabel = source === 'joint' ? 'Joint Checking' : source === 'asia' ? "Asia's Checking" : "Jason's Checking";
+        const proceed = confirm(`${loan.name}'s payment schedule includes ${pastCount} payment${pastCount === 1 ? '' : 's'} dated before today (starting ${formatDateDisplay(scheduled[0].dateStr)}).\n\nAdd ${pastCount === 1 ? 'it' : 'them'} to ${sourceLabel}'s ledger now? Say no if any of these were already recorded separately when they actually happened.`);
+        if (!proceed) return;
+    }
+
+    scheduled.forEach(({ i, y, mIdx, dateStr }) => {
         const mShort = MONTH_ORDER[mIdx];
         const key = `${y}-${mShort}`;
         const description = `${loan.name} Payment (${i + 1}/${N})`;
@@ -24152,14 +24246,14 @@ function syncVacationLoanPayments(loan) {
 
         if (source === 'jason') {
             ensureYearMonthInitialized(y, mShort);
-            state.personalCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, createdAt: nowStamp });
+            state.personalCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
         } else if (source === 'joint') {
-            state.jointRegister.push({ id: txId, type: 'expense', name: description, amount: -amount, date: dateStr, vacationLoanId: loan.id, createdAt: nowStamp });
+            state.jointRegister.push({ id: txId, type: 'expense', name: description, amount: -amount, date: dateStr, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
         } else if (source === 'asia') {
             if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
-            state.asiaCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, createdAt: nowStamp });
+            state.asiaCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
         }
-    }
+    });
 }
 
 function removeVacationCruiseDepositTransactions(tripId) {
@@ -24193,53 +24287,87 @@ function removeVacationCruiseDepositTransactions(tripId) {
     }
 }
 
+// One-time migration helper: before 2026-09-05, cruise deposits were tracked purely by the
+// blanket vacationDepositId tag (removeVacationCruiseDepositTransactions() above) — a deposit had
+// no prepaidTxId/prepaidTxSource of its own the way every other vacation-bookable item does, and no
+// past-date confirmation ever existed for one either. Finds a still-existing legacy-tagged
+// transaction for one deposit and removes it outright (cleanly — no confirmation needed to remove
+// something, only to post something new), leaving the deposit untracked so the caller's own
+// applyVacationItemBooking() call treats it as a genuinely new booking and applies its normal
+// past-date confirmation gate. Deliberately does NOT "adopt" the legacy transaction onto the
+// deposit's own tracking fields the way an earlier version of this fix did — adopting made
+// applyVacationItemBooking() treat it as "already booked, just updating," which skips that same
+// confirmation gate by design (see that function's own comment) and was exactly how a past-dated
+// deposit slipped through with zero confirmation in the first place. This costs one one-time
+// "are you sure" per past-dated legacy deposit the very first time this code runs on a given trip;
+// every save after that uses the freshly-set prepaidTxId normally, confirmation-free unless the date
+// changes again. Searches every ledger exactly like findVacationBookedTransaction() does, since a
+// legacy deposit's real source isn't recorded anywhere except which ledger it's sitting in.
+function migrateLegacyVacationDepositTransaction(trip, dep) {
+    if (dep.prepaidTxId || !dep.id) return;
+    const legacyId = `vdep-${trip.id}-${dep.id}`;
+    Object.keys(state.personalCalendar || {}).forEach(k => {
+        state.personalCalendar[k] = (state.personalCalendar[k] || []).filter(t => t.id !== legacyId);
+    });
+    if (state.jointRegister) {
+        state.jointRegister = state.jointRegister.filter(t => t.id !== legacyId);
+    }
+    Object.keys(state.asiaCalendar || {}).forEach(k => {
+        state.asiaCalendar[k] = (state.asiaCalendar[k] || []).filter(t => t.id !== legacyId);
+    });
+    Object.keys(state.cardCalendars || {}).forEach(cardId => {
+        Object.keys(state.cardCalendars[cardId] || {}).forEach(k => {
+            let removedAmount = 0;
+            state.cardCalendars[cardId][k] = (state.cardCalendars[cardId][k] || []).filter(t => {
+                if (t.id !== legacyId) return true;
+                removedAmount = Number(t.amount) || 0;
+                return false;
+            });
+            if (removedAmount) {
+                adjustCardCurrentBalance(cardId, removedAmount, -1);
+                refreshMaterializedCardStatementCharges(cardId);
+            }
+        });
+    });
+}
+
+// Rewritten 2026-09-05 to delegate per-deposit to applyVacationItemBooking() — see that function's
+// own comment for the update-in-place/stale-detection/past-date-confirmation engine this reuses,
+// same pattern applyVacationPrepaidBooking() and applyVacationLodgingFeeBooking() already share.
+// The old version unconditionally removed every deposit transaction and recreated all of them fresh
+// on every single save, with no past-date confirmation and no way to tell "this is a genuinely new
+// payment" from "nothing about this deposit actually changed" — confirmed as a real, user-reported
+// bug, 2026-09-05: editing one deposit's label silently posted an unrelated $329.20 charge to a
+// past month on a real credit card with zero confirmation, for a payment the user says was already
+// recorded separately when it actually happened back in April.
 function syncVacationCruiseDepositTransactions(trip) {
     if (!trip) return;
-    removeVacationCruiseDepositTransactions(trip.id);
-
     const deposits = trip.cruisePaymentConfig?.deposits || trip.cruisePaymentConfig?.depositPayments || [];
-    if (!deposits.length) return;
 
     deposits.forEach((dep, idx) => {
+        migrateLegacyVacationDepositTransaction(trip, dep);
+        // 'mnvv' is this app's established non-ledger-placeholder sentinel (see
+        // removeVacationPrepaidTransaction()/findVacationBookedTransaction()); 'mnvvCredit' is this
+        // dropdown's own now-fixed value (was a one-off mismatch — see renderCruiseDepositRows()) but
+        // still recognized here so a deposit saved under the old value before this fix keeps working.
+        const source = dep.paymentSource || dep.source || 'jason';
         const amount = Number(dep.amount) || 0;
         const dateStr = dep.date;
-        const source = dep.paymentSource || 'jason';
-        if (amount <= 0.005 || !dateStr || source === 'mnvv') return;
-
-        const dateObj = new Date(dateStr + 'T00:00:00');
-        const y = dateObj.getFullYear();
-        const mShort = MONTH_ORDER[dateObj.getMonth()];
-        const key = `${y}-${mShort}`;
-        const description = `${trip.name}: Cruise Deposit (${dep.label || 'Deposit ' + (idx + 1)})`;
-        const nowStamp = Date.now();
-        const depId = dep.id || `cdep-${trip.id}-${idx + 1}`;
-        const txId = `vdep-${trip.id}-${depId}`;
-
-        if (source === 'jason') {
-            ensureYearMonthInitialized(y, mShort);
-            state.personalCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationTripId: trip.id, vacationCategoryKey: 'cruiseCost', vacationDepositId: depId, createdAt: nowStamp });
-        } else if (source === 'joint') {
-            state.jointRegister.push({ id: txId, type: 'expense', name: description, amount: -amount, date: dateStr, vacationTripId: trip.id, vacationCategoryKey: 'cruiseCost', vacationDepositId: depId, createdAt: nowStamp });
-        } else if (source === 'asia') {
-            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
-            state.asiaCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationTripId: trip.id, vacationCategoryKey: 'cruiseCost', vacationDepositId: depId, createdAt: nowStamp });
-        } else {
-            const cardId = source;
-            if (!state.cardCalendars) state.cardCalendars = {};
-            if (!state.cardCalendars[cardId]) state.cardCalendars[cardId] = {};
-            if (!state.cardCalendars[cardId][key]) state.cardCalendars[cardId][key] = [];
-            const activeCard = (state.loans || []).find(l => l.id === cardId);
-            const owner = activeCard ? (activeCard.paymentSource === 'joint' ? 'joint' : activeCard.paymentSource === 'asia' ? 'asia' : 'jason') : 'jason';
-            const newTransaction = {
-                id: txId, date: dateStr, merchant: trip.name, description: `Cruise Deposit (${dep.label || 'Deposit'})`, amount: -amount,
-                transactionKind: 'charge', owner, trip: trip.name, interestRate: activeCard ? (activeCard.interestRate || 0) : 0,
-                isRecurring: false, recurringDay: 0, recurringSeriesId: '',
-                vacationTripId: trip.id, vacationCategoryKey: 'cruiseCost', vacationDepositId: depId, createdAt: nowStamp
-            };
-            state.cardCalendars[cardId][key].push(newTransaction);
-            adjustCardCurrentBalance(cardId, newTransaction.amount);
-            refreshMaterializedCardStatementCharges(cardId);
+        if (source === 'mnvv' || source === 'mnvvCredit' || amount <= 0.005 || !dateStr) {
+            if (dep.prepaidTxId) removeVacationPrepaidTransaction(dep);
+            return;
         }
+        const shim = {
+            name: `Deposit (${dep.label || 'Deposit ' + (idx + 1)})`,
+            cost: amount,
+            paymentDate: dateStr,
+            paymentSource: source,
+            prepaidTxId: dep.prepaidTxId,
+            prepaidTxSource: dep.prepaidTxSource
+        };
+        applyVacationItemBooking(trip, shim, 'deposit', 'cruiseCost');
+        dep.prepaidTxId = shim.prepaidTxId;
+        dep.prepaidTxSource = shim.prepaidTxSource;
     });
 }
 
@@ -28300,7 +28428,14 @@ function setupVacationEventListeners() {
                             <option value="jason" ${source === 'jason' ? 'selected' : ''}>Jason's Checking</option>
                             <option value="joint" ${source === 'joint' ? 'selected' : ''}>Joint Checking</option>
                             <option value="asia" ${source === 'asia' ? 'selected' : ''}>Asia's Checking</option>
-                            <option value="mnvvCredit" ${source === 'mnvvCredit' || source === 'mnvv' ? 'selected' : ''}>🎟️ MNVV / Certificate / Onboard Credit</option>
+                            <!-- 'mnvv' matches this app's one established non-ledger-placeholder sentinel
+                                 (removeVacationPrepaidTransaction()/findVacationBookedTransaction()) — this
+                                 option used to save 'mnvvCredit' instead, a one-off mismatch that made
+                                 syncVacationCruiseDepositTransactions() (which only ever checked for 'mnvv')
+                                 treat a deposit marked as a certificate as if it were a real payment source,
+                                 confirmed as a real bug, 2026-09-05. Fixed here; that function still also
+                                 recognizes 'mnvvCredit' so a deposit saved under the old value keeps working. -->
+                            <option value="mnvv" ${source === 'mnvvCredit' || source === 'mnvv' ? 'selected' : ''}>🎟️ MNVV / Certificate / Onboard Credit</option>
                             ${jointCards ? `<optgroup label="Joint Cards">${jointCards}</optgroup>` : ''}
                             ${asiaCards ? `<optgroup label="Asia's Cards">${asiaCards}</optgroup>` : ''}
                             ${jasonCards ? `<optgroup label="Jason's Cards">${jasonCards}</optgroup>` : ''}
@@ -28558,7 +28693,8 @@ function setupVacationEventListeners() {
             let linkedLoan = state.loans.find(l => l.vacationTripId === tripObj.id);
             const computedPayment = loanPayment || (loanPrincipal > 0 ? Math.round((loanPrincipal / loanMonths) * 100) / 100 : 0);
             const dueDate = loanFirstPaymentDate ? parseInt(loanFirstPaymentDate.split('-')[2], 10) : 15;
-            if (!linkedLoan) {
+            const isNewLinkedLoan = !linkedLoan;
+            if (isNewLinkedLoan) {
                 linkedLoan = {
                     id: 'loan-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
                     type: 'loan',
@@ -28585,7 +28721,14 @@ function setupVacationEventListeners() {
                 linkedLoan.firstPaymentDate = loanFirstPaymentDate;
                 linkedLoan.termMonths = loanMonths;
             }
-            syncVacationLoanPayments(linkedLoan);
+            // Defense in depth against the exact bug fixed 2026-09-05 (see
+            // removeOrphanedVacationLoanPaymentsForTrip()'s own comment) — run on EVERY save, not
+            // just when creating a brand-new loan: confirmed live that a trip whose loan had already
+            // been orphaned-and-recreated once still carried a stale duplicate payment set forward
+            // through later, ordinary edits, since the old "only clean up at creation time" version
+            // of this call never ran again once a (new, but still-just-as-orphanable) loan existed.
+            removeOrphanedVacationLoanPaymentsForTrip(tripObj.id, linkedLoan.id);
+            syncVacationLoanPayments(linkedLoan, { skipPastDateConfirm: !isNewLinkedLoan });
         } else {
             // If previously linked loan exists but user changed remaining payment source, remove linked loan
             const linkedLoan = state.loans.find(l => l.vacationTripId === tripObj.id);
@@ -36322,7 +36465,28 @@ function deleteLoanAccount(account) {
           `\n\nYou'll need to pick a new payment source for ${affectedSettings.length === 1 ? 'it' : 'them'} afterward.`
         : '';
 
-    if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${account.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.${warningText}`)) {
+    // A Vacation Planner "short-term loan" (financing a cruise/trip's remaining balance) is a
+    // completely normal loan object once created (see the vacation-trip-form submit handler,
+    // ~app.js:28558) — it shows up here in Installment Loans exactly like any other account, with no
+    // visible sign it's vacation-linked, and deleting it here used to leave two real gaps: (1) its
+    // already-posted monthly payments (tagged vacationLoanId, living directly in
+    // personalCalendar/jointRegister/asiaCalendar, NOT state.cardCalendars) were never removed —
+    // deleteAllFutureTransactionsForSetting(id, 'card') only ever checks paymentSource/
+    // destinationAccount/transferTargetId/payoffTargetId, none of which a vacation loan payment
+    // carries — and (2) the owning trip's cruisePaymentConfig.remainingPaymentSource stayed
+    // 'shortTermLoan', so the very next time that trip was saved for ANY reason, the trip-form
+    // handler found no linked loan, silently created a brand-new one, and posted a second, duplicate
+    // set of monthly payments right alongside the orphaned original set. Confirmed as a real,
+    // user-reported bug, 2026-09-05: exactly this sequence left 2 payments per month for 6 months in
+    // the joint register. Fixed by cleaning up the payments AND resetting the trip's config here, the
+    // same way the Bill Tracker case just above resets `source` to 'none' rather than leaving a
+    // silent dangling reference.
+    const linkedVacationTrip = account.vacationTripId ? (state.vacationTrips || []).find(t => t.id === account.vacationTripId) : null;
+    const vacationWarningText = linkedVacationTrip
+        ? `\n\n⚠️ This loan finances "${linkedVacationTrip.name}"'s remaining trip balance. Deleting it will also remove its already-scheduled monthly payments and switch that trip back to paying the remaining balance from Jason's Checking — you'll need to revisit the trip's Cost & Payment Setup afterward if that's not what you want.`
+        : '';
+
+    if (!confirm(`Delete ${isLoanType ? 'installment loan' : 'credit card'} "${account.name}"?\n\nThis will permanently delete ${count} future projected transactions across your ledgers.\n\nAll historical payments/charges that occurred in the past will remain intact for your records.${warningText}${vacationWarningText}`)) {
         return false;
     }
 
@@ -36331,6 +36495,10 @@ function deleteLoanAccount(account) {
     if (affectedSettings.length) {
         affectedSettings.forEach(s => { s.source = 'none'; });
         syncBillTrackerBillsToAllMonths();
+    }
+    if (linkedVacationTrip) {
+        removeVacationLoanPayments(removed.id);
+        if (linkedVacationTrip.cruisePaymentConfig) linkedVacationTrip.cruisePaymentConfig.remainingPaymentSource = 'jason';
     }
 
     if (isLoanType) syncMortgageLoansToAllMonths();
@@ -38323,8 +38491,17 @@ function syncBillTrackerBillsToAllMonths() {
 // startDate) whose own start month is on or before the target month. "Keep the last amount going"
 // per explicit user request: a later period's rate takes over from its own start date with no gap,
 // rather than pausing between periods.
+// Confirmed real bug, 2026-09-05: this only ever checked that a period had STARTED by the given
+// month (startDate <= monthKey) — nothing here, or in either of this function's two callers, ever
+// checked the period's own targetMonth as an upper bound. A goal to "save $X by April 2027" kept
+// being treated as "active" (and syncSavingsTransferSettingsToAllMonths kept materializing its
+// monthly contribution) for every month AFTER April 2027 too, forever, since the period never
+// stopped being the "latest-started" one just because its target date had already passed.
+// calculateSavingsGoalMonthlyAmount()'s own month count is inclusive of the target month (start
+// through target, both ends counted), so the target month itself is still a real contribution month
+// — contributions correctly stop the month AFTER it, hence <= not <.
 function getActiveSavingsGoalPeriodForMonth(card, monthKey) {
-    const periods = (card.goalPeriods || []).filter(p => p.startDate && p.startDate.slice(0, 7) <= monthKey);
+    const periods = (card.goalPeriods || []).filter(p => p.startDate && p.startDate.slice(0, 7) <= monthKey && (!p.targetMonth || monthKey <= p.targetMonth));
     if (!periods.length) return null;
     return periods.reduce((latest, p) => (!latest || p.startDate > latest.startDate) ? p : latest, null);
 }
