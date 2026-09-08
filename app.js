@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-07 20:58';
+const BUILD_VERSION = '2026-09-07 21:52';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -31537,11 +31537,32 @@ function computeAllEstimatedBalancesForCard(cardId) {
                 && dateStr > plan.balanceAsOfDate
                 && dateStr >= plan.startDate
             );
-            const activePlansFees = plansAtStatement.reduce((sum, plan) => sum + (Number(plan.monthlyFee) || 0), 0);
+            // A plan fee the user explicitly deleted (state.cardChargeSkips[`planfee-${plan.id}-${dateStr}`],
+            // set by the same delete flow as an estimated interest charge — see
+            // postCardStatementChargesForMonth's own comment on cardChargeSkips) must stay excluded
+            // here too, not just from real materialization — see the interest fix just below for the
+            // matching bug this closes.
+            const activePlansFees = plansAtStatement.reduce((sum, plan) => {
+                const feeSkipped = !!(state.cardChargeSkips && state.cardChargeSkips[`planfee-${plan.id}-${dateStr}`]);
+                return feeSkipped ? sum : sum + (Number(plan.monthlyFee) || 0);
+            }, 0);
 
             // Posted fees and interest are already present in the day's ledger transactions.
             // Only estimate them inline for a future statement that has no generated charge rows.
             const alreadyPostedReal = dayTxs.some(tx => tx.isEstimatedInterest || tx.isPlanFee);
+            // A user-deleted interest charge is spliced out of the real ledger entirely (not just
+            // billOccurrenceDeleted), so `alreadyPostedReal` alone can't tell "future statement, no
+            // charge generated yet" apart from "this exact statement's charge was deliberately
+            // deleted" — both look identical to the check above. Without also checking
+            // cardChargeSkips (the same flag postCardStatementChargesForMonth already checks before
+            // regenerating a real charge, ~app.js:31240), this display-only estimate silently
+            // re-derived the same interest via its own day-by-day accrual loop and baked it back into
+            // estBalance anyway — so the Calendar (reading the real, now-empty ledger) correctly
+            // showed $0, while the List (reading this estimate) kept showing the deleted amount as if
+            // it were never removed, confirmed live 2026-09-07 (Citi card: deleted a $86 estimated
+            // interest charge, Calendar showed $0 through the next statement, List's beginning
+            // balance on that next statement still carried the phantom $86).
+            const interestSkipped = !!(state.cardChargeSkips && state.cardChargeSkips[`interest-${cardId}-${dateStr}`]);
             // Mirror postCardStatementChargesForMonth's own "never fabricate interest/fee history for
             // a month before the current real one" rule (see that function's comment for the real
             // 2026-07-23 incident this guards against — retroactively inventing interest for an
@@ -31564,7 +31585,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
                 // invisible jump between one month's shown Ending Balance and the next month's shown
                 // Starting Balance that a Full Balance card's engine-computed payment doesn't include
                 // — confirmed as a real bug, 2026-08-02 (a $1.53 gap with no corresponding ledger row).
-                if (canAccrueInterest) estBalance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
+                if (canAccrueInterest && !interestSkipped) estBalance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
             }
             // Bug fix: this used to blindly overwrite EVERY transaction dated the statement day with
             // the single post-adjustment estBalance, clobbering the correct per-transaction values
