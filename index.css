@@ -4593,6 +4593,19 @@ body.is-mobile-screen .savings-summary-cards,
     border-style: dashed;
 }
 
+/* A planned/estimated future expense against a Savings pool — reduces the displayed balance but
+   never posts to any checking/card ledger (see addSavingsPlaceholder() in app.js). Dotted border
+   distinguishes it from an ordinary future-dated REAL entry (.savings-projected-entry's dashed
+   border, which a placeholder often also carries at the same time), and italic text reinforces
+   "estimate only" at a glance in both the calendar chip and the list row. */
+.savings-placeholder-entry {
+    border-style: dotted !important;
+    font-style: italic;
+}
+.savings-placeholder-entry span {
+    font-style: italic;
+}
+
 .savings-day-balance {
     margin-bottom: 0.75rem;
     color: var(--text-secondary);
@@ -6764,6 +6777,17 @@ body.is-mobile-screen #joint-expenses-content .data-table th,
     color: #93c5fd;
     border: 1px solid rgba(59, 130, 246, 0.45);
     box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
+}
+
+/* Savings Entry Type's 4th option (Placeholder) — a planned/estimated expense, distinct from every
+   other option (it's not money moving anywhere, real or not), so it gets its own color too. Amber
+   reads as "provisional/estimate" without implying money already moved (Deposit's green) or an
+   actual outflow (Withdrawal's red). */
+.direction-btn.active-placeholder {
+    background: rgba(245, 158, 11, 0.22);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25);
 }
 
 /* Long-press row-detail overlay (see initLongPressDetailOverlay() in app.js) — per explicit user
