@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 18:10';
+const BUILD_VERSION = '2026-09-09 18:20';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -17831,12 +17831,22 @@ function getTransactionIndicatorBadges(tx) {
             } else {
                 isDeposit = amt < 0; // Money leaving personal into savings is a Savings Deposit
             }
-            // Whose Savings pool this belongs to — previously omitted entirely, so every savings
-            // transfer read as a generic "Savings Deposit/Withdrawal" with no way to tell Jason's
-            // from Asia's apart in the list. Per explicit user request, 2026-08-09.
-            const ownerName = person === 'Asia' ? 'Asia' : 'Jason';
-            savingsOwnerClass = person === 'Asia' ? ' owner-asia' : ' owner-jason';
-            badgeLabel = `${isDeposit ? 'Savings Deposit' : 'Savings Withdrawal'} - ${ownerName}`;
+            // WHICH Savings pool this belongs to — previously only showed WHO (Jason vs Asia), which
+            // doesn't distinguish Emergency Fund from Travel Fund from ordinary Joint Savings at all
+            // (both of the former are joint-sourced, no "owner" to go on) — every one of those three
+            // read as an identical generic "Savings Deposit - Jason"/"- Asia" badge in the ledger with
+            // no way to tell them apart. Per explicit user request, 2026-09-09: "I see a bunch of
+            // savings deposits but no indication if it is vacation savings or emergency savings, etc."
+            // resolveSavingsTrackerFromTransferId() (already used by the checking-mirror sync layer,
+            // ~app.js:12684) is the authoritative lookup — it reads transferId's own prefix
+            // (savings-xfer-/asia-savings-xfer-/emergency-savings-xfer-/travel-savings-xfer-), not the
+            // free-text description, so it's correct regardless of what the user actually typed.
+            // Falls back to the old Jason/Asia-only label only if transferId is missing/unrecognized
+            // (shouldn't happen for a real transfer, but a badge fn should never throw on stale data).
+            const pool = resolveSavingsTrackerFromTransferId(tx.transferId);
+            const poolLabel = pool ? pool.fullLabel : (person === 'Asia' ? "Asia's Savings" : 'Joint Savings');
+            savingsOwnerClass = pool ? ` owner-${pool.id}` : (person === 'Asia' ? ' owner-asia' : ' owner-jason');
+            badgeLabel = `${isDeposit ? 'Savings Deposit' : 'Savings Withdrawal'} - ${poolLabel}`;
         } else if (isJoint) {
             let p = 'Jason';
             // See the matching fix + comment in getFormattedTransferTitle() — a Split Transfer
@@ -17966,10 +17976,13 @@ function getTransactionIndicatorPrefix(tx) {
             ? `<span class="dynamic-override-flag" title="Overridden ${genericLabel}">&#9888;</span> `
             : `<span class="cc-source-badge manual" title="Auto: ${genericLabel}" style="padding:0; background:none;">&#128257;</span> `;
     })() : '';
-    // Ownership flag for a savings-transfer mirror specifically (Jason<->Joint or Asia<->Joint) —
-    // blue for Jason, green for Asia. Per explicit user request, 2026-08-09.
+    // Ownership flag for a savings-transfer mirror — which POOL it's headed to (Joint Savings/Asia's
+    // Savings/Emergency/Travel), not just who — see the matching fix + comment in
+    // getTransactionIndicatorBadges() above for why person-only wasn't enough. Per explicit user
+    // request, 2026-08-09 (original Jason/Asia-only version), extended 2026-09-09.
+    const savingsPool = tx.savingsTransfer ? resolveSavingsTrackerFromTransferId(tx.transferId) : null;
     const savingsOwnerIcon = tx.savingsTransfer
-        ? `<span class="owner-flag owner-${person === 'Asia' ? 'asia' : 'jason'}" title="Savings Transfer (${person || 'Jason'})">&#9873;</span> `
+        ? `<span class="owner-flag owner-${savingsPool ? savingsPool.id : (person === 'Asia' ? 'asia' : 'jason')}" title="Savings Transfer (${savingsPool ? savingsPool.fullLabel : (person || 'Jason')})">&#9873;</span> `
         : '';
     // Compact version of getTransactionIndicatorBadges()'s Trip Placeholder badge, for the calendar
     // chip's icon-only prefix.
