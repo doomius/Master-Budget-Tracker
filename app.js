@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-07 21:52';
+const BUILD_VERSION = '2026-09-09 08:10';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -16757,10 +16757,13 @@ function handleBalanceOverride(date, newBalance, oldBalance) {
 }
 
 // Shows/hides the credit-card-payment notice in the edit-transaction dialog and applies the field
-// restrictions for the checking-side legs of card payments: automatic payments allow only an amount
-// override (date/description locked; the override touches neither the Bill Splitter budget nor the
-// payment strategy), manual payments stay fully editable but get an informational notice, since
-// changes propagate to the card ledger and the month's Bill Splitter row.
+// restrictions for the checking-side legs of card payments: automatic payments allow a date AND
+// amount override (description stays locked — the save handler's isAutomaticCardPayment branch
+// never applies it, see syncCheckingOverrideToCard's own call sites), mirrored onto the card's own
+// ledger via automaticPaymentOverridden + syncCheckingOverrideToCard/syncAutomaticCardPaymentOverride
+// so it isn't silently regenerated back to its natural date/amount on the next render; manual
+// payments stay fully editable but get an informational notice, since changes propagate to the card
+// ledger and the month's Bill Splitter row.
 function applyEditTxCardPaymentNotice(tx) {
     const notice = document.getElementById('edit-tx-cc-payment-notice');
     const noticeText = document.getElementById('edit-tx-cc-payment-notice-text');
@@ -16774,11 +16777,18 @@ function applyEditTxCardPaymentNotice(tx) {
     const accountLabel = targetAccount && targetAccount.type === 'loan' ? 'loan' : 'credit card';
     if (noticeText) {
         noticeText.textContent = isAuto
-            ? `Automatic ${accountLabel} payment: only the amount can be changed here. The override will not affect the Bill Splitter budget or the ${accountLabel}’s automatic payment settings.`
+            ? `Automatic ${accountLabel} payment: the date and amount can be changed here, mirrored onto the ${accountLabel}’s own ledger. This will not affect the Bill Splitter budget or the ${accountLabel}’s automatic payment settings.`
             : `Scheduled ${accountLabel} payment: changes here also update the ${accountLabel}’s ledger and this month’s Bill Splitter entry.`;
     }
+    // The date field used to be locked here too (this function used to disable edit-tx-date
+    // unconditionally for isAuto) — but the save handler's own isAutomaticCardPayment branches (see
+    // the personal/joint branches of the edit-tx save flow) already fully support a date override
+    // and have for a while ("Date AND amount are both editable here"); this notice function just
+    // never caught up, leaving the date input impossible to use despite the save logic being ready
+    // for it. Confirmed real bug, 2026-09-09 (a "Bathroom Remodel" loan's automatic payment couldn't
+    // have its date changed anywhere in the checking ledger — not via this dialog, and drag had its
+    // own separate gap, fixed alongside this in moveTransaction()).
     if (isAuto) {
-        document.getElementById('edit-tx-date').disabled = true;
         document.getElementById('edit-tx-desc').disabled = true;
     }
     if (link) {
@@ -17306,6 +17316,17 @@ function moveTransaction(txId, sourceDate, targetDate) {
                 if (!state.personalCalendar[tgtKey]) state.personalCalendar[tgtKey] = [];
                 state.personalCalendar[tgtKey].push(tx);
             }
+            // An automatic card/loan payment's checking-side mirror needs the same
+            // automaticPaymentOverridden protection + card-leg sync the Edit Transaction dialog's
+            // save handler already applies to a date change here (see its own "Date AND amount are
+            // both editable here" comment) — without it, the next render's automatic-payment
+            // regeneration has no record this occurrence was deliberately moved and silently snaps
+            // it back to its natural date, which looked exactly like "drag does nothing" from the
+            // user's side. Confirmed real bug, 2026-09-09.
+            if (tx.isAutomaticCardPayment) {
+                tx.automaticPaymentOverridden = true;
+                syncCheckingOverrideToCard(tx);
+            }
             syncCheckingTransferMirror(tx, 'personal');
             logSuccess(`Moved personal transaction to ${targetDate}: ${tx.description}`);
         }
@@ -17313,6 +17334,11 @@ function moveTransaction(txId, sourceDate, targetDate) {
         const tx = state.jointRegister.find(t => t.id === txId);
         if (tx) {
             tx.date = targetDate;
+            // See the matching personal-branch comment just above — same gap, same fix.
+            if (tx.isAutomaticCardPayment) {
+                tx.automaticPaymentOverridden = true;
+                syncCheckingOverrideToCard(tx);
+            }
             syncCheckingTransferMirror(tx, 'joint');
             syncAsiaCheckingTransferMirror(tx);
             logSuccess(`Moved joint transaction to ${targetDate}: ${tx.name}`);
