@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 17:26';
+const BUILD_VERSION = '2026-09-09 18:10';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -21782,7 +21782,7 @@ function renderSavingsTransferSettingsSection() {
         const monthlyAmount = activePeriod ? Number(activePeriod.monthlyAmount) || 0 : 0;
         const checkingLabel = SAVINGS_CHECKING_SOURCE_LABELS[card.checkingSource] || card.checkingSource;
         const goalLabel = activePeriod
-            ? `$${Number(activePeriod.goalAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} by ${formatMonthYearDisplay(activePeriod.targetMonth)}`
+            ? `$${Number(activePeriod.goalAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} ${activePeriod.perpetual ? `every ${new Date(activePeriod.targetMonth + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long' })}, forever` : `by ${formatMonthYearDisplay(activePeriod.targetMonth)}`}`
             : '&mdash;';
         const row = document.createElement('tr');
         row.innerHTML = `<td><strong>${escapeHTML(card.name)}</strong>${card.excludeFromSplitter ? ' <span class="card-icon info" style="font-size:.65rem;">Excluded from Splitter</span>' : ''}</td><td>${escapeHTML(trackerDef.fullLabel)}</td><td>${escapeHTML(checkingLabel)}</td><td>$${monthlyAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td>${goalLabel}</td><td><button class="action-btn small-btn outline-btn edit-savings-transfer-setting-btn">Edit</button></td>`;
@@ -38047,9 +38047,13 @@ function updateSavingsGoalMonthlyPreview() {
     }
     const monthly = calculateSavingsGoalMonthlyAmount(account, goalAmount, targetMonth, startDate);
     const splitCycle = document.getElementById('savings-goal-split-cycle')?.checked;
-    previewEl.textContent = splitCycle
+    const perpetual = document.getElementById('savings-goal-perpetual')?.checked;
+    const base = splitCycle
         ? `Calculated monthly transfer: $${monthly.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} — split as $${(monthly / 2).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} on the 1st and $${(monthly / 2).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} on the 15th`
         : `Calculated monthly transfer: $${monthly.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    previewEl.textContent = perpetual
+        ? `${base} — this rate repeats every month, every year, forever (no end date; the goal amount/target month above only set the rate).`
+        : base;
 }
 
 function resetSavingsGoalPeriodEditor() {
@@ -38058,6 +38062,7 @@ function resetSavingsGoalPeriodEditor() {
     document.getElementById('savings-goal-target-month').value = '';
     document.getElementById('savings-goal-start-date').value = '';
     document.getElementById('savings-goal-split-cycle').checked = false;
+    document.getElementById('savings-goal-perpetual').checked = false;
     document.getElementById('btn-add-savings-goal-period').textContent = 'Add Goal';
     document.getElementById('btn-cancel-savings-goal-edit')?.classList.add('hidden');
     updateSavingsGoalMonthlyPreview();
@@ -38075,13 +38080,20 @@ function renderEditingSavingsGoalPeriods() {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:.4rem .6rem; background:rgba(255,255,255,.03); border-radius:6px;';
         const splitLabel = period.splitCycle ? ` (split $${(Number(period.monthlyAmount) / 2).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} on the 1st/15th)` : '';
-        row.innerHTML = `<span><strong>$${Number(period.goalAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong> by ${formatMonthYearDisplay(period.targetMonth)} — starting ${formatDateDisplay(period.startDate)} — <strong>$${Number(period.monthlyAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}/mo</strong>${splitLabel}</span><div style="display:flex; gap:.4rem;"><button type="button" class="action-btn small-btn outline-btn edit-goal-period-btn">Edit</button><button type="button" class="action-btn small-btn danger-btn delete-goal-period-btn">Delete</button></div>`;
+        // A perpetual period's targetMonth is the month-of-year the rate was calculated from, not an
+        // end date — "by October 2027" would read as stale/wrong once this is still active in 2031,
+        // so it gets its own "every <Month>, forever" phrasing instead.
+        const targetLabel = period.perpetual
+            ? `every ${new Date(period.targetMonth + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long' })}, forever`
+            : `by ${formatMonthYearDisplay(period.targetMonth)}`;
+        row.innerHTML = `<span><strong>$${Number(period.goalAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong> ${targetLabel} — starting ${formatDateDisplay(period.startDate)} — <strong>$${Number(period.monthlyAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}/mo</strong>${splitLabel}</span><div style="display:flex; gap:.4rem;"><button type="button" class="action-btn small-btn outline-btn edit-goal-period-btn">Edit</button><button type="button" class="action-btn small-btn danger-btn delete-goal-period-btn">Delete</button></div>`;
         row.querySelector('.edit-goal-period-btn')?.addEventListener('click', () => {
             editingSavingsGoalPeriodId = period.id;
             document.getElementById('savings-goal-amount').value = period.goalAmount;
             document.getElementById('savings-goal-target-month').value = period.targetMonth;
             document.getElementById('savings-goal-start-date').value = period.startDate;
             document.getElementById('savings-goal-split-cycle').checked = !!period.splitCycle;
+            document.getElementById('savings-goal-perpetual').checked = !!period.perpetual;
             document.getElementById('btn-add-savings-goal-period').textContent = 'Update Goal';
             document.getElementById('btn-cancel-savings-goal-edit')?.classList.remove('hidden');
             updateSavingsGoalMonthlyPreview();
@@ -38172,6 +38184,7 @@ function setupSavingsTransferSettingListeners() {
         document.getElementById(id)?.addEventListener('input', updateSavingsGoalMonthlyPreview);
     });
     document.getElementById('savings-goal-split-cycle')?.addEventListener('change', updateSavingsGoalMonthlyPreview);
+    document.getElementById('savings-goal-perpetual')?.addEventListener('change', updateSavingsGoalMonthlyPreview);
 
     document.getElementById('btn-add-savings-goal-period')?.addEventListener('click', () => {
         const account = document.getElementById('savings-transfer-setting-account').value;
@@ -38184,7 +38197,14 @@ function setupSavingsTransferSettingListeners() {
         }
         const monthlyAmount = calculateSavingsGoalMonthlyAmount(account, goalAmount, targetMonth, startDate);
         const splitCycle = document.getElementById('savings-goal-split-cycle').checked;
-        const entry = { id: editingSavingsGoalPeriodId || 'goal-' + Math.random().toString(36).substr(2, 9), goalAmount, targetMonth, startDate, monthlyAmount, splitCycle };
+        // Perpetual: per explicit user request, 2026-09-09 — "contribute every month, all 12 months,
+        // forever" (no pause between cycles) at this exact monthlyAmount, computed once here from
+        // this FIRST cycle's own start→target span and never recalculated. targetMonth stays stored
+        // (it's what defined the monthly rate, and still shows in the UI as "by <month>, every
+        // year"), it just stops being treated as an end date — see
+        // getActiveSavingsGoalPeriodForMonth()'s own perpetual branch.
+        const perpetual = document.getElementById('savings-goal-perpetual').checked;
+        const entry = { id: editingSavingsGoalPeriodId || 'goal-' + Math.random().toString(36).substr(2, 9), goalAmount, targetMonth, startDate, monthlyAmount, splitCycle, perpetual };
         if (editingSavingsGoalPeriodId) {
             tempEditingSavingsGoalPeriods = tempEditingSavingsGoalPeriods.map(p => p.id === entry.id ? entry : p);
         } else {
@@ -38671,8 +38691,15 @@ function syncBillTrackerBillsToAllMonths() {
 // calculateSavingsGoalMonthlyAmount()'s own month count is inclusive of the target month (start
 // through target, both ends counted), so the target month itself is still a real contribution month
 // — contributions correctly stop the month AFTER it, hence <= not <.
+//
+// Perpetual periods (p.perpetual, added 2026-09-09 per explicit user request) are the one exception
+// to that upper bound: targetMonth on a perpetual period only ever described the FIRST cycle (it's
+// what monthlyAmount was originally calculated from, at Add-Goal time) — it was never meant to be an
+// end date. "Contribute every month, all 12 months, forever" at that same fixed monthlyAmount, no
+// pause between cycles, no recalculation — per explicit user request, so a perpetual period simply
+// has no upper bound here at all; only the ordinary lower bound (has it started yet) still applies.
 function getActiveSavingsGoalPeriodForMonth(card, monthKey) {
-    const periods = (card.goalPeriods || []).filter(p => p.startDate && p.startDate.slice(0, 7) <= monthKey && (!p.targetMonth || monthKey <= p.targetMonth));
+    const periods = (card.goalPeriods || []).filter(p => p.startDate && p.startDate.slice(0, 7) <= monthKey && (p.perpetual || !p.targetMonth || monthKey <= p.targetMonth));
     if (!periods.length) return null;
     return periods.reduce((latest, p) => (!latest || p.startDate > latest.startDate) ? p : latest, null);
 }
