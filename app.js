@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 08:10';
+const BUILD_VERSION = '2026-09-09 15:13';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -32147,7 +32147,17 @@ function renderCardPayoffEstimator(cardId) {
 
     const today = new Date();
     const todayStr = formatLocalDate(today);
-    const startBal = calculateCardLedgerBalance(cardId, todayStr);
+    // For a "Schedule future payments" plan, the relevant balance to gate/size the binary search on
+    // is what the card will actually owe once payments start (startPayDateStr), not what it owes
+    // TODAY — a card can be $0 today with a large real transaction already on the books dated before
+    // the chosen start date (e.g. a future-dated purchase). calculateCardLedgerBalance(cardId,
+    // todayStr) only sums transactions through today, so that future transaction was invisible here,
+    // startBal stayed $0, the `startBal > 0.01` gate below skipped the whole binary search, and the
+    // Suggested Payment / auto-filled amount field silently stayed empty even though
+    // projectCardPayoffPath() (used a few lines down) already correctly walks the ledger forward and
+    // picks up exactly that future transaction on its own. Confirmed real bug, 2026-09-09 (Discover
+    // card: $3,500 posting 4/15/27, payoff plan started 5/01/27 — Suggested Payment never populated).
+    const startBal = calculateCardLedgerBalance(cardId, isFutureSchedule ? startPayDateStr : todayStr);
 
     let manualPayoffVal = parseFloat(manualAmountInput ? manualAmountInput.value : 0) || 0;
     if (sliderInput) {
