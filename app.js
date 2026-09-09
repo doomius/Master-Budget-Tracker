@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 15:13';
+const BUILD_VERSION = '2026-09-09 17:26';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -6597,8 +6597,9 @@ function setupEventListeners() {
     document.getElementById('btn-export-savingslist-csv')?.addEventListener('click', exportSavingsListToCSV);
 
     const updateSavingsEntryForm = () => {
-        const entryType = document.getElementById('savings-entry-type')?.value || 'deposit'; // deposit | withdrawal | interest
+        const entryType = document.getElementById('savings-entry-type')?.value || 'deposit'; // deposit | withdrawal | interest | placeholder
         const isInterest = entryType === 'interest';
+        const isPlaceholder = entryType === 'placeholder';
         // Repopulate BEFORE reading the select's own label below — a credit card option only ever
         // belongs on a Withdrawal (see populateSavingsSourceOptions()'s own comment).
         populateSavingsSourceOptions();
@@ -6607,9 +6608,9 @@ function setupEventListeners() {
         // afterward, which silently restores the hidden input to its declared 'deposit' default
         // without touching these classes on its own.
         document.querySelectorAll('#savings-entry-type-group .direction-btn').forEach(b => {
-            b.classList.remove('active-charge', 'active-deposit', 'active-interest');
+            b.classList.remove('active-charge', 'active-deposit', 'active-interest', 'active-placeholder');
             if (b.dataset.savingsEntryType === entryType) {
-                b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : 'active-deposit'));
+                b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : (isPlaceholder ? 'active-placeholder' : 'active-deposit')));
             }
         });
         // The select's own option text is already the right label for whatever's selected — a
@@ -6619,15 +6620,19 @@ function setupEventListeners() {
         const sourceLabel = sourceSelectEl?.selectedOptions?.[0]?.textContent || 'Joint';
         const amtLabelEl = document.getElementById('savings-entry-amount-label');
         if (amtLabelEl) amtLabelEl.textContent = 'Amount';
-        document.getElementById('savings-transfer-source-group')?.classList.toggle('hidden', isInterest);
+        // Placeholder has no checking-account leg at all — same as Interest — see
+        // addSavingsPlaceholder()'s own comment.
+        document.getElementById('savings-transfer-source-group')?.classList.toggle('hidden', isInterest || isPlaceholder);
         const hintEl = document.getElementById('savings-entry-hint');
         if (hintEl) hintEl.textContent = isInterest
             ? 'One-time manual addition to Savings only — never tied to or moves money from a checking account.'
-            : (entryType === 'withdrawal'
-                ? `Moves this amount from Savings into ${sourceLabel}.`
-                : `Moves this amount from ${sourceLabel} into Savings.`);
+            : isPlaceholder
+                ? 'Reduces this Savings balance as an estimate only — never posts to any checking or credit card ledger. Delete it later and replace with a real transaction once the actual amount is known.'
+                : (entryType === 'withdrawal'
+                    ? `Moves this amount from Savings into ${sourceLabel}.`
+                    : `Moves this amount from ${sourceLabel} into Savings.`);
         const addBtnEl = document.getElementById('btn-add-savings-entry');
-        if (addBtnEl) addBtnEl.textContent = isInterest ? 'Add Interest' : (entryType === 'withdrawal' ? 'Add Withdrawal' : 'Add Deposit');
+        if (addBtnEl) addBtnEl.textContent = isInterest ? 'Add Interest' : (isPlaceholder ? 'Add Placeholder' : (entryType === 'withdrawal' ? 'Add Withdrawal' : 'Add Deposit'));
         const description = document.getElementById('savings-transfer-description');
         if (isInterest && description && !description.value.trim()) description.value = 'Interest';
         if (isInterest) {
@@ -7011,9 +7016,11 @@ function setupEventListeners() {
         const targetCard = entryType === 'withdrawal' ? state.loans.find(l => l.id === source && l.type === 'credit') : null;
         const added = entryType === 'interest'
             ? pool.addInterest(date, description, rawAmount)
-            : (targetCard
-                ? !!postAdHocSavingsWithdrawalToCard(pool.id, targetCard.id, date, description || `${pool.label} Withdrawal`, rawAmount)
-                : pool.addTransfer(date, description, signedAmount, source));
+            : entryType === 'placeholder'
+                ? pool.addPlaceholder(date, description, rawAmount)
+                : (targetCard
+                    ? !!postAdHocSavingsWithdrawalToCard(pool.id, targetCard.id, date, description || `${pool.label} Withdrawal`, rawAmount)
+                    : pool.addTransfer(date, description, signedAmount, source));
         if (!added) return;
         saveDatabase();
         event.currentTarget.reset();
@@ -7023,7 +7030,9 @@ function setupEventListeners() {
         const sourceLabel = targetCard ? (targetCard.mobileNickname || targetCard.name) : (SAVINGS_CHECKING_SOURCE_LABELS[source] || SAVINGS_TRACKER_REGISTRY[source]?.fullLabel || source);
         logSuccess(entryType === 'interest'
             ? `Interest of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added to Savings on ${formatDateDisplay(date)}.`
-            : `${entryType === 'withdrawal' ? 'Withdrawal' : 'Deposit'} of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added between Savings and ${sourceLabel} on ${formatDateDisplay(date)}.`);
+            : entryType === 'placeholder'
+                ? `Placeholder of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added to Savings on ${formatDateDisplay(date)} (estimate only, nothing posted elsewhere).`
+                : `${entryType === 'withdrawal' ? 'Withdrawal' : 'Deposit'} of $${rawAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} added between Savings and ${sourceLabel} on ${formatDateDisplay(date)}.`);
     });
 
     // Deposit/Withdrawal/Interest action buttons (replaces the old <select>, for consistency with
@@ -7045,11 +7054,12 @@ function setupEventListeners() {
         const tx = pool.transactions.find(item => item.id === document.getElementById('savings-edit-id').value);
         if (!tx) return;
         const oldKind = tx.kind || 'transfer';
-        // Entry Type is 3 UI options (deposit/withdrawal/interest) but only 2 stored kinds
-        // ('transfer'/'interest') — deposit and withdrawal are the same kind, just opposite signs.
-        // Per explicit user request, 2026-08-04.
+        // Entry Type is 4 UI options (deposit/withdrawal/interest/placeholder) but only 3 stored kinds
+        // ('transfer'/'interest'/'placeholder') — deposit and withdrawal are the same kind, just
+        // opposite signs. Per explicit user request, 2026-08-04 (deposit/withdrawal/interest split),
+        // extended 2026-09-09 for placeholder.
         const newEntryType = document.getElementById('savings-edit-type').value;
-        const newKind = newEntryType === 'interest' ? 'interest' : 'transfer';
+        const newKind = newEntryType === 'interest' ? 'interest' : (newEntryType === 'placeholder' ? 'placeholder' : 'transfer');
         const newSource = document.getElementById('savings-edit-source').value || pool.defaultSource;
         // A Withdrawal can target a credit card directly — see the matching comment in the Add form's
         // own submit handler above. wasCardDestination/newTargetCard together cover all 4 transitions:
@@ -7059,7 +7069,9 @@ function setupEventListeners() {
         const newTargetCard = newEntryType === 'withdrawal' ? state.loans.find(l => l.id === newSource && l.type === 'credit') : null;
         const wasCardDestination = tx.withdrawalDestinationType === 'card';
         const rawAmount = Math.abs(Number(document.getElementById('savings-edit-amount').value));
-        const amount = newEntryType === 'withdrawal' ? -rawAmount : rawAmount;
+        // Placeholder is always a reduction, same as Withdrawal — see addSavingsPlaceholder()'s own
+        // comment: it only ever means "this much is earmarked," never a projected deposit.
+        const amount = (newEntryType === 'withdrawal' || newEntryType === 'placeholder') ? -rawAmount : rawAmount;
         const date = document.getElementById('savings-edit-date').value;
         const description = document.getElementById('savings-edit-description').value.trim();
         if (!date || !description || !Number.isFinite(rawAmount) || rawAmount === 0) return;
@@ -7071,12 +7083,14 @@ function setupEventListeners() {
             tx.linkedPaymentId = undefined;
             tx.withdrawalDestinationType = undefined;
         }
-        if (oldKind === 'transfer' && newKind === 'interest' && !wasCardDestination) {
+        // A real transfer converting to Interest OR Placeholder both mean "this no longer moves real
+        // money anywhere" — same mirror-removal treatment either way.
+        if (oldKind === 'transfer' && (newKind === 'interest' || newKind === 'placeholder') && !wasCardDestination) {
             const mirror = pool.findMirror(tx.transferId);
             if (mirror) mirror.list.splice(mirror.list.indexOf(mirror.tx), 1);
         }
-        if (oldKind === 'transfer' && newKind === 'interest') tx.personalMirrorDetached = true;
-        if (oldKind === 'interest' && newKind === 'transfer' && !newTargetCard) {
+        if (oldKind === 'transfer' && (newKind === 'interest' || newKind === 'placeholder')) tx.personalMirrorDetached = true;
+        if ((oldKind === 'interest' || oldKind === 'placeholder') && newKind === 'transfer' && !newTargetCard) {
             tx.transferId = tx.transferId || pool.transferIdPrefix + Math.random().toString(36).substr(2, 9);
             tx.personalMirrorDetached = false;
         }
@@ -7116,7 +7130,15 @@ function setupEventListeners() {
             }
         } else if (newKind === 'transfer') {
             tx.transferSource = newSource;
-            pool.syncMirror(tx, oldKind === 'interest' || wasCardDestination);
+            // createIfMissing must be true whenever the entry is converting FROM a kind that never
+            // had a mirror to begin with (interest or placeholder, in addition to the existing
+            // card-destination case) — otherwise syncMirror's own "no existing mirror, and
+            // createIfMissing is false" guard (see its own comment) silently no-ops instead of
+            // creating the real transaction this conversion is supposed to produce. Missed on first
+            // pass (only checked 'interest'), confirmed live 2026-09-09: converting a placeholder
+            // into a real Withdrawal correctly changed tx.kind/transferId/savingsTransfer but never
+            // actually posted anything to the checking mirror.
+            pool.syncMirror(tx, oldKind === 'interest' || oldKind === 'placeholder' || wasCardDestination);
         }
 
         saveDatabase();
@@ -12392,6 +12414,31 @@ function addSavingsInterest(date, description, amount) {
     return true;
 }
 
+// A planned/estimated future expense against this pool — reduces the DISPLAYED running balance as
+// of `date` (getSavingsProjectedBalanceAtDate() sums every entry uniformly, so this needs no changes
+// anywhere else to show up), but — unlike a Withdrawal — never posts anywhere else: no checking
+// mirror, no card ledger, nothing. Mirrors addSavingsInterest's own "no transferId, no syncMirror
+// call" shape exactly, the existing precedent for a pool entry with no real-world counterpart. Per
+// explicit user request, 2026-09-09: "I enter a placeholder trip estimate so the savings balance is
+// reduced... this does not post to any checking or credit card ledger." Always stored as a reduction
+// (negative) regardless of the sign of the amount passed in — a placeholder only ever means "this
+// much of the balance is earmarked/spoken for," never a projected future deposit.
+function addSavingsPlaceholder(date, description, amount) {
+    const placeholderAmount = -Math.abs(Number(amount));
+    if (!date || !description || !Number.isFinite(placeholderAmount) || placeholderAmount === 0) return false;
+    state.savingsTransactions = state.savingsTransactions || [];
+    state.savingsTransactions.push({
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date,
+        description,
+        amount: placeholderAmount,
+        kind: 'placeholder',
+        savingsTransfer: false,
+        createdAt: Date.now()
+    });
+    return true;
+}
+
 function deleteSavingsTransaction(id) {
     const index = (state.savingsTransactions || []).findIndex(tx => tx.id === id);
     if (index < 0) return null;
@@ -12530,6 +12577,23 @@ function addAsiaSavingsInterest(date, description, amount) {
         description,
         amount: interestAmount,
         kind: 'interest',
+        savingsTransfer: false,
+        createdAt: Date.now()
+    });
+    return true;
+}
+
+// See addSavingsPlaceholder()'s own comment for the full rationale — identical shape, Asia's pool.
+function addAsiaSavingsPlaceholder(date, description, amount) {
+    const placeholderAmount = -Math.abs(Number(amount));
+    if (!date || !description || !Number.isFinite(placeholderAmount) || placeholderAmount === 0) return false;
+    state.asiaSavingsTransactions = state.asiaSavingsTransactions || [];
+    state.asiaSavingsTransactions.push({
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date,
+        description,
+        amount: placeholderAmount,
+        kind: 'placeholder',
         savingsTransfer: false,
         createdAt: Date.now()
     });
@@ -12769,6 +12833,21 @@ function addEmergencySavingsInterest(date, description, amount) {
     return true;
 }
 
+// See addSavingsPlaceholder()'s own comment for the full rationale — identical shape, Emergency pool.
+function addEmergencySavingsPlaceholder(date, description, amount) {
+    const placeholderAmount = -Math.abs(Number(amount));
+    if (!date || !description || !Number.isFinite(placeholderAmount) || placeholderAmount === 0) return false;
+    state.emergencySavingsTransactions = state.emergencySavingsTransactions || [];
+    state.emergencySavingsTransactions.push({
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date, description, amount: placeholderAmount,
+        kind: 'placeholder',
+        savingsTransfer: false,
+        createdAt: Date.now()
+    });
+    return true;
+}
+
 function deleteEmergencySavingsTransaction(id) {
     const index = (state.emergencySavingsTransactions || []).findIndex(tx => tx.id === id);
     if (index < 0) return null;
@@ -12881,6 +12960,22 @@ function addTravelSavingsInterest(date, description, amount) {
     return true;
 }
 
+// See addSavingsPlaceholder()'s own comment for the full rationale — identical shape, Travel pool
+// (the primary use case this feature was built for: a planned trip estimate against vacation savings).
+function addTravelSavingsPlaceholder(date, description, amount) {
+    const placeholderAmount = -Math.abs(Number(amount));
+    if (!date || !description || !Number.isFinite(placeholderAmount) || placeholderAmount === 0) return false;
+    state.travelSavingsTransactions = state.travelSavingsTransactions || [];
+    state.travelSavingsTransactions.push({
+        id: 's-' + Math.random().toString(36).substr(2, 9),
+        date, description, amount: placeholderAmount,
+        kind: 'placeholder',
+        savingsTransfer: false,
+        createdAt: Date.now()
+    });
+    return true;
+}
+
 function deleteTravelSavingsTransaction(id) {
     const index = (state.travelSavingsTransactions || []).findIndex(tx => tx.id === id);
     if (index < 0) return null;
@@ -12911,28 +13006,32 @@ const SAVINGS_POOL_FUNCTIONS = {
     household: {
         transactionsForPeriod: getSavingsTransactionsForPeriod, startingBalance: getSavingsStartingBalance,
         balanceAtDate: getSavingsProjectedBalanceAtDate, addTransfer: addLinkedSavingsTransfer,
-        addInterest: addSavingsInterest, deleteTx: deleteSavingsTransaction, moveTx: moveSavingsTransaction,
+        addInterest: addSavingsInterest, addPlaceholder: addSavingsPlaceholder,
+        deleteTx: deleteSavingsTransaction, moveTx: moveSavingsTransaction,
         findMirror: findSavingsCheckingMirror, syncMirror: syncSavingsCheckingMirror,
         defaultSource: 'jason', ledgerName: 'the Personal ledger'
     },
     asia: {
         transactionsForPeriod: getAsiaSavingsTransactionsForPeriod, startingBalance: getAsiaSavingsStartingBalance,
         balanceAtDate: getAsiaSavingsProjectedBalanceAtDate, addTransfer: addLinkedAsiaSavingsTransfer,
-        addInterest: addAsiaSavingsInterest, deleteTx: deleteAsiaSavingsTransaction, moveTx: moveAsiaSavingsTransaction,
+        addInterest: addAsiaSavingsInterest, addPlaceholder: addAsiaSavingsPlaceholder,
+        deleteTx: deleteAsiaSavingsTransaction, moveTx: moveAsiaSavingsTransaction,
         findMirror: findAsiaSavingsCheckingMirror, syncMirror: syncAsiaSavingsCheckingMirror,
         defaultSource: 'asia', ledgerName: "Asia's checking ledger"
     },
     emergency: {
         transactionsForPeriod: getEmergencySavingsTransactionsForPeriod, startingBalance: getEmergencySavingsStartingBalance,
         balanceAtDate: getEmergencySavingsProjectedBalanceAtDate, addTransfer: addLinkedEmergencySavingsTransfer,
-        addInterest: addEmergencySavingsInterest, deleteTx: deleteEmergencySavingsTransaction, moveTx: moveEmergencySavingsTransaction,
+        addInterest: addEmergencySavingsInterest, addPlaceholder: addEmergencySavingsPlaceholder,
+        deleteTx: deleteEmergencySavingsTransaction, moveTx: moveEmergencySavingsTransaction,
         findMirror: findEmergencySavingsCheckingMirror, syncMirror: syncEmergencySavingsCheckingMirror,
         defaultSource: 'joint', ledgerName: 'the Joint ledger'
     },
     travel: {
         transactionsForPeriod: getTravelSavingsTransactionsForPeriod, startingBalance: getTravelSavingsStartingBalance,
         balanceAtDate: getTravelSavingsProjectedBalanceAtDate, addTransfer: addLinkedTravelSavingsTransfer,
-        addInterest: addTravelSavingsInterest, deleteTx: deleteTravelSavingsTransaction, moveTx: moveTravelSavingsTransaction,
+        addInterest: addTravelSavingsInterest, addPlaceholder: addTravelSavingsPlaceholder,
+        deleteTx: deleteTravelSavingsTransaction, moveTx: moveTravelSavingsTransaction,
         findMirror: findTravelSavingsCheckingMirror, syncMirror: syncTravelSavingsCheckingMirror,
         defaultSource: 'joint', ledgerName: 'the Joint ledger'
     }
@@ -12980,6 +13079,7 @@ function getActiveSavingsPool() {
         balanceAtDate: fns.balanceAtDate,
         addTransfer: fns.addTransfer,
         addInterest: fns.addInterest,
+        addPlaceholder: fns.addPlaceholder,
         deleteTx: fns.deleteTx,
         moveTx: fns.moveTx,
         findMirror: fns.findMirror,
@@ -13170,8 +13270,15 @@ function renderSavingsCalendar() {
         cell.dataset.date = dateStr;
         const items = dayTransactions.slice(0, 3).map(tx => {
             const kind = tx.kind || 'transfer';
+            const isPlaceholder = kind === 'placeholder';
             const futureClass = tx.date > today ? ' savings-projected-entry' : '';
-            return `<div class="day-transaction-item ${kind === 'interest' ? 'income' : 'transfer'}${futureClass}" draggable="true" data-id="${tx.id}" data-date="${dateStr}" data-amount="${tx.amount}" title="${escapeHTML(tx.description)}"><span>${kind === 'interest' ? 'Interest: ' : ''}${escapeHTML(tx.description)}</span><span>${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toFixed(0)}</span></div>`;
+            // Dashed-border treatment (see .savings-placeholder-entry in index.css) so an estimate
+            // that doesn't post anywhere reads visually distinct from a real deposit/withdrawal —
+            // same "this isn't real yet" convention as .savings-projected-entry's future-dated look.
+            const placeholderClass = isPlaceholder ? ' savings-placeholder-entry' : '';
+            const typeClass = kind === 'interest' ? 'income' : (isPlaceholder ? 'expense' : 'transfer');
+            const prefix = kind === 'interest' ? 'Interest: ' : (isPlaceholder ? 'Placeholder: ' : '');
+            return `<div class="day-transaction-item ${typeClass}${futureClass}${placeholderClass}" draggable="true" data-id="${tx.id}" data-date="${dateStr}" data-amount="${tx.amount}" title="${escapeHTML(tx.description)}"><span>${prefix}${escapeHTML(tx.description)}</span><span>${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toFixed(0)}</span></div>`;
         }).join('');
         cell.innerHTML = `<div class="day-number-wrapper"><span class="day-number">${date.getUTCDate()}</span><span class="day-balance ${balance >= 0 ? 'positive' : 'negative'}">${balance < 0 ? '-' : ''}$${Math.abs(Math.round(balance)).toLocaleString('en-US')}</span></div><div class="day-transactions">${items}${dayTransactions.length > 3 ? `<div class="day-transaction-item muted-text more-link" style="background:rgba(255,255,255,0.03); text-align:center; font-weight:600; cursor:pointer;">+${dayTransactions.length - 3} more</div>` : ''}</div>`;
 
@@ -13233,12 +13340,13 @@ function moveSavingsTransaction(id, targetDate) {
 function updateSavingsEditTypeButtons() {
     const entryType = document.getElementById('savings-edit-type').value;
     document.querySelectorAll('#savings-edit-type-group .direction-btn').forEach(b => {
-        b.classList.remove('active-charge', 'active-deposit', 'active-interest');
+        b.classList.remove('active-charge', 'active-deposit', 'active-interest', 'active-placeholder');
         if (b.dataset.savingsEntryType === entryType) {
-            b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : 'active-deposit'));
+            b.classList.add(entryType === 'withdrawal' ? 'active-charge' : (entryType === 'interest' ? 'active-interest' : (entryType === 'placeholder' ? 'active-placeholder' : 'active-deposit')));
         }
     });
-    document.getElementById('savings-edit-source-group')?.classList.toggle('hidden', entryType === 'interest');
+    // Placeholder has no checking-account leg at all — same as Interest.
+    document.getElementById('savings-edit-source-group')?.classList.toggle('hidden', entryType === 'interest' || entryType === 'placeholder');
     // Repopulate so a credit card option only ever shows on Withdrawal — see
     // populateSavingsSourceOptions()'s own comment.
     populateSavingsSourceOptions();
@@ -13248,10 +13356,13 @@ function openSavingsEditDialog(id) {
     const tx = getActiveSavingsPool().transactions.find(item => item.id === id);
     if (!tx) return;
     const kind = tx.kind || 'transfer';
-    // Stored kind is only 'transfer'/'interest' — the UI's 3 Entry Type options split 'transfer'
-    // into 'deposit'/'withdrawal' by the transaction's own sign, so switching an existing entry's
-    // direction shows correctly instead of always defaulting to "Deposit".
-    const entryType = kind === 'interest' ? 'interest' : (Number(tx.amount) < 0 ? 'withdrawal' : 'deposit');
+    // Stored kind is 'transfer'/'interest'/'placeholder' — the UI's 4 Entry Type options split
+    // 'transfer' into 'deposit'/'withdrawal' by the transaction's own sign, so switching an existing
+    // entry's direction shows correctly instead of always defaulting to "Deposit". Without an explicit
+    // 'placeholder' check here, a placeholder entry would fall into the transfer branch and show (and
+    // on save, silently convert into) an ordinary Withdrawal — the whole point of a placeholder is
+    // that it stays a placeholder until the user deliberately deletes and replaces it.
+    const entryType = kind === 'interest' ? 'interest' : kind === 'placeholder' ? 'placeholder' : (Number(tx.amount) < 0 ? 'withdrawal' : 'deposit');
     document.getElementById('savings-edit-id').value = tx.id;
     document.getElementById('savings-edit-type').value = entryType;
     updateSavingsEditTypeButtons();
@@ -13376,7 +13487,10 @@ function renderSavingsList(transactions, periodStart) {
         prevSavingsDate = tx.date;
         const isTodayRow = tx.date === today;
         const todayMarkerId = i === savingsTodayMarkerIdx ? ' id="savings-today-marker"' : '';
-        return `<tr class="savings-editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}" data-id="${tx.id}" style="cursor:pointer;"${todayMarkerId}><td>${formatDateDisplay(tx.date)}</td><td>${escapeHTML(tx.description)}</td><td><span class="day-transaction-item ${kind === 'interest' ? 'income' : 'transfer'}" style="display:inline-block;">${kind === 'interest' ? 'INTEREST' : (Number(tx.amount) < 0 ? 'WITHDRAWAL' : 'DEPOSIT')}${status}</span></td><td>${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${tx.amount >= 0 ? 'positive' : 'negative'}">${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${runningBalance >= 0 ? 'positive' : 'negative'}">${runningBalance < 0 ? '-' : ''}$${Math.abs(runningBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td><button class="action-btn small-btn danger-btn delete-savings-entry" data-id="${tx.id}">Delete</button></td></tr>`;
+        const isPlaceholderRow = kind === 'placeholder';
+        const typeLabel = kind === 'interest' ? 'INTEREST' : (isPlaceholderRow ? 'PLACEHOLDER' : (Number(tx.amount) < 0 ? 'WITHDRAWAL' : 'DEPOSIT'));
+        const typeClass = kind === 'interest' ? 'income' : (isPlaceholderRow ? 'expense' : 'transfer');
+        return `<tr class="savings-editable-row${isTodayRow ? ' today-highlight' : ''}${isDayBoundary ? ' day-boundary-top' : ''}${isPlaceholderRow ? ' savings-placeholder-entry' : ''}" data-id="${tx.id}" style="cursor:pointer;"${todayMarkerId}><td>${formatDateDisplay(tx.date)}</td><td>${escapeHTML(tx.description)}</td><td><span class="day-transaction-item ${typeClass}" style="display:inline-block;">${typeLabel}${status}</span></td><td>${startingBalance < 0 ? '-' : ''}$${Math.abs(startingBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${tx.amount >= 0 ? 'positive' : 'negative'}">${tx.amount >= 0 ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="${runningBalance >= 0 ? 'positive' : 'negative'}">${runningBalance < 0 ? '-' : ''}$${Math.abs(runningBalance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td><button class="action-btn small-btn danger-btn delete-savings-entry" data-id="${tx.id}">Delete</button></td></tr>`;
     }).join('');
     body.querySelectorAll('.savings-editable-row').forEach(row => row.addEventListener('dblclick', () => openSavingsEditDialog(row.dataset.id)));
     body.querySelectorAll('.delete-savings-entry').forEach(button => button.addEventListener('click', event => {
