@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 18:20';
+const BUILD_VERSION = '2026-09-09 19:21';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -17817,7 +17817,17 @@ function getTransactionIndicatorBadges(tx) {
     if (!isVacationTx && isBalanceTransferTransaction(tx)) {
         const rawDesc = tx.description || tx.name || '';
         const desc = rawDesc.toLowerCase();
-        const isSavings = tx.savingsTransfer || desc.includes('savings') || (tx.transferId && String(tx.transferId).includes('savings')) || (tx.id && String(tx.id).includes('savings'));
+        // Structural signals only — NOT a free-text `desc.includes('savings')`/`id.includes('savings')`
+        // guess. Confirmed real bug, 2026-09-09: a plain Bill Tracker bill named "Rainy Day Fund
+        // (Savings) 2030+" (a real recurring bill, linkedBillId set, no savingsTransfer/transferId at
+        // all — nothing to do with the actual Savings Tracker system) false-matched purely because its
+        // own name happened to contain the word "savings", same root cause as getFormattedTransferTitle
+        // silently replacing its description below. tx.savingsTransfer is always set reliably by every
+        // real savings-mirror creator (syncSavingsCheckingMirror and its Asia/Emergency/Travel
+        // siblings); resolveSavingsTrackerFromTransferId() is the same authoritative prefix-based
+        // lookup the badge label itself already uses — no genuine savings transfer needs the free-text
+        // fallback to be recognized, so dropping it only removes false positives, never true ones.
+        const isSavings = tx.savingsTransfer || !!resolveSavingsTrackerFromTransferId(tx.transferId);
         const isJoint = tx.type === 'contribution' || desc.includes('joint') || desc.includes('xfer to joint') || (tx.transferId && String(tx.transferId).includes('checking-xfer')) || (tx.id && String(tx.id).includes('joint-xfer')) || (tx.id && String(tx.id).includes('xfer-')) || (tx.id && String(tx.id).includes('p-joint'));
         const person = getTransactionTransferPerson(tx);
 
@@ -20918,7 +20928,15 @@ function getFormattedTransferTitle(tx, isJointLedgerView = false) {
     if (typeof tx.id === 'string' && tx.id.startsWith('dynamic-vacation-')) return rawDesc;
     const desc = rawDesc.toLowerCase();
 
-    const isSavings = tx.savingsTransfer || desc.includes('savings') || (tx.transferId && String(tx.transferId).includes('savings')) || (tx.id && String(tx.id).includes('savings'));
+    // Structural signals only — see the matching fix + comment on the identical isSavings line in
+    // getTransactionIndicatorBadges() above. This function has no isBalanceTransferTransaction gate
+    // at all before applying the relabel, so the old free-text `desc.includes('savings')` fallback
+    // was reached unconditionally for EVERY transaction — confirmed real bug, 2026-09-09: a plain
+    // Bill Tracker bill named "Rainy Day Fund (Savings) 2030+" had its real name silently replaced
+    // with a fabricated "Savings Deposit" in the Joint ledger's own description column, purely
+    // because its name happened to contain the word "savings" — nothing about it was ever a real
+    // Savings Tracker transfer (no savingsTransfer flag, no transferId at all).
+    const isSavings = tx.savingsTransfer || !!resolveSavingsTrackerFromTransferId(tx.transferId);
     const isJoint = tx.type === 'contribution' || desc.includes('joint') || desc.includes('xfer to joint') || (tx.transferId && String(tx.transferId).includes('checking-xfer')) || (tx.id && String(tx.id).includes('joint-xfer')) || (tx.id && String(tx.id).includes('xfer-')) || (tx.id && String(tx.id).includes('p-joint'));
 
     if (isSavings) {
@@ -39141,6 +39159,7 @@ function runDataIntegrityAudit() {
     Object.values(state.cardCalendars || {}).forEach(cal => {
         Object.values(cal || {}).forEach(list => { totalTx += (list || []).length; });
     });
+    Object.values(SAVINGS_TRACKER_REGISTRY).forEach(def => { totalTx += (state[def.txStateKey] || []).length; });
     auditResults.totalTransactionsScanned = totalTx;
 
     // Check 1: Transfer Pair Integrity
@@ -39165,6 +39184,20 @@ function runDataIntegrityAudit() {
     (state.jointRegister || []).forEach(tx => registerTx(tx, 'Joint Register'));
     Object.entries(state.personalCalendar || {}).forEach(([date, list]) => {
         (list || []).forEach(tx => registerTx(tx, `Personal Calendar (${date})`));
+    });
+    // A real savings transfer's OTHER leg lives in the Savings Tracker's own pool array
+    // (state.savingsTransactions/asiaSavingsTransactions/emergencySavingsTransactions/
+    // travelSavingsTransactions), never in jointRegister/personalCalendar/cardCalendars — this check
+    // never looked there at all, so every real savings transfer's checking-side mirror appeared to
+    // have exactly ONE leg (itself) and got misclassified as "orphaned" 100% of the time, regardless
+    // of whether it was actually paired correctly. Confirmed real, severe bug, 2026-09-09: running
+    // "Repair" on a real account stripped transferId from 699 genuine, correctly-paired checking-side
+    // transactions (473 Joint + 226 Personal) — every savings transfer the user had ever made —
+    // severing them from their still-intact Savings Tracker counterparts. Scanning these 4 arrays
+    // here lets a savings transfer's pool-side leg count toward its pair, exactly like a checking
+    // account's own two legs already do.
+    Object.values(SAVINGS_TRACKER_REGISTRY).forEach(def => {
+        (state[def.txStateKey] || []).forEach(tx => registerTx(tx, `${def.fullLabel} (Savings Tracker)`));
     });
     Object.entries(state.cardCalendars || {}).forEach(([cardId, cal]) => {
         Object.entries(cal || {}).forEach(([date, list]) => {
@@ -39265,6 +39298,162 @@ function repairOrphanedTransfers() {
     alert(`Successfully repaired ${repairedCount} transaction(s). Orphaned transfer links were unlinked, preserving transactions as standalone manual entries.`);
 }
 
+// Recovery counterpart to repairOrphanedTransfers() above — built 2026-09-09 after confirming that
+// function's "Repair & Unlink All" had been silently stripping transferId from every real savings
+// transfer's checking-side leg for as long as the Savings Tracker has existed (the Transfer Link
+// Symmetry check never knew a savings transfer's real pair lives in
+// state.savingsTransactions/asiaSavingsTransactions/emergencySavingsTransactions/
+// travelSavingsTransactions, not the checking ledgers it actually scans — see
+// runDataIntegrityAudit()'s own comment on that fix). Confirmed on a real account backup: 699
+// checking-side transactions (473 Joint + 226 Personal) disconnected this way, all still recoverable
+// because the Savings Tracker's own pool-side records were never touched.
+//
+// Pure planning function — makes no changes. Matches every pool-side entry that still has its
+// transferId against whichever DISCONNECTED checking-side entries (savingsTransfer:true, no
+// transferId — exactly what repairOrphanedTransfers() produces) share its date and the sign-flipped
+// amount. The first match found becomes the "keep" (the one that gets its transferId restored); any
+// additional matches at the identical date+amount are real duplicate copies (confirmed live,
+// 2026-09-09: a Vacation Fund contribution had exactly one exact-duplicate checking-side copy every
+// month for all of 2031 — 48 rows where the Savings Tracker itself only ever had 26) and are reported
+// separately, never auto-deleted here. A pool-side entry with NO matching checking-side candidate at
+// all is reported as stillMissing — also not acted on automatically, since recreating it would add a
+// brand-new real transaction rather than just restoring a link between two that already exist.
+function computeSavingsTransferLinkPlan() {
+    const candidates = [];
+    (state.jointRegister || []).forEach(tx => {
+        if (tx.savingsTransfer && !tx.transferId) candidates.push({ tx, location: 'Joint Register' });
+    });
+    Object.entries(state.personalCalendar || {}).forEach(([key, list]) => {
+        (list || []).forEach(tx => {
+            if (tx.savingsTransfer && !tx.transferId) candidates.push({ tx, location: `Personal Calendar (${key})` });
+        });
+    });
+    Object.entries(state.asiaCalendar || {}).forEach(([key, list]) => {
+        (list || []).forEach(tx => {
+            if (tx.savingsTransfer && !tx.transferId) candidates.push({ tx, location: `Asia Calendar (${key})` });
+        });
+    });
+
+    // Every transferId ALREADY carried by some checking-side entry, correctly paired or not — lets a
+    // pool-side entry that's already correctly linked be skipped entirely below, instead of being
+    // re-matched against a leftover disconnected candidate as if it still needed relinking. Without
+    // this, re-computing the plan after applySavingsTransferRelinkPlan() already ran (exactly what
+    // happens when the modal auto-refreshes right after clicking "Re-link Savings Transfers")
+    // wrongly treated an untouched duplicate copy as a fresh, legitimate single match for its
+    // already-linked pool entry — confirmed live, 2026-09-09, while testing this tool: the leftover
+    // duplicate silently stopped being flagged at all the moment the modal refreshed, instead of
+    // staying available for the "Remove Duplicate Copies" button.
+    const linkedTransferIds = new Set();
+    const scanLinked = list => (list || []).forEach(tx => { if (tx.transferId) linkedTransferIds.add(tx.transferId); });
+    scanLinked(state.jointRegister);
+    Object.values(state.personalCalendar || {}).forEach(scanLinked);
+    Object.values(state.asiaCalendar || {}).forEach(scanLinked);
+
+    const used = new Set();
+    const toRelink = [];
+    const stillMissing = [];
+    const allPoolTxs = [];
+
+    Object.values(SAVINGS_TRACKER_REGISTRY).forEach(def => {
+        (state[def.txStateKey] || []).forEach(poolTx => {
+            if (!poolTx.transferId) return;
+            allPoolTxs.push({ poolTx, poolLabel: def.fullLabel });
+            if (linkedTransferIds.has(poolTx.transferId)) return; // already correctly paired — nothing to do
+            const expectedAmount = -Number(poolTx.amount || 0);
+            const matches = candidates.filter(c => !used.has(c) && c.tx.date === poolTx.date && Math.abs(Number(c.tx.amount || 0) - expectedAmount) < 0.01);
+            if (!matches.length) {
+                stillMissing.push({ poolTx, poolLabel: def.fullLabel });
+                return;
+            }
+            const [keep, ...extra] = matches;
+            used.add(keep);
+            extra.forEach(e => used.add(e));
+            toRelink.push({ poolTx, poolLabel: def.fullLabel, keep, extra });
+        });
+    });
+
+    // Second pass: a candidate left over after the above (so not claimed as anyone's "keep" or
+    // in-pass "extra") that STILL matches some pool entry's date+amount — including an
+    // already-linked one — is a confirmed leftover duplicate of a transfer that's correctly paired
+    // elsewhere, same confidence as an in-pass `extra`, just discovered on a later pass. A candidate
+    // matching no pool entry at all is left alone entirely (not reported, not touched) — there's no
+    // pool-side record to confirm it's actually a duplicate rather than a genuinely different entry.
+    const strandedDuplicates = [];
+    candidates.forEach(c => {
+        if (used.has(c)) return;
+        const matchesSomePool = allPoolTxs.some(({ poolTx }) => poolTx.date === c.tx.date && Math.abs(-Number(poolTx.amount || 0) - Number(c.tx.amount || 0)) < 0.01);
+        if (matchesSomePool) strandedDuplicates.push(c);
+    });
+
+    return { toRelink, stillMissing, strandedDuplicates };
+}
+
+// Applies the "keep" half of the plan: restores transferId onto each matched checking-side entry.
+// Never touches the "extra" duplicate entries — see removeSavingsTransferDuplicatesFromPlan() for
+// that, a deliberately separate action.
+function applySavingsTransferRelinkPlan(plan) {
+    let relinked = 0;
+    let duplicatesFlagged = 0;
+    plan.toRelink.forEach(({ poolTx, keep, extra }) => {
+        keep.tx.transferId = poolTx.transferId;
+        delete keep.tx.isManualEntry;
+        relinked++;
+        duplicatesFlagged += extra.length;
+    });
+    saveDatabase();
+    if (typeof renderApp === 'function') renderApp();
+    return { relinked, duplicatesFlagged };
+}
+
+// Deletes exactly the "extra"/strandedDuplicates transactions the plan identified — each one is an
+// exact date+amount copy of a transaction that (via applySavingsTransferRelinkPlan, whether already
+// run or not) is/will be the one correctly linked back to the real Savings Tracker record, so
+// removing it doesn't touch the only remaining record of a real transfer.
+function removeSavingsTransferDuplicatesFromPlan(plan) {
+    const ids = new Set();
+    plan.toRelink.forEach(({ extra }) => extra.forEach(e => ids.add(e.tx.id)));
+    (plan.strandedDuplicates || []).forEach(c => ids.add(c.tx.id));
+    let removed = 0;
+    const removeFromList = list => {
+        if (!list) return;
+        for (let i = list.length - 1; i >= 0; i--) {
+            if (ids.has(list[i].id)) { list.splice(i, 1); removed++; }
+        }
+    };
+    removeFromList(state.jointRegister);
+    Object.values(state.personalCalendar || {}).forEach(removeFromList);
+    Object.values(state.asiaCalendar || {}).forEach(removeFromList);
+    saveDatabase();
+    if (typeof renderApp === 'function') renderApp();
+    return removed;
+}
+
+// Holds the plan currently shown in the Integrity Audit modal so the Relink/Remove-Duplicates
+// buttons (plain onclick="" attributes, matching repairOrphanedTransfers()'s own pattern) can act on
+// the exact set the user is looking at rather than silently recomputing a fresh one that may have
+// shifted.
+let _pendingSavingsRelinkPlan = null;
+
+function runSavingsTransferRelink() {
+    if (!_pendingSavingsRelinkPlan || !_pendingSavingsRelinkPlan.toRelink.length) {
+        alert('No disconnected savings transfers to re-link.');
+        return;
+    }
+    const { relinked, duplicatesFlagged } = applySavingsTransferRelinkPlan(_pendingSavingsRelinkPlan);
+    showIntegrityAuditModal();
+    alert(`Re-linked ${relinked} savings transfer(s) back to their Savings Tracker record.${duplicatesFlagged ? ` Found ${duplicatesFlagged} exact-duplicate copy/copies, listed separately below — review and remove them with the "Remove Duplicate Copies" button once you're ready.` : ''}`);
+}
+
+function runSavingsTransferDuplicateRemoval() {
+    if (!_pendingSavingsRelinkPlan) { alert('Nothing to remove.'); return; }
+    const totalExtra = _pendingSavingsRelinkPlan.toRelink.reduce((sum, r) => sum + r.extra.length, 0);
+    if (!totalExtra) { alert('No duplicate copies to remove.'); return; }
+    if (!confirm(`Remove ${totalExtra} confirmed duplicate transaction(s)? Each one is an exact date/amount copy of a savings transfer that is being (or already was) correctly re-linked to its real Savings Tracker record — this does not touch the kept copy.`)) return;
+    const removed = removeSavingsTransferDuplicatesFromPlan(_pendingSavingsRelinkPlan);
+    showIntegrityAuditModal();
+    alert(`Removed ${removed} duplicate transaction(s).`);
+}
+
 function showIntegrityAuditModal() {
     const dialog = document.getElementById('integrity-audit-dialog');
     if (!dialog) return;
@@ -39328,6 +39517,33 @@ function showIntegrityAuditModal() {
 
             html += `</div>`;
         });
+
+        // Savings Transfer recovery — a dedicated section, not folded into the generic checks loop
+        // above, since it's a recovery TOOL (with its own two-step Relink/Remove-Duplicates actions)
+        // rather than a pass/fail check. See computeSavingsTransferLinkPlan()'s own comment for why
+        // this exists: the "Repair & Unlink All" button above had been silently disconnecting every
+        // real savings transfer's checking-side leg, confirmed 2026-09-09.
+        const plan = computeSavingsTransferLinkPlan();
+        _pendingSavingsRelinkPlan = plan;
+        const totalExtra = plan.toRelink.reduce((sum, r) => sum + r.extra.length, 0) + (plan.strandedDuplicates || []).length;
+        if (plan.toRelink.length || plan.stillMissing.length) {
+            html += `
+                <div style="padding: 0.75rem 1rem; border-radius: 6px; background: rgba(255,255,255,0.05); border-left: 4px solid #64b5f6;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                        <strong style="font-size: 0.92rem;">Savings Transfer Mirror Links</strong>
+                        <span style="font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 4px; background: rgba(255, 183, 77, 0.2); color: #ffb74d;">${plan.toRelink.length} FIXABLE</span>
+                    </div>
+                    <div style="font-size: 0.83rem; opacity: 0.9;">
+                        ${plan.toRelink.length} disconnected checking-side savings transfer(s) can be re-linked back to their Savings Tracker record${totalExtra ? `, including ${totalExtra} confirmed exact-duplicate cop${totalExtra === 1 ? 'y' : 'ies'} safe to remove once re-linked` : ''}.
+                        ${plan.stillMissing.length ? ` ${plan.stillMissing.length} Savings Tracker record(s) have no matching checking-side transaction at all and are not touched by either button below — review those manually.` : ''}
+                    </div>
+                    <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button type="button" onclick="runSavingsTransferRelink()" class="action-btn small-btn solid-btn" style="background: #1565c0; font-size: 0.75rem; padding: 2px 8px;" ${plan.toRelink.length ? '' : 'disabled'}>🔗 Re-link Savings Transfers</button>
+                        <button type="button" onclick="runSavingsTransferDuplicateRemoval()" class="action-btn small-btn solid-btn" style="background: #c62828; font-size: 0.75rem; padding: 2px 8px;" ${totalExtra ? '' : 'disabled'}>🗑️ Remove ${totalExtra} Duplicate Cop${totalExtra === 1 ? 'y' : 'ies'}</button>
+                    </div>
+                </div>
+            `;
+        }
 
         html += `</div>`;
         container.innerHTML = html;
