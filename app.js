@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-09 19:21';
+const BUILD_VERSION = '2026-09-13 17:31';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -8544,6 +8544,19 @@ function setupEventListeners() {
     document.getElementById('alloc-recurring')?.addEventListener('change', (e) => {
         document.getElementById('alloc-recurrence-dates-group')?.classList.toggle('hidden', !e.target.checked);
     });
+    // "Only this year" — per explicit user request, 2026-09-13: an explicit, at-a-glance way to say
+    // "stop after this year" vs. "recur every year forever," rather than making the user work out and
+    // hand-type a December 31st End Date themselves. Auto-fills/clears End Date live, the same
+    // "auto-fill, edit if you need something different" convention the offset-cycle checkbox above
+    // already uses — End Date stays a real, directly-editable field for a custom cutoff.
+    document.getElementById('alloc-this-year-only')?.addEventListener('change', (e) => {
+        document.getElementById('alloc-end-date').value = e.target.checked ? getAllocEndOfYearDate(document.getElementById('alloc-start-date').value) : '';
+    });
+    document.getElementById('alloc-start-date')?.addEventListener('change', () => {
+        if (document.getElementById('alloc-this-year-only').checked) {
+            document.getElementById('alloc-end-date').value = getAllocEndOfYearDate(document.getElementById('alloc-start-date').value);
+        }
+    });
     document.getElementById('allocation-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
         const name = document.getElementById('alloc-name').value.trim();
@@ -9662,6 +9675,7 @@ function setupEventListeners() {
         document.getElementById('alloc-jason-group')?.classList.add('hidden');
         document.getElementById('alloc-asia-group')?.classList.add('hidden');
         document.getElementById('alloc-recurring').checked = false;
+        document.getElementById('alloc-this-year-only').checked = false;
         document.getElementById('alloc-recurrence-dates-group')?.classList.add('hidden');
         document.getElementById('alloc-end-date').value = '';
         document.getElementById('alloc-frequency').value = 'monthly';
@@ -12637,7 +12651,7 @@ function moveAsiaSavingsTransaction(id, targetDate) {
 // checks play throughout the checking-ledger-side mirror functions further down this file.
 const SAVINGS_TRACKER_REGISTRY = {
     household: {
-        id: 'household', label: 'Jason', fullLabel: 'Joint Savings',
+        id: 'household', label: 'Jason', fullLabel: "Jason's Savings Account",
         transferIdPrefix: 'savings-xfer-',
         txStateKey: 'savingsTransactions',
         startingBalanceKey: 'savingsStartingBalance',
@@ -17854,7 +17868,7 @@ function getTransactionIndicatorBadges(tx) {
             // Falls back to the old Jason/Asia-only label only if transferId is missing/unrecognized
             // (shouldn't happen for a real transfer, but a badge fn should never throw on stale data).
             const pool = resolveSavingsTrackerFromTransferId(tx.transferId);
-            const poolLabel = pool ? pool.fullLabel : (person === 'Asia' ? "Asia's Savings" : 'Joint Savings');
+            const poolLabel = pool ? pool.fullLabel : (person === 'Asia' ? "Asia's Savings" : "Jason's Savings Account");
             savingsOwnerClass = pool ? ` owner-${pool.id}` : (person === 'Asia' ? ' owner-asia' : ' owner-jason');
             badgeLabel = `${isDeposit ? 'Savings Deposit' : 'Savings Withdrawal'} - ${poolLabel}`;
         } else if (isJoint) {
@@ -20354,17 +20368,28 @@ function getAllocationOccurrenceCount(frequency, startDate, year, month, endDate
     Object.entries(state.monthlyBills || {}).forEach(([key, monthData]) => {
         const [keyYear, keyMonth] = key.split('-');
         const periodIndex = Number(keyYear) * 12 + MONTH_ORDER.indexOf(keyMonth);
-        // Only the month actually being edited is skipped (the caller pushes that occurrence
-        // directly, just above this call) — every OTHER already-existing month is now refreshed
-        // too, past or future, not just months after the one being edited. Same bug class as
-        // propagateRecurringBillChanges() (bills) — confirmed live, 2026-08-01: editing an
-        // allocation's amount only ever updated future months' contribution rows, leaving already-
-        // generated past months permanently frozen at whatever amount was in effect when they were
-        // first materialized. A Clear Local Data + Pull regenerates every month uniformly from the
-        // CURRENT template and therefore always reflects the latest edit everywhere — exactly the
-        // $515/mo gap the user found between a JSON backup and a fresh pull of the same data traced
-        // back to (one "Offset" allocation edited from $185 to $700, never backfilled into August).
-        if (periodIndex === currentIndex) return;
+        // Reverted to future-only, per explicit user request, 2026-09-13: "any edits will be applied
+        // to the current month and any future months...IT WILL NOT AFFECT PRIOR MONTHS." The 2026-08-01
+        // change quoted below (which propagated an edit to every month including the past) was a
+        // deliberate fix for a real, different problem at the time — a backup/pull mismatch caused by
+        // past months staying frozen at a stale template value — but the user has now explicitly asked
+        // for the opposite tradeoff: an edit must never rewrite financial history that's already
+        // happened, even at the cost of an old backup not matching a fresh pull byte-for-byte. Past
+        // months are immutable from here on; only the month being edited (skipped here, pushed
+        // directly by the caller) and everything after it gets the new template.
+        //
+        // Original 2026-08-01 comment, kept for context: "Only the month actually being edited is
+        // skipped (the caller pushes that occurrence directly, just above this call) — every OTHER
+        // already-existing month is now refreshed too, past or future, not just months after the one
+        // being edited. Same bug class as propagateRecurringBillChanges() (bills) — confirmed live,
+        // 2026-08-01: editing an allocation's amount only ever updated future months' contribution
+        // rows, leaving already-generated past months permanently frozen at whatever amount was in
+        // effect when they were first materialized. A Clear Local Data + Pull regenerates every month
+        // uniformly from the CURRENT template and therefore always reflects the latest edit everywhere
+        // — exactly the $515/mo gap the user found between a JSON backup and a fresh pull of the same
+        // data traced back to (one 'Offset' allocation edited from $185 to $700, never backfilled into
+        // August)."
+        if (periodIndex <= currentIndex) return;
         ['cycle1st', 'cycle15th'].forEach(cycleKey => {
             monthData[cycleKey].contributions = (monthData[cycleKey].contributions || []).filter(item => item.seriesId !== seriesId || (role !== 'base' && (item.role || 'base') !== role));
         });
@@ -20471,10 +20496,26 @@ function openAllocationEditor(allocation, cycleKey) {
     document.getElementById('alloc-offset-enabled').checked = false;
     document.getElementById('alloc-offset-fields')?.classList.add('hidden');
     const template = allocation.seriesId ? state.allocationTemplates[allocation.seriesId] : null;
-    document.getElementById('alloc-recurring').checked = !!template;
-    document.getElementById('alloc-recurrence-dates-group')?.classList.toggle('hidden', !template);
+    // Defaults to UNCHECKED even for an allocation that's already part of a recurring series — per
+    // explicit user request, 2026-09-13: re-checking it is now a deliberate, conscious opt-in every
+    // time, so a routine "just fix this one month" edit can never accidentally cascade into every
+    // other month of the series just because the box happened to already be checked. The series
+    // itself (state.allocationTemplates[seriesId]) is completely untouched when left unchecked — see
+    // the save handler's own `applyFuture` guard — so unchecking here never "un-recurs" anything, it
+    // only means this specific save won't update the template or other months.
+    document.getElementById('alloc-recurring').checked = false;
+    document.getElementById('alloc-recurrence-dates-group')?.classList.add('hidden');
     document.getElementById('alloc-end-date').value = template ? (template.endDate || '') : '';
+    document.getElementById('alloc-this-year-only').checked = !!(template && template.endDate === getAllocEndOfYearDate(template.startDate));
     document.getElementById('allocation-dialog')?.showModal();
+}
+// Dec 31 of whichever year `startDateStr` falls in (falling back to the currently viewed year when
+// no start date is set yet) — the "Only this year" checkbox's auto-fill target, and also how
+// openAllocationEditor() detects whether an existing template's stored endDate already matches that
+// pattern (as opposed to a custom, hand-picked end date) so the checkbox reflects reality on reopen.
+function getAllocEndOfYearDate(startDateStr) {
+    const year = startDateStr ? Number(String(startDateStr).slice(0, 4)) : state.currentYear;
+    return `${Number.isFinite(year) ? year : state.currentYear}-12-31`;
 }
 // Adds `n` occurrences of `frequency` (yearly/quarterly/monthly) to `date`, preserving day-of-month
 // where possible (clamped to the target month's length, e.g. Jan 31 + 1 month -> Feb 28/29).
@@ -39279,15 +39320,31 @@ function repairOrphanedTransfers() {
         return;
     }
 
+    // Skip anything living in a Savings Tracker pool array (household/Asia/Emergency/Travel — tagged
+    // with this exact "(Savings Tracker)" location suffix by runDataIntegrityAudit()'s own registerTx
+    // scan). A pool-side entry's transferId is its OWN pairing identity within the Savings Tracker,
+    // never something meaningful to "unlink into a standalone manual entry" — and now that the
+    // Transfer Link Symmetry check correctly knows to look at these arrays (see that function's own
+    // comment on the 2026-09-09 fix), a savings transfer whose checking-side leg is STILL
+    // disconnected (not yet run through the new "Re-link Savings Transfers" tool) genuinely only has
+    // one registered leg right now — which is real and correct to flag, but this button must never be
+    // the thing that "fixes" it by stripping the one intact half. Confirmed real bug, 2026-09-09: a
+    // second click of this button, after the Transfer Link Symmetry fix above shipped, was found to
+    // silently strip transferId from POOL-SIDE entries too, destroying the pairing identity the new
+    // relink tool needs and making it report nothing left to fix.
     let repairedCount = 0;
+    let skippedSavingsCount = 0;
     symCheck.orphanedDetails.forEach(orphan => {
         (orphan.items || []).forEach(item => {
-            if (item.tx) {
-                delete item.tx.transferId;
-                delete item.tx.linkedManualTransferId;
-                item.tx.isManualEntry = true;
-                repairedCount++;
+            if (!item.tx) return;
+            if (String(item.location || '').includes('(Savings Tracker)')) {
+                skippedSavingsCount++;
+                return;
             }
+            delete item.tx.transferId;
+            delete item.tx.linkedManualTransferId;
+            item.tx.isManualEntry = true;
+            repairedCount++;
         });
     });
 
@@ -39295,7 +39352,7 @@ function repairOrphanedTransfers() {
     if (typeof render === 'function') render();
 
     showIntegrityAuditModal();
-    alert(`Successfully repaired ${repairedCount} transaction(s). Orphaned transfer links were unlinked, preserving transactions as standalone manual entries.`);
+    alert(`Successfully repaired ${repairedCount} transaction(s). Orphaned transfer links were unlinked, preserving transactions as standalone manual entries.${skippedSavingsCount ? ` Left ${skippedSavingsCount} Savings Tracker record(s) untouched — use "Re-link Savings Transfers" below to reconnect those instead.` : ''}`);
 }
 
 // Recovery counterpart to repairOrphanedTransfers() above — built 2026-09-09 after confirming that
