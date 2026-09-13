@@ -2337,7 +2337,7 @@
             </div>
             <div class="form-group">
                 <label class="checkbox-label"><input type="checkbox" id="alloc-recurring"> Recurring charge</label>
-                <small class="muted-text">Unchecked = one-time allocation for this bill cycle only.</small>
+                <small class="muted-text">Unchecked = one-time allocation for this bill cycle only. When checked, edits apply to this month and every future month &mdash; never to months already in the past.</small>
             </div>
             <div class="hidden" id="alloc-recurrence-dates-group">
                 <div class="form-row">
@@ -2352,6 +2352,8 @@
                     <div class="form-group"><label for="alloc-start-date">Start Date</label><input type="date" id="alloc-start-date" class="custom-input"><small class="muted-text">First day this allocation appears; can be in a future month.</small></div>
                     <div class="form-group"><label for="alloc-end-date">End Date</label><input type="date" id="alloc-end-date" class="custom-input" data-anchor-from="alloc-start-date"><small class="muted-text">Optional. Last day this allocation appears.</small></div>
                 </div>
+                <label class="checkbox-label"><input type="checkbox" id="alloc-this-year-only"> Only this year</label>
+                <small class="muted-text">Checked = auto-fills End Date to December of the start year, so this stops on its own after this year. Unchecked = recurs every year going forward with no end date. Auto-fills End Date above &mdash; edit it directly if you need a different cutoff.</small>
             </div>
             <div class="modal-buttons">
                 <button type="button" class="action-btn outline-btn" id="btn-cancel-alloc">Cancel</button>
@@ -4377,7 +4379,7 @@
                 <div class="form-group">
                     <label for="savings-transfer-setting-account">Savings Account</label>
                     <select id="savings-transfer-setting-account" class="custom-select">
-                        <option value="household">Jason (Joint Savings)</option>
+                        <option value="household">Jason's Savings Account</option>
                         <option value="asia">Asia</option>
                         <option value="travel">Travel Fund</option>
                         <option value="emergency">Emergency Fund</option>
