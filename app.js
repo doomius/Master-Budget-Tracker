@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-13 17:31';
+const BUILD_VERSION = '2026-09-13 18:22';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -22373,6 +22373,13 @@ function renderDeliveryTab() {
         row.addEventListener('click', (e) => {
             if (!isMobileViewport()) return;
             if (e.target.closest('input, .off-day-overlay-cell')) return;
+            // Stops this same click from also reaching initTapToViewDetailOverlay()'s document-level
+            // listener, which otherwise silently opens the generic "Transaction Details" row overlay
+            // underneath the platform picker dialog for every tap — invisible while the dialog is up,
+            // but left open behind it, so Cancel (or Done) revealed it once the dialog closed.
+            // Confirmed real bug via live testing, 2026-09-21. Delivery Gigs page only, per explicit
+            // user request — every other table's mobile tap-to-view behavior is untouched.
+            e.stopPropagation();
             openGigPlatformPicker(gRecord.date);
         });
 
@@ -24356,6 +24363,17 @@ function removeVacationFolioTransaction(trip) {
     trip.folioBookedAmount = null;
 }
 
+// NOTE, 2026-09-13: this used to be paired with syncVacationLoanPayments() and
+// removeOrphanedVacationLoanPaymentsForTrip() (both since removed) — a hand-rolled payment-schedule
+// generator/cleanup pair built because the Trip Loan object didn't use the standard loan field
+// schema, so the app's own automatic-payment engine (ensureAutomaticCardPaymentForMonth) silently
+// ignored it. That whole custom mechanism (and the duplicate-payment bug class it existed to work
+// around — see the project-budgetify-balance-engine "Ninth variant" history) is retired now that the
+// trip-form submit handler builds a genuinely standard loan (startBal/currentBal/interestRate/dueDay/
+// statementDay/monthlyMin/paymentStrategyStartDate/paymentEndDate) — the same trusted engine every
+// other Installment Loan already uses generates its payments and interest with no vacation-specific
+// posting code needed at all. This function is kept only to clean up any OLD-schema
+// vacationLoanId-tagged payments a trip created before this fix might still have lying around.
 function removeVacationLoanPayments(loanId) {
     if (!loanId) return;
     Object.keys(state.personalCalendar || {}).forEach(k => {
@@ -24366,105 +24384,6 @@ function removeVacationLoanPayments(loanId) {
     }
     Object.keys(state.asiaCalendar || {}).forEach(k => {
         state.asiaCalendar[k] = (state.asiaCalendar[k] || []).filter(tx => tx.vacationLoanId !== loanId);
-    });
-}
-
-// Defense in depth, added 2026-09-05 alongside the fix in deleteLoanAccount() (see its own comment
-// for the real bug this guards against): removeVacationLoanPayments() only ever finds payments
-// tagged with ONE specific loan.id, so if a trip's linked loan is ever lost/orphaned through some
-// OTHER path this file doesn't yet know about, its old payments would stay invisible to that
-// targeted removal — and the very next vacation-trip save, finding no linked loan, would create a
-// fresh one and post a second, duplicate set right alongside the orphaned original. Every payment
-// syncVacationLoanPayments() posts now also carries vacationTripId (in addition to vacationLoanId),
-// so this can find and remove ANY stray trip-linked loan payment regardless of which loan.id it
-// references.
-//
-// keepLoanId (added same day, after the first version of this fix — gated to only the "creating a
-// brand-new loan" branch — was confirmed live to STILL leave a duplicate in place): a trip's loan
-// can be orphaned-then-recreated MULTIPLE times over its life (this exact trip already had it happen
-// twice), and once that's happened once, the loan found by vacationTripId on a LATER, ordinary edit
-// is the newest one — the OLDER orphaned payment set is invisible to that save's own
-// syncVacationLoanPayments() (which only ever cleans up ITS OWN loan.id) and stayed duplicated
-// forever, since the "clean up before creating new" call only ever ran at the moment of creation,
-// never on a routine save of an already-linked loan. Passing the CURRENT loan's id here and calling
-// this unconditionally on every save (not just when creating fresh) removes any stray payment set
-// left over from an EARLIER orphaning event, however many times that's already happened, every time
-// — self-healing regardless of how much past damage is sitting there. Omit keepLoanId to remove
-// every trip-linked loan payment unconditionally (the "no longer financed this way at all" case).
-function removeOrphanedVacationLoanPaymentsForTrip(tripId, keepLoanId) {
-    if (!tripId) return;
-    const shouldRemove = tx => tx.vacationTripId === tripId && tx.vacationLoanId && tx.vacationLoanId !== keepLoanId;
-    Object.keys(state.personalCalendar || {}).forEach(k => {
-        state.personalCalendar[k] = (state.personalCalendar[k] || []).filter(tx => !shouldRemove(tx));
-    });
-    if (state.jointRegister) {
-        state.jointRegister = state.jointRegister.filter(tx => !shouldRemove(tx));
-    }
-    Object.keys(state.asiaCalendar || {}).forEach(k => {
-        state.asiaCalendar[k] = (state.asiaCalendar[k] || []).filter(tx => !shouldRemove(tx));
-    });
-}
-
-// options.skipPastDateConfirm: the trip-form submit handler already shows its own confirm() for a
-// brand-new trip loan in some flows — pass true there to avoid double-prompting, same convention
-// applyVacationItemBooking() already established. Left false (i.e. DO confirm) when resyncing an
-// EXISTING loan's schedule after an edit, since every call here is a blind remove-then-recreate of
-// ALL N payments — there's no per-payment tracking to tell "already confirmed once" apart from
-// "brand new," so gate on whether ANY scheduled date is already in the past rather than nagging on
-// every routine edit that doesn't touch dates already gone by.
-function syncVacationLoanPayments(loan, options = {}) {
-    if (!loan) return;
-    removeVacationLoanPayments(loan.id);
-    if (!loan.firstPaymentDate || !loan.termMonths || !loan.payment || loan.payment <= 0) return;
-
-    const parts = loan.firstPaymentDate.split('-');
-    if (parts.length !== 3) return;
-    const startY = parseInt(parts[0], 10);
-    const startM = parseInt(parts[1], 10);
-    const startD = parseInt(parts[2], 10);
-    const source = loan.paymentSource || 'jason';
-    const amount = loan.payment;
-    const N = loan.termMonths;
-
-    const scheduled = [];
-    for (let i = 0; i < N; i++) {
-        const targetDateObj = new Date(startY, startM - 1 + i, 1);
-        const y = targetDateObj.getFullYear();
-        const mIdx = targetDateObj.getMonth();
-        const maxDays = new Date(y, mIdx + 1, 0).getDate();
-        const actualDay = Math.min(startD, maxDays);
-        const actualDate = new Date(y, mIdx, actualDay);
-        scheduled.push({ i, y, mIdx, dateStr: formatLocalDate(actualDate) });
-    }
-
-    // Per explicit user request, 2026-09-05 (see removeOrphanedVacationLoanPaymentsForTrip()'s own
-    // comment for the duplicate-payment bug this is part of fixing): posting a real past-dated
-    // payment with no confirmation is exactly how 6 months of real duplicate payments landed in the
-    // joint register unnoticed. Mirrors applyVacationItemBooking's own past-date gate.
-    const todayStr = formatLocalDate(new Date());
-    const pastCount = scheduled.filter(s => s.dateStr < todayStr).length;
-    if (pastCount > 0 && !options.skipPastDateConfirm) {
-        const sourceLabel = source === 'joint' ? 'Joint Checking' : source === 'asia' ? "Asia's Checking" : "Jason's Checking";
-        const proceed = confirm(`${loan.name}'s payment schedule includes ${pastCount} payment${pastCount === 1 ? '' : 's'} dated before today (starting ${formatDateDisplay(scheduled[0].dateStr)}).\n\nAdd ${pastCount === 1 ? 'it' : 'them'} to ${sourceLabel}'s ledger now? Say no if any of these were already recorded separately when they actually happened.`);
-        if (!proceed) return;
-    }
-
-    scheduled.forEach(({ i, y, mIdx, dateStr }) => {
-        const mShort = MONTH_ORDER[mIdx];
-        const key = `${y}-${mShort}`;
-        const description = `${loan.name} Payment (${i + 1}/${N})`;
-        const nowStamp = Date.now();
-        const txId = `vloan-${loan.id}-${i + 1}`;
-
-        if (source === 'jason') {
-            ensureYearMonthInitialized(y, mShort);
-            state.personalCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
-        } else if (source === 'joint') {
-            state.jointRegister.push({ id: txId, type: 'expense', name: description, amount: -amount, date: dateStr, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
-        } else if (source === 'asia') {
-            if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
-            state.asiaCalendar[key].push({ id: txId, date: dateStr, description, amount: -amount, vacationLoanId: loan.id, vacationTripId: loan.vacationTripId, createdAt: nowStamp });
-        }
     });
 }
 
@@ -25954,7 +25873,7 @@ function renderVacationTab() {
     } else {
         const linkedLoan = (state.loans || []).find(l => l.vacationTripId === trip.id);
         if (linkedLoan) {
-            loanTotal = Number(linkedLoan.originalBalance) || Number(linkedLoan.balance) || 0;
+            loanTotal = Number(linkedLoan.startBal) || Number(linkedLoan.currentBal) || 0;
             addBreakdown(loanBreakdown, linkedLoan.name || 'Trip Loan', loanTotal, linkedLoan.paymentSource);
         }
     }
@@ -28738,11 +28657,11 @@ function setupVacationEventListeners() {
         document.getElementById('vacation-cruise-remaining-source').value = cfg.remainingPaymentSource || 'jason';
 
         const linkedLoan = trip ? state.loans.find(l => l.vacationTripId === trip.id) : null;
-        document.getElementById('vacation-cruise-loan-rate').value = cfg.loanRate || (linkedLoan ? linkedLoan.rate : '');
-        document.getElementById('vacation-cruise-loan-payment').value = cfg.loanPayment || (linkedLoan ? linkedLoan.payment : '');
+        document.getElementById('vacation-cruise-loan-rate').value = cfg.loanRate || (linkedLoan ? linkedLoan.interestRate : '');
+        document.getElementById('vacation-cruise-loan-payment').value = cfg.loanPayment || (linkedLoan ? linkedLoan.monthlyMin : '');
         document.getElementById('vacation-cruise-loan-months').value = cfg.loanMonths || 12;
         document.getElementById('vacation-cruise-loan-checking-source').value = cfg.loanCheckingSource || (linkedLoan ? linkedLoan.paymentSource : 'jason');
-        document.getElementById('vacation-cruise-loan-first-payment-date').value = cfg.loanFirstPaymentDate || (linkedLoan ? linkedLoan.firstPaymentDate : '') || (trip ? trip.startDate : '');
+        document.getElementById('vacation-cruise-loan-first-payment-date').value = cfg.loanFirstPaymentDate || (linkedLoan ? linkedLoan.paymentStrategyStartDate : '') || (trip ? trip.startDate : '');
 
         document.getElementById('vacation-onboard-credit').value = trip ? (trip.onboardCredit || '') : '';
         document.getElementById('vacation-prepaid-bar-tab').value = trip ? (trip.prepaidBarTab || '') : '';
@@ -28904,47 +28823,78 @@ function setupVacationEventListeners() {
             const loanPrincipal = Math.max(0, cruiseCostAmount - depositAmount);
             let linkedLoan = state.loans.find(l => l.vacationTripId === tripObj.id);
             const computedPayment = loanPayment || (loanPrincipal > 0 ? Math.round((loanPrincipal / loanMonths) * 100) / 100 : 0);
-            const dueDate = loanFirstPaymentDate ? parseInt(loanFirstPaymentDate.split('-')[2], 10) : 15;
+            const dueDay = loanFirstPaymentDate ? parseInt(loanFirstPaymentDate.split('-')[2], 10) : 15;
+            // Last day of the Nth (loanMonths-th) payment month — paired with the standard automatic-
+            // payment engine's own `if (card.paymentEndDate && dueDate > card.paymentEndDate) return;`
+            // gate (~app.js:35315), this makes the loan stop generating payments after exactly
+            // loanMonths occurrences, the same role the old custom loanMonths-driven schedule used to
+            // play, with no separate schedule-computation code needed.
+            const paymentEndDate = loanFirstPaymentDate ? (() => {
+                const d = new Date(loanFirstPaymentDate + 'T00:00:00');
+                return formatLocalDate(new Date(d.getFullYear(), d.getMonth() + loanMonths, 0));
+            })() : '';
             const isNewLinkedLoan = !linkedLoan;
+            // A Trip Loan is now built as a genuinely ordinary loan account — same field schema every
+            // other Installment Loan uses (startBal/currentBal/interestRate/dueDay/statementDay/
+            // monthlyMin/paymentStrategyStartDate/paymentEndDate) — rather than the old
+            // originalBalance/balance/payment/rate/dueDate/firstPaymentDate/termMonths shape, which the
+            // Loans page's standard rendering, interest engine (postInstallmentLoanInterestForMonth),
+            // and automatic-payment engine (ensureAutomaticCardPaymentForMonth) don't read at all, so
+            // it never showed a balance, interest, or payment activity like a real loan. Confirmed real
+            // bug, 2026-09-13 ("the loan does not list balance and payment activity like other loans").
+            // Both engines already run unconditionally for every `type: 'loan'` account via
+            // rebuildDebtMonthFinance — installment loans "always pay automatically (no opt-out
+            // strategy)" per that function's own comment — so once this object has the right field
+            // names, the SAME trusted, already-lazy-per-visited-month machinery every other loan uses
+            // generates its payments and interest with no vacation-specific posting code needed at all,
+            // which also fixes the class of duplicate-payment bug the old custom
+            // syncVacationLoanPayments()/removeOrphanedVacationLoanPaymentsForTrip() functions existed
+            // to work around in the first place (see the 2026-09-05 entries in
+            // project-budgetify-balance-engine for that history) — there's no separate schedule for two
+            // implementations to disagree about anymore.
             if (isNewLinkedLoan) {
                 linkedLoan = {
                     id: 'loan-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
                     type: 'loan',
                     name: `Trip Loan: ${name}`,
-                    originalBalance: loanPrincipal,
-                    balance: loanPrincipal,
-                    payment: computedPayment,
-                    rate: loanRate,
+                    startBal: loanPrincipal,
+                    currentBal: loanPrincipal,
+                    interestRate: loanRate,
+                    dueDay,
+                    statementDay: dueDay,
+                    monthlyMin: computedPayment,
                     paymentSource: loanCheckingSource || 'jason',
-                    dueDate,
-                    firstPaymentDate: loanFirstPaymentDate,
-                    termMonths: loanMonths,
+                    paymentStrategyStartDate: loanFirstPaymentDate,
+                    paymentEndDate,
                     vacationTripId: tripObj.id
                 };
                 state.loans.push(linkedLoan);
             } else {
                 linkedLoan.name = `Trip Loan: ${name}`;
-                linkedLoan.originalBalance = loanPrincipal;
-                linkedLoan.balance = loanPrincipal;
-                linkedLoan.payment = computedPayment;
-                linkedLoan.rate = loanRate;
+                linkedLoan.startBal = loanPrincipal;
+                linkedLoan.interestRate = loanRate;
+                linkedLoan.dueDay = dueDay;
+                linkedLoan.statementDay = dueDay;
+                linkedLoan.monthlyMin = computedPayment;
                 linkedLoan.paymentSource = loanCheckingSource || 'jason';
-                linkedLoan.dueDate = dueDate;
-                linkedLoan.firstPaymentDate = loanFirstPaymentDate;
-                linkedLoan.termMonths = loanMonths;
+                linkedLoan.paymentStrategyStartDate = loanFirstPaymentDate;
+                linkedLoan.paymentEndDate = paymentEndDate;
             }
-            // Defense in depth against the exact bug fixed 2026-09-05 (see
-            // removeOrphanedVacationLoanPaymentsForTrip()'s own comment) — run on EVERY save, not
-            // just when creating a brand-new loan: confirmed live that a trip whose loan had already
-            // been orphaned-and-recreated once still carried a stale duplicate payment set forward
-            // through later, ordinary edits, since the old "only clean up at creation time" version
-            // of this call never ran again once a (new, but still-just-as-orphanable) loan existed.
-            removeOrphanedVacationLoanPaymentsForTrip(tripObj.id, linkedLoan.id);
-            syncVacationLoanPayments(linkedLoan, { skipPastDateConfirm: !isNewLinkedLoan });
         } else {
-            // If previously linked loan exists but user changed remaining payment source, remove linked loan
+            // If previously linked loan exists but user changed remaining payment source, remove it —
+            // deleteAllFutureTransactionsForSetting(id, 'card') is the exact same standard cleanup
+            // deleteLoanAccount() already uses for every other loan/card deletion (removes future
+            // card-ledger entries — payments AND interest charges alike — plus every payoffTargetId-
+            // tagged checking-side leg). Deliberately NOT clearAllAutomaticCardPayments(): that
+            // function ends by calling refreshMaterializedCardStatementCharges(), which re-walks every
+            // already-known month and regenerates fresh automatic payments for whatever loan
+            // `state.loans.find(...)` still finds — confirmed live, 2026-09-13, while testing this fix:
+            // calling it BEFORE removing the loan from state.loans below silently regenerated the exact
+            // same 6 payments it had just deleted, since the loan object was still there to regenerate
+            // from. deleteAllFutureTransactionsForSetting has no such regeneration side effect, so
+            // ordering relative to the state.loans removal below doesn't matter.
             const linkedLoan = state.loans.find(l => l.vacationTripId === tripObj.id);
-            if (linkedLoan) removeVacationLoanPayments(linkedLoan.id);
+            if (linkedLoan) deleteAllFutureTransactionsForSetting(linkedLoan.id, 'card');
             state.loans = state.loans.filter(l => l.vacationTripId !== tripObj.id);
         }
         }
