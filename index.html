@@ -2178,14 +2178,20 @@
                 <label><input type="checkbox" id="gig-entry-no-earn"> No earnings today (mark as $0.00)</label>
             </div>
             <div id="gig-entry-active-section">
-                <div class="gig-entry-total-row">
-                    <span>Total</span>
+                <!-- Collapsed by default every time the dialog opens (see openGigEntryDialog() in
+                     app.js) — with several entries already logged for the day, the list otherwise
+                     pushes the amount/time fields and Done button below the fold, making it hard to
+                     find while adding another one. Per explicit user request, 2026-09-21. Tap/click
+                     to expand and see the individual entries; collapsing again never discards
+                     anything, it's purely a display toggle. -->
+                <button type="button" id="gig-entry-total-row" class="gig-entry-total-row" aria-expanded="false">
+                    <span class="gig-entry-total-row-label"><span id="gig-entry-total-toggle-icon" class="gig-entry-total-toggle-icon">▸</span> Total</span>
                     <strong id="gig-entry-total-display">$0.00</strong>
-                </div>
+                </button>
                 <!-- Each delivery/trip gets its own row here — timestamped so a specific one is easy to
                      find and edit later (e.g. "the $32 GrubHub trip from around 6pm"), rather than one
                      lump number you'd have to recompute a formula against to change. -->
-                <div id="gig-entry-list" class="gig-entry-list"></div>
+                <div id="gig-entry-list" class="gig-entry-list hidden"></div>
                 <div class="gig-entry-add-row">
                     <input type="text" id="gig-entry-new-amount" class="custom-input gig-entry-input gig-entry-amount-field" inputmode="decimal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="$0.00">
                     <input type="time" id="gig-entry-new-time" class="custom-input">
