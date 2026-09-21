@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-21 15:32';
+const BUILD_VERSION = '2026-09-21 15:48';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25303,10 +25303,26 @@ function getVacationChargesForSource(sourceKey) {
 
             folioCalculated.processedAddons.forEach(ad => {
                 addonTotalCost += ad.totalRawCost;
-                if (!ad.prepaid && ad.netCost > 0.005) {
-                    netAddonFolioSum += ad.netCost;
-                    const subLabel = `${ad.name || 'Add-On'}${ad.coveredBy !== 'Billed to Ship Folio' ? ' (' + ad.coveredBy + ')' : ''}`;
-                    addonSubItems.push({ label: subLabel, amount: ad.netCost });
+                // Same fix as the "In-Trip Budgeted" total below (search calcCruiseFolioAndPerksBreakdown's
+                // own 2026-08-26 comment for the full story) — never applied here until now.
+                // calcCruiseFolioAndPerksBreakdown() hardcodes netCost to 0 and prepaid:true for any
+                // add-on flagged prepaid (a PLAN, not a payment — e.g. every Bar Tab package addon gets
+                // this unconditionally, and a "Pre-Paid Gratuity" line just from its own prepaid
+                // checkbox), which silently dropped its cost from this placeholder/calendar-chip total
+                // entirely instead of counting it as still-owed. Confirmed real bug, 2026-09-21 (Virgin
+                // Voyages trip: Bar Tab/Excursion/Gratuity add-ons totaling $750 were missing from the
+                // calendar chip and AMEX placeholder even though In-Trip Budgeted correctly included
+                // them — the two totals should always match). Use the same "actually booked" check (a
+                // real payment date/tx/isBooked, not the mere prepaid flag) every other item type in
+                // this function already uses to decide whether it belongs here at all.
+                const actuallyBooked = ad.isBooked || ad.paymentDate || ad.prepaidTxId;
+                if (!actuallyBooked) {
+                    const cost = ad.prepaid ? (Number(ad.totalRawCost) || 0) : (Number(ad.netCost) || 0);
+                    if (cost > 0.005) {
+                        netAddonFolioSum += cost;
+                        const subLabel = `${ad.name || 'Add-On'}${ad.coveredBy !== 'Billed to Ship Folio' ? ' (' + ad.coveredBy + ')' : ''}`;
+                        addonSubItems.push({ label: subLabel, amount: cost });
+                    }
                 }
             });
 
