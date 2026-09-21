@@ -2983,6 +2983,7 @@ body.is-mobile-screen .gig-entry-delete-btn, body.is-mobile-screen .gig-entry-ad
     display: flex;
     justify-content: space-between;
     align-items: baseline;
+    width: 100%;
     padding: 0.6rem 0.85rem;
     margin-bottom: 0.75rem;
     background: rgba(255, 255, 255, 0.03);
@@ -2990,11 +2991,24 @@ body.is-mobile-screen .gig-entry-delete-btn, body.is-mobile-screen .gig-entry-ad
     border-radius: var(--radius-sm);
     font-size: 0.9rem;
     color: var(--text-secondary);
+    font-family: inherit;
+    cursor: pointer;
+}
+.gig-entry-total-row:hover {
+    background: rgba(255, 255, 255, 0.06);
 }
 .gig-entry-total-row strong {
     font-family: var(--font-heading);
     font-size: 1.4rem;
     color: var(--text-primary);
+}
+.gig-entry-total-row-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.gig-entry-total-toggle-icon {
+    display: inline-block;
 }
 
 .gig-entry-list {
