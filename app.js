@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-13 18:22';
+const BUILD_VERSION = '2026-09-21 15:12';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -5323,19 +5323,49 @@ function setAutoSyncEnabled(enabled) {
 // the user eventually sees *something* instead of waiting indefinitely with zero feedback.
 const SYNC_FETCH_TIMEOUT_MS = 90000;
 
+// Lets a "Stop Sync" button interrupt a pull/push that's actually in flight (e.g. a slow/hung Apps
+// Script cold start) instead of the user's only option being to reload the whole page. Tracks
+// whichever fetch is currently the live one, plus whether the abort was user-requested (vs. the
+// timeout above firing on its own) so the retry loop in pullStateFromDrive/pushStateToDrive knows
+// to stop retrying entirely rather than treating it as just another transient failure worth a
+// retry. Reset at the top of both of those functions, not here — a single _fetchWithTimeout call
+// has no way to know whether it's the first attempt of a fresh sync or a retry of one already
+// flagged for stopping.
+let _currentSyncAbortController = null;
+let _syncStopRequested = false;
+
 async function _fetchWithTimeout(url, options) {
     const controller = new AbortController();
+    _currentSyncAbortController = controller;
     const timer = setTimeout(() => controller.abort(), SYNC_FETCH_TIMEOUT_MS);
     try {
         return await fetch(url, { ...options, signal: controller.signal });
     } catch (err) {
         if (err.name === 'AbortError') {
+            if (_syncStopRequested) throw new Error('SYNC_STOPPED_BY_USER');
             throw new Error(`Timed out after ${SYNC_FETCH_TIMEOUT_MS / 1000}s waiting for the Apps Script Web App to respond — it may be slow, stuck, or hitting a quota limit. Check the Apps Script Executions log.`);
         }
         throw err;
     } finally {
         clearTimeout(timer);
+        if (_currentSyncAbortController === controller) _currentSyncAbortController = null;
     }
+}
+
+// "Stop Sync" button handler (desktop sync-status popover and mobile sync badge popover — see
+// setupEventListeners()). Aborts whichever fetch is currently live and marks the retry loop to
+// give up instead of retrying. If nothing is actually in progress this is a no-op — the button is
+// only shown while showSyncStatusFlag()'s status is 'pending' in the first place. Note: if a PUSH
+// was stopped after the request had already reached the Apps Script server (as opposed to still
+// sitting in a queued/slow attempt), the server may still finish writing it — aborting only stops
+// this browser tab from waiting on/retrying the response, it can't reach back and cancel
+// server-side execution that already started.
+function stopCurrentSync() {
+    if (!_syncPullInProgress && !_syncPushInProgress) return;
+    _syncStopRequested = true;
+    _currentSyncAbortController?.abort();
+    logSystem('Sync stopped by user.');
+    showSyncStatusFlag('error', 'Sync stopped by user.');
 }
 
 // --- Google Drive JSON sync ---------------------------------------------------------------
@@ -5380,17 +5410,19 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
     if (_syncPullInProgress) return false; // already running (e.g. the once-per-load auto-pull)
     if (respectAutoSyncToggle && !getAutoSyncEnabled()) return false;
     _syncPullInProgress = true;
+    _syncStopRequested = false;
     showSyncStatusFlag('pending', 'Pulling from Google Drive…');
     try {
         let json;
         for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+            if (_syncStopRequested) throw new Error('SYNC_STOPPED_BY_USER');
             try {
                 const resp = await _fetchWithTimeout(url);
                 json = await resp.json();
                 if (json.error) throw new Error(json.error);
                 break;
             } catch (err) {
-                if (attempt === SYNC_MAX_ATTEMPTS) throw err;
+                if (_syncStopRequested || err.message === 'SYNC_STOPPED_BY_USER' || attempt === SYNC_MAX_ATTEMPTS) throw err;
                 showSyncStatusFlag('pending', `Pulling from Google Drive… (retry ${attempt + 1} of ${SYNC_MAX_ATTEMPTS})`);
                 await _syncRetryDelay(attempt);
             }
@@ -5462,8 +5494,12 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         showSyncStatusFlag('success', 'Loaded latest data from Google Drive.');
         return true;
     } catch (err) {
-        logError(`Pull from Google Drive failed: ${err.message}`);
-        showSyncStatusFlag('error', `Pull from Google Drive failed: ${err.message}`);
+        // stopCurrentSync() already logged/showed "Sync stopped by user." — don't overwrite that
+        // clear, deliberate-looking message with a generic failure one for the exact same event.
+        if (err.message !== 'SYNC_STOPPED_BY_USER') {
+            logError(`Pull from Google Drive failed: ${err.message}`);
+            showSyncStatusFlag('error', `Pull from Google Drive failed: ${err.message}`);
+        }
         return false;
     } finally {
         _syncPullInProgress = false;
@@ -5505,9 +5541,12 @@ async function pushStateToDrive(forceFirstPush = false) {
         return;
     }
     _syncPushInProgress = true;
+    _syncStopRequested = false;
     showSyncStatusFlag('pending', 'Pushing to Google Drive…');
+    let wasStoppedByUser = false;
     try {
         for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+            if (_syncStopRequested) throw new Error('SYNC_STOPPED_BY_USER');
             try {
                 const resp = await _fetchWithTimeout(url, {
                     method: 'POST',
@@ -5518,7 +5557,7 @@ async function pushStateToDrive(forceFirstPush = false) {
                 if (json.error) throw new Error(json.error);
                 break;
             } catch (err) {
-                if (attempt === SYNC_MAX_ATTEMPTS) throw err;
+                if (_syncStopRequested || err.message === 'SYNC_STOPPED_BY_USER' || attempt === SYNC_MAX_ATTEMPTS) throw err;
                 showSyncStatusFlag('pending', `Pushing to Google Drive… (retry ${attempt + 1} of ${SYNC_MAX_ATTEMPTS})`);
                 await _syncRetryDelay(attempt);
             }
@@ -5526,8 +5565,14 @@ async function pushStateToDrive(forceFirstPush = false) {
         logSuccess('Synced to Google Drive.');
         showSyncStatusFlag('success', 'Synced to Google Drive.');
     } catch (err) {
-        logError(`Push to Google Drive failed: ${err.message}`);
-        showSyncStatusFlag('error', `Push to Google Drive failed: ${err.message}`);
+        // stopCurrentSync() already logged/showed "Sync stopped by user." — don't overwrite that
+        // clear, deliberate-looking message with a generic failure one for the exact same event.
+        if (err.message === 'SYNC_STOPPED_BY_USER') {
+            wasStoppedByUser = true;
+        } else {
+            logError(`Push to Google Drive failed: ${err.message}`);
+            showSyncStatusFlag('error', `Push to Google Drive failed: ${err.message}`);
+        }
     } finally {
         _syncPushInProgress = false;
         // Whatever was pending (from either an auto-push or a manual push while Auto Sync was
@@ -5537,8 +5582,11 @@ async function pushStateToDrive(forceFirstPush = false) {
     }
     // A save came in while this push was in flight and got marked dirty instead of scheduling its
     // own timer (see saveDatabase()) — run another push now so that edit doesn't sit unsynced
-    // indefinitely waiting for some later, unrelated edit to re-arm the timer.
-    if (_syncPushDirty) {
+    // indefinitely waiting for some later, unrelated edit to re-arm the timer. Skipped when the
+    // user just deliberately stopped a push — immediately firing another one right back up would
+    // defeat the point of Stop Sync; that edit will still go out normally via the next debounced
+    // auto-save or manual Sync Now.
+    if (_syncPushDirty && !wasStoppedByUser) {
         _syncPushDirty = false;
         logSystem('Auto-syncing to Google Drive (edits made during the last sync)...');
         pushStateToDrive().catch(() => { /* errors are logged inside */ });
@@ -5575,6 +5623,8 @@ function showSyncStatusFlag(status, message) {
     flag.dataset.message = message;
     flag.dataset.time = _logTimestamp();
     flag.title = message;
+    // Stop Sync only makes sense while something is actually in flight — see stopCurrentSync().
+    document.getElementById('btn-sync-status-stop')?.classList.toggle('hidden', status !== 'pending');
     const detail = document.getElementById('sync-status-detail');
     if (detail && !detail.classList.contains('hidden')) {
         // Detail popover is already open — keep it live rather than making the user re-click.
@@ -5602,6 +5652,8 @@ function updateMobileSyncBadge(status, message) {
     badge.dataset.message = message;
     badge.dataset.time = _logTimestamp();
     badge.title = message;
+    // Stop Sync only makes sense while something is actually in flight — see stopCurrentSync().
+    document.getElementById('btn-mobile-sync-stop')?.classList.toggle('hidden', status !== 'pending');
     const detail = document.getElementById('mobile-sync-badge-detail');
     if (detail && !detail.classList.contains('hidden')) {
         document.getElementById('mobile-sync-badge-detail-message').textContent = message;
@@ -9373,6 +9425,7 @@ function setupEventListeners() {
     }
     document.getElementById('btn-sync-status-push')?.addEventListener('click', () => { _syncStatusManualPush(); });
     document.getElementById('btn-sync-status-pull')?.addEventListener('click', () => { _syncStatusManualPull(); });
+    document.getElementById('btn-sync-status-stop')?.addEventListener('click', () => { stopCurrentSync(); });
 
     // Mobile floating counterpart — see updateMobileSyncBadge() in app.js and the badge's own
     // comment in Index.html. Tapping the badge opens the same detail popover pattern as the sidebar
@@ -9391,6 +9444,7 @@ function setupEventListeners() {
     }
     document.getElementById('btn-mobile-sync-push')?.addEventListener('click', () => { _syncStatusManualPush(); });
     document.getElementById('btn-mobile-sync-pull')?.addEventListener('click', () => { _syncStatusManualPull(); });
+    document.getElementById('btn-mobile-sync-stop')?.addEventListener('click', () => { stopCurrentSync(); });
     document.getElementById('btn-mobile-sync-dismiss')?.addEventListener('click', () => {
         // Per explicit user request, 2026-09-07: Dismiss used to also fade out and hide the badge
         // icon itself (mobileSyncBadge), not just this popover — meaning "Dismiss" silently made the
