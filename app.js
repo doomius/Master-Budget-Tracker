@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-21 15:12';
+const BUILD_VERSION = '2026-09-21 15:32';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -5770,6 +5770,18 @@ function openGigEntryDialog(date, key, label) {
         newTimeInput.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     }
 
+    // Collapsed by default on every fresh open — see the toggle's own handler in
+    // setupEventListeners() and the HTML comment on #gig-entry-total-row for why. renderGigEntryList()
+    // itself never touches this class (only #gig-entry-list's innerHTML), so it's set once here and
+    // then just persists as-is through every re-render while the dialog stays open (adding another
+    // entry doesn't collapse it back if the user had expanded it to check something).
+    const entryListEl = document.getElementById('gig-entry-list');
+    const totalToggle = document.getElementById('gig-entry-total-row');
+    const toggleIcon = document.getElementById('gig-entry-total-toggle-icon');
+    entryListEl?.classList.add('hidden');
+    totalToggle?.setAttribute('aria-expanded', 'false');
+    if (toggleIcon) toggleIcon.textContent = '▸';
+
     renderGigEntryList();
     dialog.showModal();
     // Desktop-only convenience. A deferred (setTimeout) focus() call runs outside the synchronous
@@ -6462,6 +6474,20 @@ function setupEventListeners() {
         });
     }
     if (gigEntryAddBtn) gigEntryAddBtn.addEventListener('click', addGigEntryFromForm);
+
+    // Total row doubles as the expand/collapse toggle for the entry list below it — see
+    // openGigEntryDialog()'s own comment for why this starts collapsed on every open. Purely a
+    // display toggle: collapsing never discards anything, entries are still there (and still get
+    // summed into the total shown right here) whether the list is expanded or not.
+    document.getElementById('gig-entry-total-row')?.addEventListener('click', () => {
+        const list = document.getElementById('gig-entry-list');
+        const toggle = document.getElementById('gig-entry-total-row');
+        const icon = document.getElementById('gig-entry-total-toggle-icon');
+        if (!list) return;
+        const nowHidden = list.classList.toggle('hidden');
+        toggle?.setAttribute('aria-expanded', String(!nowHidden));
+        if (icon) icon.textContent = nowHidden ? '▸' : '▾';
+    });
 
     if (gigEntryNoEarn) {
         gigEntryNoEarn.addEventListener('change', () => {
