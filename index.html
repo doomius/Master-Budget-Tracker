@@ -4756,9 +4756,10 @@
                     </div>
                     <div class="form-group" style="margin-bottom:0;">
                         <label style="font-size:0.75rem;">Type</label>
-                        <select id="payroll-est-type" class="custom-select" style="padding:0.35rem; font-size:0.8rem; width:110px;">
+                        <select id="payroll-est-type" class="custom-select" style="padding:0.35rem; font-size:0.8rem; width:170px;">
                             <option value="percent">Percent (%)</option>
-                            <option value="value">Gross ($)</option>
+                            <option value="annualDollar">Add to Annual Salary ($)</option>
+                            <option value="value">Set Per-Paycheck Gross ($)</option>
                         </select>
                     </div>
                     <div class="form-group" style="margin-bottom:0; text-align:center;">
@@ -4770,6 +4771,7 @@
                         <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.1" min="0" id="payroll-est-401k-bump" value="1" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:80px;">
                     </div>
                 </div>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:-0.5rem 0 0.75rem;">"Add to Annual Salary" spreads a flat yearly dollar raise (e.g. a $10,000 bump) evenly across every paycheck — use this for "I'm getting a $X/year raise." "Set Per-Paycheck Gross" instead replaces the gross amount on EACH paycheck outright (e.g. $0 for unpaid leave, or an exact known new per-paycheck figure) — entering an annual dollar figure here by mistake makes every paycheck that large.</p>
 
                 <div style="text-align: right; margin-bottom: 0.75rem; display: flex; justify-content: flex-end; gap: 0.5rem;">
                     <button type="button" class="action-btn outline-btn hidden" id="btn-cancel-payroll-est-edit" style="padding: 0.35rem 0.8rem; font-size: 0.8rem; height: 28px;">Cancel Edit</button>
