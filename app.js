@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-21 15:48';
+const BUILD_VERSION = '2026-09-23 18:00';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -1406,6 +1406,9 @@ function getJasonPayrollAmount(year, monthShort, dateStr) {
     let rate = basePay;
     let k401TotalBump = 0;
     const targetMonthIdx = MONTH_ORDER.indexOf(monthShort);
+    // Same payPeriods-per-year convention used elsewhere for this config (~app.js:1298) — needed to
+    // spread an 'annualDollar' estimate's flat yearly raise evenly across each paycheck below.
+    const payPeriodsPerYear = cfg.payFrequency === 'semimonthly' ? 24 : 26;
 
     sortedEstimates.forEach(est => {
         let triggers = 0;
@@ -1425,6 +1428,22 @@ function getJasonPayrollAmount(year, monthShort, dateStr) {
         if (triggers > 0) {
             if (est.type === 'percent') {
                 rate = rate * Math.pow(1 + (Number(est.value) || 0) / 100, triggers);
+            } else if (est.type === 'annualDollar') {
+                // A flat yearly dollar raise (e.g. "$10,000/year starting Feb") — ADDS its
+                // per-paycheck share to the current rate, same additive shape as every recurring
+                // trigger getting another raise on top of the last (not compounding multiplicatively
+                // the way percent does — a flat-dollar raise recurring again the following year is
+                // just another flat dollar amount, not a percentage of an already-raised rate).
+                // Added 2026-09-23 per user report: entering a raw annual figure (e.g. 10000) into
+                // the OTHER dollar type ('value', an absolute per-paycheck REPLACEMENT) turned every
+                // paycheck into $10,000 gross outright instead of raising the base by that much per
+                // year — confirmed live, net pay jumped from ~$2,900 to over $6,000/paycheck. That
+                // 'value' type's absolute-replace behavior is intentional and unchanged (e.g. $0 for
+                // unpaid leave, or an exact known new per-paycheck figure) — this is a genuinely new,
+                // separate type for the much more common "I'm getting a $X/year raise" case.
+                if (est.value !== '' && est.value !== null && est.value !== undefined && !Number.isNaN(Number(est.value))) {
+                    rate += (Number(est.value) / payPeriodsPerYear) * triggers;
+                }
             } else {
                 // Preserve an explicit 0 (e.g. an unpaid-leave estimate) instead of falling back
                 // to the previous rate, which only `Number(est.value) || rate` would have done.
@@ -1668,7 +1687,9 @@ function renderPayrollEstimatesList() {
         const hasEstValue = est.value !== undefined && est.value !== null && est.value !== '';
         const typeStr = !hasEstValue
             ? '401(k) bump only'
-            : (est.type === 'percent' ? `${est.value}% Increase` : `+$${Number(est.value).toLocaleString('en-US')} Fixed`);
+            : (est.type === 'percent' ? `${est.value}% Increase`
+                : est.type === 'annualDollar' ? `+$${Number(est.value).toLocaleString('en-US')}/yr Raise`
+                : `Set to $${Number(est.value).toLocaleString('en-US')}/check`);
         const recurStr = est.isRecurring ? ' (Recurring YoY)' : '';
         const k401Bump = est.k401BumpPercent === undefined ? 1 : Number(est.k401BumpPercent);
         const k401Str = k401Bump > 0 ? (hasEstValue ? `, +${k401Bump}% 401(k)` : ` (+${k401Bump}%)`) : '';
@@ -15727,6 +15748,9 @@ function getAsiaPayrollAmount(year, monthShort, dateStr) {
     let rate = basePay;
     let k401TotalBump = 0;
     const targetMonthIdx = MONTH_ORDER.indexOf(monthShort);
+    // Mirrors getJasonPayrollAmount()'s own comment on this same line — needed to spread an
+    // 'annualDollar' estimate's flat yearly raise evenly across each paycheck below.
+    const payPeriodsPerYear = cfg.payFrequency === 'semimonthly' ? 24 : 26;
 
     sortedEstimates.forEach(est => {
         let triggers = 0;
@@ -15741,6 +15765,12 @@ function getAsiaPayrollAmount(year, monthShort, dateStr) {
         if (triggers > 0) {
             if (est.type === 'percent') {
                 rate = rate * Math.pow(1 + (Number(est.value) || 0) / 100, triggers);
+            } else if (est.type === 'annualDollar') {
+                // See getJasonPayrollAmount()'s matching branch for the full "why" — same fix,
+                // mirrored here for Asia's independent payroll config.
+                if (est.value !== '' && est.value !== null && est.value !== undefined && !Number.isNaN(Number(est.value))) {
+                    rate += (Number(est.value) / payPeriodsPerYear) * triggers;
+                }
             } else {
                 rate = (est.value === '' || est.value === null || est.value === undefined || Number.isNaN(Number(est.value)))
                     ? rate
