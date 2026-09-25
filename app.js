@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-25 08:20';
+const BUILD_VERSION = '2026-09-25 08:30';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -6600,6 +6600,13 @@ function setupEventListeners() {
             updateQuickAddFormFields();
             updateTabTitles();
             renderApp();
+            // Switching Jason<->Joint<->Asia re-renders an entirely different list (each has its own
+            // #dashboard-today-marker instance) while staying in List view — needs the same
+            // scroll-to-today treatment as every other way of landing on/changing a List view. Per
+            // explicit user request, 2026-09-25 (missed in the first pass): this toggle changes WHICH
+            // list is shown without changing state.viewMode itself, so it needs its own trigger rather
+            // than being covered by the view-mode-toggle's own check just below.
+            if (state.viewMode === 'list') scrollListTodayMarkerIntoView('dashboard-today-marker');
         });
     });
 
@@ -6651,6 +6658,9 @@ function setupEventListeners() {
         state.savingsPoolView = SAVINGS_TRACKER_REGISTRY[btn.dataset.savingsPool] ? btn.dataset.savingsPool : 'household';
         saveDatabase();
         renderApp();
+        // Same gap as the Jason/Joint/Asia dashboard toggle — switching pools re-renders a
+        // different list while staying in List view, without changing savingsViewMode itself.
+        if (state.savingsViewMode === 'list') scrollListTodayMarkerIntoView('savings-today-marker');
     }));
     document.querySelectorAll('[data-savings-mode]').forEach(btn => btn.addEventListener('click', () => {
         state.savingsViewMode = btn.dataset.savingsMode;
