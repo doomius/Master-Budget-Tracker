@@ -5456,14 +5456,16 @@ body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-tab
         display: none;
     }
 /* Credit card: Date, Merchant, Description, Owner, Trip, Starting Balance, Amount, Ending
-       Balance, Actions — hide Owner/Trip/Starting Balance, and (mobile only) Merchant too: the Date
-       cell here always bakes in the weekday name (see renderCCCardList() in app.js — unlike
+       Balance, Actions — hide Description/Owner/Trip/Starting Balance on mobile, keep Merchant. The
+       Date cell here always bakes in the weekday name (see renderCCCardList() in app.js — unlike
        Personal/Joint, "Day" isn't a separate hideable column), so Date alone needs more width than
-       those tables' Date column, and Merchant duplicates Description often enough in practice that
-       it wasn't worth the squeeze it caused — confirmed real overlap/illegible-wrap bug, 2026-08-03,
-       once Merchant, Description, Amount and Ending Balance all had to share the leftover width. */
-body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(2),
-    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(2),
+       those tables' Date column, and only one of Merchant/Description fits alongside Amount/Ending
+       Balance without illegible-wrap overlap (confirmed real bug, 2026-08-03). Originally Description
+       was kept and Merchant hidden; per explicit user request, 2026-09-25, reversed to keep Merchant
+       instead — seeing WHO a mobile card charge was to without tapping into the row's own detail view
+       matters more day-to-day than the free-text description, which is still one tap away. */
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(3),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(3),
     body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(4),
     body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container td:nth-child(4),
     body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container th:nth-child(5),
@@ -5509,8 +5511,8 @@ body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-tab
     body.is-mobile-screen #cc-dashboard-layout.loan-dashboard-mode #cc-list-view-table-container #cc-list-table td:nth-child(6) { width: 20%; }
 body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(1),
     body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(1) { width: 22%; }
-body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(3),
-    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(3) { width: 36%; }
+body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(2),
+    body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(2) { width: 36%; }
 body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(7),
     body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table td:nth-child(7) { width: 21%; }
 body.is-mobile-screen #cc-dashboard-layout:not(.loan-dashboard-mode) #cc-list-view-table-container #cc-list-table th:nth-child(8),
