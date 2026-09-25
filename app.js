@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-23 18:00';
+const BUILD_VERSION = '2026-09-25 08:20';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -6068,6 +6068,15 @@ function switchToTab(tabName) {
 
     updateTabTitles();
     renderApp();
+
+    // Auto-scroll to "today" whenever navigating INTO a tab that's already showing its List view
+    // (as opposed to switching Calendar<->List once already on the tab, handled by each toggle's own
+    // click handler in setupEventListeners()) — per explicit user request, 2026-09-25: since view
+    // mode persists across tab switches, landing back on a list should never require scrolling down
+    // by hand to find today, same as toggling into list view fresh already does.
+    if (tabName === 'dashboard' && state.viewMode === 'list') scrollListTodayMarkerIntoView('dashboard-today-marker');
+    if (tabName === 'savings' && state.savingsViewMode === 'list') scrollListTodayMarkerIntoView('savings-today-marker');
+    if ((tabName === 'creditcards' || tabName === 'loans') && state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
 }
 
 // Generic debounce: delays calling fn until ms have passed with no further calls. Used on the
@@ -6605,6 +6614,7 @@ function setupEventListeners() {
             document.getElementById('dashboard-list-view')?.classList.toggle('hidden', state.viewMode === 'calendar');
 
             renderApp();
+            if (state.viewMode === 'list') scrollListTodayMarkerIntoView('dashboard-today-marker');
         });
     });
 
@@ -6614,6 +6624,9 @@ function setupEventListeners() {
             state.listScope = e.target.dataset.scope;
             updateSegmentedControlsUI();
             renderApp();
+            // This toggle only ever exists/is clickable while already in List view (see
+            // scope-toggle-container's own hidden-until-list visibility rule), so no mode check needed.
+            scrollListTodayMarkerIntoView('dashboard-today-marker');
         });
     });
 
@@ -6643,6 +6656,7 @@ function setupEventListeners() {
         state.savingsViewMode = btn.dataset.savingsMode;
         saveDatabase();
         renderApp();
+        if (state.savingsViewMode === 'list') scrollListTodayMarkerIntoView('savings-today-marker');
     }));
     // renderApp() (not the narrower renderSavingsTab()) — the Month/Year scope's month-select
     // hide/show lives in renderAppImmediate(), which a direct renderSavingsTab() call skips,
@@ -6651,6 +6665,8 @@ function setupEventListeners() {
         state.savingsListScope = btn.dataset.savingsScope;
         saveDatabase();
         renderApp();
+        // Only meaningful/clickable while already in List view, same as the dashboard scope toggle.
+        scrollListTodayMarkerIntoView('savings-today-marker');
     }));
     document.querySelectorAll('#savings-list-table [data-savings-list-sort]').forEach(header => header.addEventListener('click', () => {
         const key = header.dataset.savingsListSort;
@@ -7495,29 +7511,21 @@ function setupEventListeners() {
 
         // Credit Card/Loan List view (per user request — not Calendar view): scroll down to
         // today's highlighted row (or the "Today" gap divider, if nothing's dated today) after the
-        // switch-to-current-month render lands. renderApp() defers its actual DOM update through a
-        // nested double requestAnimationFrame (see its own definition), so the scroll has to wait
-        // the same two frames rather than running immediately after this call returns, or
-        // #cc-today-marker won't exist in the DOM yet. Loans shares renderCCCardList (and its
-        // #cc-today-marker) with Credit Cards but was missing from this condition — the marker
-        // existed, the button just never triggered the scroll for that tab.
+        // switch-to-current-month render lands — see scrollListTodayMarkerIntoView()'s own comment
+        // for why the scroll itself has to wait two animation frames. Loans shares renderCCCardList
+        // (and its #cc-today-marker) with Credit Cards but was missing from this condition — the
+        // marker existed, the button just never triggered the scroll for that tab.
         if ((activeTab === 'creditcards' || activeTab === 'loans') && state.ccViewMode === 'list') {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                document.getElementById('cc-today-marker')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }));
+            scrollListTodayMarkerIntoView('cc-today-marker');
         }
         // Dashboard (Personal/Joint) List view: same idea, using the divider marker built by
         // buildDashboardListRowsWithDividers() in renderPersonalList/renderJointList.
         if (activeTab === 'dashboard' && state.viewMode === 'list') {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                document.getElementById('dashboard-today-marker')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }));
+            scrollListTodayMarkerIntoView('dashboard-today-marker');
         }
         // Savings List view: same idea again, using the marker added to renderSavingsList().
         if (activeTab === 'savings' && state.savingsViewMode === 'list') {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                document.getElementById('savings-today-marker')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }));
+            scrollListTodayMarkerIntoView('savings-today-marker');
         }
     }
 
@@ -9965,6 +9973,13 @@ function setupEventListeners() {
         });
     }
 
+    // Loans/Credit Cards summary search boxes — live-filters both the grid widgets and the table
+    // rows below (renderDebtOverview reads this same input directly, see its own comment) as you
+    // type, no Enter/submit needed. Mirrors the CC detail page's #cc-list-filter-text: not persisted
+    // to state, just re-renders on every keystroke.
+    document.getElementById('loan-summary-search')?.addEventListener('input', () => renderLoansTab());
+    document.getElementById('credit-summary-search')?.addEventListener('input', () => renderCreditCardsTab());
+
     [['loan', 'loan-summary-sort', 'loan-summary-hide-zero'], ['credit', 'credit-summary-sort', 'credit-summary-hide-zero']].forEach(([type, sortId, hideId]) => {
         document.getElementById(sortId)?.addEventListener('change', event => {
             getDebtOverviewSort()[type] = event.target.value;
@@ -10016,6 +10031,8 @@ function setupEventListeners() {
             if (state.debtSummarySort) state.debtSummarySort.loan = null;
             const select = document.getElementById('loan-summary-sort');
             if (select) select.value = 'name';
+            const search = document.getElementById('loan-summary-search');
+            if (search) search.value = '';
         }, renderLoansTab);
     });
     document.getElementById('btn-reset-creditsummary-filters')?.addEventListener('click', () => {
@@ -10024,6 +10041,8 @@ function setupEventListeners() {
             if (state.debtSummarySort) state.debtSummarySort.credit = null;
             const select = document.getElementById('credit-summary-sort');
             if (select) select.value = 'name';
+            const search = document.getElementById('credit-summary-search');
+            if (search) search.value = '';
         }, renderCreditCardsTab);
     });
     document.getElementById('btn-loan-settings-adjust-balance')?.addEventListener('click', () => {
@@ -21996,6 +22015,22 @@ function syncDeliveryColumnToggles() {
     });
 }
 
+// Scrolls a List view's "today" row/divider into view — the same target the header's own "Go to
+// Today" button (jumpToToday(), in setupEventListeners()) already scrolls to, factored out here so
+// every place that switches a List view INTO view, or changes its Month/Full Year scope while
+// already showing one, can trigger the same scroll automatically instead of leaving the user to
+// find "today" by hand. Per explicit user request, 2026-09-25: opening any list (Checking/Joint/
+// Asia dashboard, Savings, Credit Cards, Installment Loans) — including toggling Month<->Full Year
+// once already in list view — should always land on today, scrolling up from there being the
+// exception rather than the rule. renderApp() defers its actual DOM update through a nested double
+// requestAnimationFrame (see its own definition), so the scroll has to wait the same two frames or
+// the marker won't exist in the DOM yet — mirrors jumpToToday()'s own identical wait.
+function scrollListTodayMarkerIntoView(markerId) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.getElementById(markerId)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }));
+}
+
 // Computes real pixel offsets for the delivery grid's two stacked sticky bars (the "Show columns"
 // row, then the table header right below it) instead of relying on hardcoded CSS pixel guesses.
 // Those guesses were calibrated against the desktop .main-sticky-dashboard's height, but that
@@ -23131,6 +23166,19 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
             return owner === ownershipFilter;
         });
     }
+    // Search box — per explicit user request, 2026-09-25, so a long account list (both the grid
+    // widgets and the table rows below, which share this same filtered `accounts` array) can be
+    // narrowed by typing instead of scrolling to find one. Not persisted to state (matches the CC
+    // detail page's own #cc-list-filter-text precedent) — the input's own live DOM value is read
+    // directly here on every render, cleared automatically on reload like every other search box.
+    const searchInput = document.getElementById(isLoanType ? 'loan-summary-search' : 'credit-summary-search');
+    const searchText = (searchInput?.value || '').trim().toLowerCase();
+    if (searchText) {
+        accounts = accounts.filter(account => {
+            const haystack = `${account.name || ''} ${account.storeName || ''}`.toLowerCase();
+            return haystack.includes(searchText);
+        });
+    }
     // Column-click sort (headers in the table view) takes priority over the dropdown when set —
     // clicking a header sets state.debtSummarySort[type]; the dropdown's own change handler clears
     // it so the two don't fight over which one "wins".
@@ -23214,6 +23262,10 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
             state.ccSelectedCardId = account.id;
             if (isLoanType) renderLoansTab();
             else renderCreditCardsTab();
+            // Opening a fresh account already in List view (ccViewMode persists across accounts) —
+            // scroll straight to today, same as toggling into List view does. See
+            // scrollListTodayMarkerIntoView()'s own comment.
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
         });
         card.innerHTML = `
             <div class="loan-card-top">
@@ -23254,6 +23306,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
             state.ccSelectedCardId = account.id;
             if (isLoanType) renderLoansTab();
             else renderCreditCardsTab();
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
         });
         const accountCell = `
             <div class="debt-table-account">
@@ -31784,7 +31837,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
     const statementDay = Number(card.statementDay) || 1;
     let lastInterestMonthYear = '';
     const todayForGuard = new Date();
-    const todayMonthIndexForGuard = todayForGuard.getFullYear() * 12 + todayForGuard.getMonth();
+    const todayStrForGuard = formatLocalDate(todayForGuard);
     // Accrues every single day (not just on the statement day) — see getCardDailyInterestAccrual()'s
     // comment for why a point-in-time snapshot alone badly understates a cycle with a big mid-cycle
     // swing. Reset to 0 every time a statement boundary closes, whether or not the accumulated total
@@ -31862,8 +31915,30 @@ function computeAllEstimatedBalancesForCard(cardId) {
             // list view showed a $0.00 June balance while the engine correctly saw an $89.38 credit
             // from July 2026's statement never actually being posted, so the two disagreed about
             // whether a payment was owed and by how much for every month after.
-            const isPastMonth = (currentDate.getFullYear() * 12 + currentDate.getMonth()) < todayMonthIndexForGuard;
-            if (!alreadyPostedReal && card.type !== 'loan' && !isPastMonth) {
+            //
+            // Sharpened to day-granularity, 2026-09-25 (user-reported): the original check only
+            // excluded a month strictly BEFORE the current one, so a statement day that had already
+            // passed WITHIN the current month (e.g. statement day 24, viewed on the 25th) still hit
+            // this branch and invented a speculative interest/fee estimate — even though
+            // postCardStatementChargesForMonth() is designed to have already posted the REAL charge
+            // for that exact date by the time it's in the past (its own guard is "before the current
+            // month," same loose granularity). If the real charge simply hadn't been materialized yet
+            // this session (e.g. the List view was opened without first visiting a page that triggers
+            // that month's lazy rebuildDebtMonthFinance()), this speculative estimate silently
+            // invented its own interest for an already-closed statement and leaked it forward into
+            // every later transaction's shown Ending Balance — while the Calendar view (which only
+            // ever sums REAL posted transactions, never estimates) correctly showed $0 extra until the
+            // real charge actually materialized. Confirmed live: Amex Platinum's Calendar showed
+            // $5,779.94 for 9/24 (correct, no real charge posted yet) while the List showed $5,785.09
+            // for the same day (the List's own invented ~$5 estimate for that day's interest, on top
+            // of an otherwise-identical raw balance) — a live synthetic reproduction of the same
+            // mechanism (an un-materialized statement-day charge bleeding into a later transaction's
+            // shown balance) produced an analogous gap. A statement date that's already occurred
+            // should always defer to whatever the real ledger actually contains, same as the Calendar
+            // — the real engine will fill it in for real the next time anything triggers this card's
+            // month to rebuild, at which point `alreadyPostedReal` takes over correctly on its own.
+            const statementAlreadyOccurred = dateStr <= todayStrForGuard;
+            if (!alreadyPostedReal && card.type !== 'loan' && !statementAlreadyOccurred) {
                 estBalance += activePlansFees;
                 // Mirror postCardStatementChargesForMonth's `card.paymentStrategy !== 'balance'`
                 // exclusion — a Full Card Balance card is paid in full every cycle by design, so it
@@ -34639,15 +34714,27 @@ function setupCCDashboardListeners() {
     // internally (via renderCreditCardsTab/renderLoansTab), so this isn't losing anything.
     document.getElementById('btn-cc-account-prev')?.addEventListener('click', () => {
         const nextId = getAdjacentAccountId(state.ccSelectedCardId, -1);
-        if (nextId) { state.ccSelectedCardId = nextId; renderApp(); }
+        if (nextId) {
+            state.ccSelectedCardId = nextId;
+            renderApp();
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
+        }
     });
     document.getElementById('btn-cc-account-next')?.addEventListener('click', () => {
         const nextId = getAdjacentAccountId(state.ccSelectedCardId, 1);
-        if (nextId) { state.ccSelectedCardId = nextId; renderApp(); }
+        if (nextId) {
+            state.ccSelectedCardId = nextId;
+            renderApp();
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
+        }
     });
     document.getElementById('cc-account-nav-select')?.addEventListener('change', (e) => {
         const chosenId = e.target.value;
-        if (chosenId && chosenId !== state.ccSelectedCardId) { state.ccSelectedCardId = chosenId; renderApp(); }
+        if (chosenId && chosenId !== state.ccSelectedCardId) {
+            state.ccSelectedCardId = chosenId;
+            renderApp();
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
+        }
     });
 
     // View mode toggle
@@ -34661,6 +34748,7 @@ function setupCCDashboardListeners() {
             document.getElementById('cc-scope-toggle')?.classList.toggle('hidden', state.ccViewMode === 'calendar');
 
             renderApp();
+            if (state.ccViewMode === 'list') scrollListTodayMarkerIntoView('cc-today-marker');
         });
     });
 
@@ -34670,6 +34758,9 @@ function setupCCDashboardListeners() {
             state.ccListScope = e.target.dataset.scope;
             document.querySelectorAll('#cc-scope-toggle .segment-btn').forEach(b => b.classList.toggle('active', b === e.target));
             renderApp();
+            // Only meaningful/clickable while already in List view (this toggle is hidden in
+            // Calendar mode, see just above), so no mode check needed.
+            scrollListTodayMarkerIntoView('cc-today-marker');
         });
     });
 
