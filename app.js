@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-10-07 11:16';
+const BUILD_VERSION = '2026-10-07 12:28';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -31613,6 +31613,10 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
 // deriveCardPromoBalances() fresh for the given day so a transfer that starts or expires mid-cycle
 // is picked up automatically and correctly, exactly like postCardStatementChargesForMonth's
 // point-in-time predecessor already did at the single statement-close date it used to check.
+//
+// Returns { standard, promo } separately (not one summed number) so each caller can apply the
+// grace-period rule below at statement close: the standard-rate (purchase APR) part is dropped for a
+// cycle with a grace period, the promo/transfer-rate part never is.
 function getCardDailyInterestAccrual(cardId, card, dateObj, dateStr, dailyBalance, planBalanceSum) {
     let promoBalanceSum = 0;
     let promoInterest = 0;
@@ -31631,7 +31635,58 @@ function getCardDailyInterestAccrual(cardId, card, dateObj, dateStr, dailyBalanc
         if (dateObj.getTime() <= promoExpTime) purchaseDailyRate = Math.max(0, Number(card.promoRate) || 0) / 100 / 365;
     }
     const standardBalance = Math.max(0, dailyBalance - promoBalanceSum - Math.max(0, Number(planBalanceSum) || 0));
-    return standardBalance * purchaseDailyRate + promoInterest;
+    return { standard: standardBalance * purchaseDailyRate, promo: promoInterest };
+}
+
+// GRACE PERIOD — per explicit user report, 2026-10-07: a card with a $0 balance got an annual fee on
+// the 1st, then "Estimated Interest" on the 28th statement for those 27 days, even though no balance
+// was carried in. Real issuers charge purchase interest only when the PREVIOUS statement balance
+// wasn't paid in full by its due date; new purchases in a cycle that started clean accrue nothing
+// (a balance carried over from before loses that grace and accrues from each purchase's own date,
+// which is what the daily accrual above already models). So for the cycle ending at a statement date,
+// the standard-rate part of the accrual is dropped when either (a) nothing was carried in at the
+// previous close, or (b) payments between the previous close and its due date covered everything that
+// was. "Carried" means the whole ledger balance EXCLUDING payment-plan principal (a plan's monthly
+// installment is what actually shows up on the statement, not its remaining principal) but INCLUDING
+// promo/transfer balances — a card still carrying a balance transfer does not get a purchase grace
+// period unless that balance is paid off too (confirmed against the user's real Comerica statements,
+// which charge purchase-rate interest while transfers are outstanding). Promo/transfer-rate interest
+// itself is never waived by this.
+// The three interest engines (postCardStatementChargesForMonth, computeAllEstimatedBalancesForCard,
+// projectCardPayoffPath) each keep one of these trackers per cycle so they all apply it identically.
+function getCardNextDueDateAfter(card, dateStr) {
+    const base = new Date(dateStr + 'T00:00:00');
+    const dueDay = Math.max(1, Number(card.dueDay) || 1);
+    for (let offset = 0; offset < 3; offset++) {
+        const month = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+        const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+        const candidate = formatLocalDate(new Date(month.getFullYear(), month.getMonth(), Math.min(dueDay, daysInMonth)));
+        if (candidate > dateStr) return candidate;
+    }
+    return dateStr;
+}
+function makeCardGraceTracker(card, prevCloseStr, carriedBalanceAtClose) {
+    return {
+        startStr: prevCloseStr,
+        dueStr: getCardNextDueDateAfter(card, prevCloseStr),
+        carriedBal: Math.max(0, Number(carriedBalanceAtClose) || 0),
+        payments: 0
+    };
+}
+function graceTrackerRecordPayment(tracker, dateStr, amount) {
+    if (amount > 0 && dateStr > tracker.startStr && dateStr <= tracker.dueStr) tracker.payments += amount;
+}
+function graceTrackerHasGrace(tracker) {
+    return tracker.carriedBal <= 0.005 || tracker.payments >= tracker.carriedBal - 0.005;
+}
+// Payment-plan principal sitting inside a ledger balance on a given day — the one part of the balance
+// that doesn't count as "carried" for the grace-period test above.
+function getCardPlanBalanceSum(cardId, dateStr) {
+    let sum = 0;
+    deriveCardPaymentPlanBalances(cardId, dateStr).forEach(plan => {
+        if (plan.currentBalance > 0.005 && dateStr >= plan.startDate) sum += plan.currentBalance;
+    });
+    return sum;
 }
 
 // Posts a card's statement-date interest and payment-plan fees as real, individually visible
@@ -31743,7 +31798,19 @@ function postCardStatementChargesForMonth(cardId, year, month) {
         });
         dailyBalance = Math.max(0, dailyBalance);
 
-        let accruedInterest = 0;
+        // Grace period (see getCardNextDueDateAfter()'s comment): what was carried in at the previous
+        // close (plan principal excluded) and whether payments through its due date cleared it.
+        const graceTracker = makeCardGraceTracker(
+            card, previousClosingDateStr,
+            dailyBalance - getCardPlanBalanceSum(cardId, previousClosingDateStr)
+        );
+        allTransactions.forEach(tx => {
+            if (tx.isEstimatedInterest || tx.isPlanFee) return;
+            graceTrackerRecordPayment(graceTracker, tx.date, Number(tx.amount) > 0 ? Number(tx.amount) : 0);
+        });
+
+        let accruedStandard = 0;
+        let accruedPromo = 0;
         const cursor = new Date(previousClosingDate);
         cursor.setDate(cursor.getDate() + 1);
         while (cursor <= statementDateObj) {
@@ -31764,11 +31831,13 @@ function postCardStatementChargesForMonth(cardId, year, month) {
                 if (plan.currentBalance > 0.005 && dateStr >= plan.startDate) planBalanceSum += plan.currentBalance;
             });
 
-            accruedInterest += getCardDailyInterestAccrual(cardId, card, cursor, dateStr, dailyBalance, planBalanceSum);
+            const dayAccrual = getCardDailyInterestAccrual(cardId, card, cursor, dateStr, dailyBalance, planBalanceSum);
+            accruedStandard += dayAccrual.standard;
+            accruedPromo += dayAccrual.promo;
             cursor.setDate(cursor.getDate() + 1);
         }
 
-        const totalInterest = Math.round(accruedInterest * 100) / 100;
+        const totalInterest = Math.round(((graceTrackerHasGrace(graceTracker) ? 0 : accruedStandard) + accruedPromo) * 100) / 100;
         if (totalInterest > 0.005 && !state.cardChargeSkips[interestStableId] && !cardList.some(tx => tx.id === interestStableId)) {
             cardList.push({
                 id: interestStableId,
@@ -32039,8 +32108,15 @@ function computeAllEstimatedBalancesForCard(cardId) {
     // posting — which already has the fee as a same-day ledger row before its loop reaches that day —
     // a same-day-fee-interest gap of at most a few hundredths of a cent, not worth the complexity to
     // close for a display-only estimate.
-    let accruedInterestSinceLastStatement = 0;
+    let accruedStandardSinceLastStatement = 0;
+    let accruedPromoSinceLastStatement = 0;
     const canAccrueInterest = !card.isChargeCard && card.paymentStrategy !== 'balance' && card.type !== 'loan';
+    // Grace-period tracker for the cycle in progress (see getCardNextDueDateAfter()'s comment). Starts
+    // from the account's seed balance the day before this walk begins, then is re-seeded from the
+    // running balance at every statement close below.
+    const dayBeforeFirst = new Date(firstDate);
+    dayBeforeFirst.setDate(dayBeforeFirst.getDate() - 1);
+    let graceTracker = makeCardGraceTracker(card, formatLocalDate(dayBeforeFirst), estBalance);
 
     while (currentDate <= lastDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -32052,6 +32128,7 @@ function computeAllEstimatedBalancesForCard(cardId) {
             const amount = Number(tx.amount) || 0;
             estBalance += amount < 0 ? Math.abs(amount) : -Math.abs(amount);
             estimates[tx.id] = estBalance;
+            if (!tx.isEstimatedInterest && !tx.isPlanFee) graceTrackerRecordPayment(graceTracker, dateStr, amount > 0 ? amount : 0);
         });
 
         if (canAccrueInterest) {
@@ -32059,7 +32136,9 @@ function computeAllEstimatedBalancesForCard(cardId) {
             deriveCardPaymentPlanBalances(cardId, dateStr).forEach(plan => {
                 if (plan.currentBalance > 0.005 && dateStr >= plan.startDate) planBalanceSumToday += plan.currentBalance;
             });
-            accruedInterestSinceLastStatement += getCardDailyInterestAccrual(cardId, card, currentDate, dateStr, estBalance, planBalanceSumToday);
+            const dayAccrual = getCardDailyInterestAccrual(cardId, card, currentDate, dateStr, estBalance, planBalanceSumToday);
+            accruedStandardSinceLastStatement += dayAccrual.standard;
+            accruedPromoSinceLastStatement += dayAccrual.promo;
         }
 
         if (dayOfMonth === statementDay && lastInterestMonthYear !== currentMonthYear) {
@@ -32139,7 +32218,10 @@ function computeAllEstimatedBalancesForCard(cardId) {
                 // invisible jump between one month's shown Ending Balance and the next month's shown
                 // Starting Balance that a Full Balance card's engine-computed payment doesn't include
                 // — confirmed as a real bug, 2026-08-02 (a $1.53 gap with no corresponding ledger row).
-                if (canAccrueInterest && !interestSkipped) estBalance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
+                if (canAccrueInterest && !interestSkipped) {
+                    const cycleInterest = (graceTrackerHasGrace(graceTracker) ? 0 : accruedStandardSinceLastStatement) + accruedPromoSinceLastStatement;
+                    estBalance += Math.round(cycleInterest * 100) / 100;
+                }
             }
             // Bug fix: this used to blindly overwrite EVERY transaction dated the statement day with
             // the single post-adjustment estBalance, clobbering the correct per-transaction values
@@ -32150,7 +32232,10 @@ function computeAllEstimatedBalancesForCard(cardId) {
             // case) has no transaction id of its own to attach to anyway — `estBalance` already
             // carries the adjustment forward correctly into every subsequent day's calculations via
             // this same `let` variable, with no need to stamp it onto any specific row here.
-            accruedInterestSinceLastStatement = 0;
+            accruedStandardSinceLastStatement = 0;
+            accruedPromoSinceLastStatement = 0;
+            // Next cycle's grace tracker starts from the balance this statement just closed at.
+            graceTracker = makeCardGraceTracker(card, dateStr, estBalance - getCardPlanBalanceSum(cardId, dateStr));
         }
 
         currentDate.setDate(currentDate.getDate() + 1);
@@ -32398,13 +32483,32 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
     // already-mutating activePlans/activePromos this loop keeps in sync via
     // allocateCardPaymentAcrossPlans/Promos() above (which know about this projection's own
     // hypothetical future payments), not deriveCardPromoBalances()'s fresh-from-the-real-ledger walk.
-    let accruedInterestSinceLastStatement = 0;
+    let accruedStandardSinceLastStatement = 0;
+    let accruedPromoSinceLastStatement = 0;
     // Bonus fix while touching this block: unlike postCardStatementChargesForMonth and
     // computeAllEstimatedBalancesForCard, this projection had no isChargeCard/paymentStrategy
     // 'balance' exclusion at all — a charge card or full-balance-strategy card would silently accrue
     // interest here that neither of those two functions would ever actually post, the same class of
     // "two/three implementations disagree" gap documented throughout [[project-budgetify-balance-engine]].
     const canAccrueInterest = !card.isChargeCard && card.paymentStrategy !== 'balance';
+
+    // Grace-period tracker (see getCardNextDueDateAfter()'s comment), seeded from the REAL ledger as of
+    // the statement that most recently closed on or before today, plus whatever payments already
+    // landed since — this projection then keeps it current as it walks forward through each close.
+    const todayMidnight = new Date(todayStr + 'T00:00:00');
+    const closeDayFor = (y, m) => Math.min(statementDay, new Date(y, m + 1, 0).getDate());
+    let lastCloseDate = new Date(todayMidnight.getFullYear(), todayMidnight.getMonth(), closeDayFor(todayMidnight.getFullYear(), todayMidnight.getMonth()));
+    if (lastCloseDate > todayMidnight) {
+        const prev = new Date(todayMidnight.getFullYear(), todayMidnight.getMonth() - 1, 1);
+        lastCloseDate = new Date(prev.getFullYear(), prev.getMonth(), closeDayFor(prev.getFullYear(), prev.getMonth()));
+    }
+    const lastCloseStr = formatLocalDate(lastCloseDate);
+    const balanceAtLastClose = calculateCardLedgerBalance(card.id, lastCloseStr);
+    let graceTracker = makeCardGraceTracker(card, lastCloseStr, balanceAtLastClose - getCardPlanBalanceSum(card.id, lastCloseStr));
+    Object.values(cardCal).forEach(list => (list || []).forEach(tx => {
+        if (tx.billOccurrenceDeleted || tx.isEstimatedInterest || tx.isPlanFee || !tx.date || tx.date > todayStr) return;
+        graceTrackerRecordPayment(graceTracker, tx.date, Number(tx.amount) > 0 ? Number(tx.amount) : 0);
+    }));
 
     while (currentDate <= endDate) {
         const dateStr = formatLocalDate(currentDate);
@@ -32422,6 +32526,7 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
                 allocateCardPaymentAcrossPromos(activePromos, actualPayment, balance, dateStr);
                 balance -= actualPayment;
                 totalPaid += actualPayment;
+                graceTrackerRecordPayment(graceTracker, dateStr, actualPayment);
             } else if (amount < 0) {
                 balance += Math.abs(amount);
             }
@@ -32453,6 +32558,7 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
                     allocateCardPaymentAcrossPromos(activePromos, scheduledPayment, balance, dateStr);
                     balance -= scheduledPayment;
                     totalPaid += scheduledPayment;
+                    graceTrackerRecordPayment(graceTracker, dateStr, scheduledPayment);
                 }
                 automaticPaymentMonths.add(paymentMonthKey);
             }
@@ -32466,13 +32572,14 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
                 allocateCardPaymentAcrossPromos(activePromos, payment, balance, dateStr);
                 balance -= payment;
                 totalPaid += payment;
+                graceTrackerRecordPayment(graceTracker, dateStr, payment);
                 additionalPayments.push({ date: dateStr, amount: payment });
             }
         }
 
         // 3. Accrue this one day's interest across every active rate bucket — plan-protected,
         // promo/transfer-rate, and standard — reading the LOCAL mutable activePlans/activePromos
-        // (see the comment on accruedInterestSinceLastStatement's declaration above for why this
+        // (see the comment on accruedStandardSinceLastStatement's declaration above for why this
         // can't just call the shared getCardDailyInterestAccrual() helper).
         if (canAccrueInterest && balance > 0.01) {
             let activePlansBalanceSum = 0;
@@ -32503,7 +32610,8 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
             }
 
             const standardBalanceToday = Math.max(0, balance - promoBalanceSumToday - activePlansBalanceSum);
-            accruedInterestSinceLastStatement += standardBalanceToday * purchaseDailyRate + promoInterestToday;
+            accruedStandardSinceLastStatement += standardBalanceToday * purchaseDailyRate;
+            accruedPromoSinceLastStatement += promoInterestToday;
         }
 
         // 4. Close the statement: post this cycle's plan fees, then the day-by-day accrued interest
@@ -32515,8 +32623,16 @@ function projectCardPayoffPath(cardId, monthsCount, startPayDateStr, additionalM
                 if (dateStr >= plan.startDate && plan.currentBalance > 0.005) activePlansFees += Number(plan.monthlyFee) || 0;
             });
             balance += activePlansFees;
-            if (canAccrueInterest) balance += Math.round(accruedInterestSinceLastStatement * 100) / 100;
-            accruedInterestSinceLastStatement = 0;
+            if (canAccrueInterest) {
+                const cycleInterest = (graceTrackerHasGrace(graceTracker) ? 0 : accruedStandardSinceLastStatement) + accruedPromoSinceLastStatement;
+                balance += Math.round(cycleInterest * 100) / 100;
+            }
+            accruedStandardSinceLastStatement = 0;
+            accruedPromoSinceLastStatement = 0;
+            // Next cycle's tracker starts from this close, using this loop's own local plan balances
+            // (same reason the daily accrual above can't use the shared ledger-derived helper).
+            const planPrincipalAtClose = activePlans.reduce((sum, plan) => sum + (dateStr >= plan.startDate && plan.currentBalance > 0.005 ? Number(plan.currentBalance) || 0 : 0), 0);
+            graceTracker = makeCardGraceTracker(card, dateStr, balance - planPrincipalAtClose);
         }
 
         if (balance <= 0.01 && !hasHitZero) {
