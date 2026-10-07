@@ -81,14 +81,32 @@
 
             <nav class="sidebar-nav">
                 <button class="nav-btn active" data-tab="dashboard" id="btn-tab-dashboard">
-                    <span class="icon">📅</span> Dashboard
+                    <span class="icon">📅</span> Dashboard <span class="nav-chevron" aria-hidden="true">▸</span>
                 </button>
+                <!-- Accordion account picker, replacing the Jason/Joint/Asia toggle that used to sit at
+                     the top of the Dashboard page — per explicit user request, 2026-10-07. Opens while
+                     its tab is active (see syncSidebarAccountSubnav() in app.js). These buttons just
+                     drive the original (now always-hidden) #dashboard-toggle-container buttons, which
+                     still own the real click handlers and state. -->
+                <div class="nav-subgroup" id="nav-sub-dashboard" data-parent-tab="dashboard">
+                    <button type="button" class="nav-sub-btn" data-nav-dashboard-type="personal">Jason</button>
+                    <button type="button" class="nav-sub-btn" data-nav-dashboard-type="joint">Joint</button>
+                    <button type="button" class="nav-sub-btn" data-nav-dashboard-type="asia">Asia</button>
+                </div>
                 <button class="nav-btn" data-tab="delivery" id="btn-tab-delivery">
                     <span class="icon">🚗</span> Delivery Earnings
                 </button>
                 <button class="nav-btn" data-tab="savings" id="btn-tab-savings">
-                    <span class="icon">💰</span> Savings Tracker
+                    <span class="icon">💰</span> Savings Tracker <span class="nav-chevron" aria-hidden="true">▸</span>
                 </button>
+                <!-- Same accordion for the Savings pool (replaces #savings-pool-toggle's old spot at the
+                     top of the Savings page). Drives that now-hidden toggle's buttons. -->
+                <div class="nav-subgroup" id="nav-sub-savings" data-parent-tab="savings">
+                    <button type="button" class="nav-sub-btn" data-nav-savings-pool="household">Jason</button>
+                    <button type="button" class="nav-sub-btn" data-nav-savings-pool="asia">Asia</button>
+                    <button type="button" class="nav-sub-btn" data-nav-savings-pool="travel">Travel</button>
+                    <button type="button" class="nav-sub-btn" data-nav-savings-pool="emergency">Emergency</button>
+                </div>
                 <button class="nav-btn" data-tab="vacation" id="btn-tab-vacation">
                     <span class="icon">🌴</span> Vacation Planner
                 </button>
