@@ -224,6 +224,50 @@ h1, h2, h3, h4, h5, h6 {
     font-size: 1.1rem;
 }
 
+/* Accordion account pickers under Dashboard / Savings Tracker — open only while their parent tab is
+   active (see syncSidebarAccountSubnav() in app.js). */
+.nav-chevron {
+    margin-left: auto;
+    font-size: 0.8rem;
+    opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+.nav-btn.active .nav-chevron {
+    transform: rotate(90deg);
+}
+.nav-subgroup {
+    display: none;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: -0.25rem 0 0.25rem 1.6rem;
+    padding-left: 0.6rem;
+    border-left: 1px solid var(--glass-border);
+}
+.nav-subgroup.open {
+    display: flex;
+}
+.nav-sub-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: 0.5rem 0.8rem;
+    text-align: left;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    font-weight: 500;
+}
+.nav-sub-btn:hover {
+    color: var(--text-primary);
+    background: var(--glass-bg-hover);
+}
+.nav-sub-btn.active {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
 .sidebar-footer {
     display: flex;
     flex-direction: column;
