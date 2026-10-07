@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-09-25 08:44';
+const BUILD_VERSION = '2026-10-07 11:01';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -2026,6 +2026,57 @@ async function init() {
     logSystem('Pulling latest data from Google Drive...');
     await pullStateFromDrive(false);
 
+    // pullStateFromDrive() just replaced `state` wholesale with whatever the Drive file's last
+    // PUSH happened to have saved — including currentYear/currentMonth/ccYear/ccMonth/
+    // ccSelectedDate/selectedDate/deliveryWeekIndex. None of those are in VIEW_SETTING_STATE_KEYS
+    // (the pull's own preserved-local-fields list) — they're real "what date was being looked at"
+    // data, not a UI preference like ccViewMode/ccListScope (which ARE preserved, correctly, since
+    // those genuinely are just this device's own view preference). So the "jump to today" reset a
+    // few lines up (before the pull) got silently overwritten the moment the pull landed, teleporting
+    // the user to whatever month/week the LAST device to push had open at the time — confirmed real
+    // bug, 2026-09-25 ("it may show the current month but it's actually the month I was viewing
+    // during the last sync"). Re-apply the exact same today-anchored reset now that the pull is done,
+    // then re-run the tab-selection logic above (switchToTab, including its delivery-week-finding
+    // branch and the mobile-defaults-to-Delivery rule) so every date-dependent bit of state — not
+    // just the raw year/month fields — lands back on today, not just whichever tab happened to be
+    // active before the pull. Only on a successful pull: a failed one leaves state exactly as
+    // resetToDefaults() seeded it pre-pull, which is already correctly on today.
+    if (_driveSyncBaselineEstablished) {
+        const postPullToday = new Date();
+        state.ccYear = postPullToday.getFullYear();
+        state.ccMonth = MONTH_ORDER[postPullToday.getMonth()];
+        state.ccSelectedDate = formatLocalDate(postPullToday);
+        state.currentYear = postPullToday.getFullYear();
+        state.currentMonth = MONTH_ORDER[postPullToday.getMonth()];
+        state.selectedDate = formatLocalDate(postPullToday);
+        populateYearSelect();
+        if (monthSelectEl) monthSelectEl.value = state.currentMonth;
+        if (transDateEl) {
+            transDateEl.value = state.selectedDate;
+            transDateEl.dataset.isoDate = state.selectedDate;
+        }
+        ensureYearMonthInitialized(state.currentYear, state.currentMonth);
+        ensureDeliveryEarningsForMonth(state.currentYear, state.currentMonth);
+        // Re-derive which tab to land on using the SAME rules as the pre-pull selection above
+        // (minus postReloadTab, a one-time sessionStorage flag already consumed there) — but now
+        // reading state.activeTab AFTER the pull, since that field isn't in VIEW_SETTING_STATE_KEYS
+        // and so just got overwritten by whatever the last push saved. document.body.dataset.activeTab
+        // itself is still whatever the PRE-pull selection set (switchToTab is the only thing that
+        // updates it, and hasn't run since) — reading that instead of state.activeTab here would
+        // silently ignore the just-pulled tab entirely, confirmed as a real bug in this same fix
+        // while testing it live. Calling switchToTab (for whichever tab wins) also recomputes every
+        // date-dependent bit of that tab's own state — delivery's find-this-week logic included —
+        // against the now-corrected currentYear/currentMonth instead of whatever month the pull
+        // briefly set it to.
+        if (state.activeTab && state.activeTab !== 'dashboard') {
+            switchToTab(state.activeTab);
+        } else if (isMobileViewport()) {
+            switchToTab('delivery');
+        } else {
+            switchToTab('dashboard');
+        }
+    }
+
     // Auto Sync only turns on if that pull actually confirmed real (or confirmed-empty) data —
     // pullStateFromDrive() sets _driveSyncBaselineEstablished itself on success. Do NOT force it on
     // here regardless of outcome like the old code did: on a failed startup pull (e.g. a flaky
@@ -2879,7 +2930,21 @@ function migrateDatabase() {
                     if (!linkedId) return true;
                     const setting = recurringNonMonthly.find(s => linkedId === `bill-settings-${s.id}`);
                     if (!setting) return true;
-                    return isValidOccurrenceDate(setting, tx.date);
+                    // Check the entry's ORIGINAL scheduled slot (billOccurrenceDate), never its
+                    // current tx.date — tx.date is where the user actually moved a manually-edited
+                    // occurrence to (e.g. paying an annual fee early), and only billOccurrenceDate
+                    // stays pinned to the real cadence this cleanup is checking against. Checking
+                    // tx.date directly deleted every such edit — including its billOccurrenceOverridden
+                    // flag — the moment this self-healing cleanup next ran (every load AND every Drive
+                    // pull, not one-time-gated), after which nothing protected the original scheduled
+                    // date from being regenerated, silently reverting the user's edit. Confirmed real
+                    // bug, 2026-10-01 (Southwest Visa Annual Fee moved from 10/06 to a 9/30 early
+                    // payment — reverted back to 10/06 after the very next sync pull). Matches the
+                    // authoritative pattern syncBillLedgerEntry() itself already uses everywhere else
+                    // (~app.js:30945, 30991, 31011) — billOccurrenceDate falls back to tx.date for an
+                    // untouched, never-overridden entry, so this is a strict fix, not a behavior change
+                    // for the actually-stale auto-generated entries this cleanup exists to catch.
+                    return isValidOccurrenceDate(setting, tx.billOccurrenceDate || tx.date);
                 });
             };
             Object.keys(state.personalCalendar || {}).forEach(key => {
@@ -2896,6 +2961,13 @@ function migrateDatabase() {
             });
         }
     }
+    // Self-healing counterpart to the card-settings save handler's own purge (see
+    // purgeFutureCardAnnualFeeRows) — cleans up future "Annual Fee" rows left behind on a card whose
+    // annual-fee box was already unchecked before that purge existed. Not one-time-gated, same as the
+    // neighboring cleanups, since "future" moves with today's date.
+    (state.loans || []).forEach(card => {
+        if (purgeFutureCardAnnualFeeRows(card)) migrated = true;
+    });
     // postCardStatementChargesForMonth() briefly had no guard against generating for months before
     // the current one, so on any card whose already-materialized past months got re-scanned (which
     // happens on nearly every render, via autopopulateBillsForMonth's per-month sync calls) it
@@ -9171,6 +9243,7 @@ function setupEventListeners() {
                 loan.annualFeeMonth = annualFeeMonth;
                 loan.annualFeeDay = annualFeeDay;
                 loan.annualFeeStartDate = annualFeeStartDate;
+                purgeFutureCardAnnualFeeRows(loan);
                 // All of these must be written BEFORE clearAllAutomaticCardPayments()/
                 // clearFutureAutomaticCardPayments() run just below — both end by calling
                 // refreshMaterializedCardStatementCharges(), which immediately re-walks every
@@ -17826,8 +17899,9 @@ function getBillIndicatorBadge(bill) {
         const categoryLine = bill.billTrackerCategory ? `<br>${escapeHTML(bill.billTrackerCategory)}` : '';
         // "Bill" vs "Expense" per the Bill Settings' own Bill/Expense flag, instead of always
         // hardcoding "Bill" regardless of how the setting was actually classified.
-        const typeLabel = bill.billType === 'expense' ? 'Expense' : 'Bill';
-        return `<span class="cc-source-badge manual" title="Dynamic entry — synced from Bill Tracker${categoryNote}">&#128203; ${typeLabel}${categoryLine}</span>${getPlaceholderBadge(bill)}`;
+        const typeLabel = bill.billType === 'expense' ? 'Expense' : bill.billType === 'annualFee' ? 'Annual Fee' : 'Bill';
+        const typeIcon = bill.billType === 'annualFee' ? '&#128179;' : '&#128203;';
+        return `<span class="cc-source-badge manual" title="Dynamic entry — synced from Bill Tracker${categoryNote}">${typeIcon} ${typeLabel}${categoryLine}</span>${getPlaceholderBadge(bill)}`;
     }
     if (bill.isMortgage) {
         const target = bill.mortgageLoanId ? state.loans.find(l => l.id === bill.mortgageLoanId) : null;
@@ -17938,6 +18012,15 @@ function getPaydayShiftTooltip(tx) {
     const naturalLabel = tx.naturalDate ? formatDateDisplay(tx.naturalDate) : 'its scheduled date';
     return `Originally scheduled for ${naturalLabel} — shown here instead because that pay period's paycheck hadn't landed yet.`;
 }
+// A ledger row's Bill/Expense/Annual Fee classification, read from its Bill Tracker setting right now
+// rather than the billType copied onto the row when it was first posted — so changing the setting's
+// type re-flags rows that already exist, without waiting for them to be regenerated.
+function getLiveBillTypeForTx(tx) {
+    const match = typeof tx.linkedBillId === 'string' ? tx.linkedBillId.match(/^bill-settings-(.+)$/) : null;
+    const setting = match ? (state.billTrackerSettings || []).find(s => s.id === match[1]) : null;
+    return setting ? (setting.billType || 'bill') : (tx.billType || 'bill');
+}
+
 function getTransactionIndicatorBadges(tx) {
     if (tx.isBalanceAdjustment) {
         return '<span class="cc-source-badge manual" title="Dated reconciliation to an actual statement balance">&#9878; Balance Adjustment</span>';
@@ -18054,7 +18137,10 @@ function getTransactionIndicatorBadges(tx) {
         // ledger tx instead of a state.monthlyBills row.
         // "Bill" vs "Expense" per the originating Bill Settings' own Bill/Expense flag (tx.billType),
         // instead of always hardcoding "Bill" regardless of how the setting was actually classified.
-        source = `<span class="cc-source-badge manual" title="Auto-generated recurring bill charge">&#128203; ${tx.billType === 'expense' ? 'Expense' : 'Bill'}</span>`;
+        const liveBillType = getLiveBillTypeForTx(tx);
+        source = liveBillType === 'annualFee'
+            ? '<span class="cc-source-badge creditcard" title="Annual card fee (tracked as a Bill Tracker bill)">&#128179; Annual Fee</span>'
+            : `<span class="cc-source-badge manual" title="Auto-generated recurring bill charge">&#128203; ${liveBillType === 'expense' ? 'Expense' : 'Bill'}</span>`;
     } else if (tx.isPlanFee) {
         // Bug fix: a payment plan's monthly fee (postCardStatementChargesForMonth) fell through to
         // the generic "Manual" badge below since nothing here checked isPlanFee specifically.
@@ -31268,6 +31354,33 @@ function syncCardPaymentSplitterRowsForMonth(year, month) {
     ['cycle1st', 'cycle15th'].forEach(cycleKey => {
         mBills[cycleKey].bills = mBills[cycleKey].bills.filter(b => !b.linkedCardPaymentId || activeRowIds.has(b.id));
     });
+}
+
+// Removes the card-settings annual fee's already-posted FUTURE rows (applyCardAnnualFeeForMonth's
+// output — tagged isAnnualFee + annualFeeId, so a hand-entered "annual fee" charge or a Bill Tracker
+// bill is never touched) for a card whose "This card has an annual fee" box is off. Unchecking that
+// box only ever stopped NEW rows from posting — every year's already-materialized row stayed in the
+// ledger forever (one separate row per year, 2030 and beyond included), so deleting one by hand just
+// revealed the next year's. Past-dated rows are left alone: they're real history already baked into
+// the card's balance. Confirmed real report, 2026-10-07 (Citi AAdvantage: fee tracked as a Bill
+// Tracker bill instead, card setting unchecked, yet a duplicate "Annual Fee" row kept showing up).
+// Returns true if anything was removed.
+function purgeFutureCardAnnualFeeRows(card) {
+    if (!card || card.type !== 'credit' || card.hasAnnualFee) return false;
+    const calendar = state.cardCalendars?.[card.id];
+    if (!calendar) return false;
+    const todayStr = formatLocalDate(new Date());
+    let removed = false;
+    Object.keys(calendar).forEach(key => {
+        const list = calendar[key];
+        if (!Array.isArray(list)) return;
+        const kept = list.filter(tx => !(tx.isAnnualFee && tx.annualFeeId && tx.date >= todayStr));
+        if (kept.length !== list.length) {
+            calendar[key] = kept;
+            removed = true;
+        }
+    });
+    return removed;
 }
 
 // Posts a card's configured annual fee as a real, dated charge every year on its configured month
