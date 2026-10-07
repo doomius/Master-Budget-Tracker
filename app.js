@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-10-07 11:01';
+const BUILD_VERSION = '2026-10-07 11:16';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -1977,6 +1977,12 @@ async function init() {
     state.currentYear = appToday.getFullYear();
     state.currentMonth = MONTH_ORDER[appToday.getMonth()];
     state.expenseCalendarDateMode = 'transfer';
+    // A fresh load always opens on Jason's checking dashboard / Jason's Savings pool, never whichever
+    // account was open last (per explicit user request, 2026-10-07). Re-applied after the pull below,
+    // since savingsPoolView isn't in VIEW_SETTING_STATE_KEYS and a pull would otherwise bring back
+    // whatever the last push had.
+    state.dashboardType = 'personal';
+    state.savingsPoolView = 'household';
     setupEventListeners();
 
     populateYearSelect();
@@ -2009,13 +2015,17 @@ async function init() {
     startDateInputAutoEnhancer();
     logSystem(`Application initialized. Local data cleared for fresh load from Google Drive.`);
 
+    // Landing tab on every fresh load: Delivery on mobile, the (Jason) Dashboard everywhere else —
+    // never the tab last open (per explicit user request, 2026-10-07). The one exception is
+    // budgetify_post_reload_tab, a one-shot hint set by features that deliberately reload the page
+    // (e.g. Clear Local Data/JSON import returning you to Sync Settings). Decided once here and reused
+    // after the pull below, so a pulled state.activeTab can't change it.
     const postReloadTab = sessionStorage.getItem('budgetify_post_reload_tab');
+    const startupTab = postReloadTab || (isMobileViewport() ? 'delivery' : 'dashboard');
     if (postReloadTab) {
         sessionStorage.removeItem('budgetify_post_reload_tab');
         switchToTab(postReloadTab);
-    } else if (state.activeTab && state.activeTab !== 'dashboard') {
-        switchToTab(state.activeTab);
-    } else if (isMobileViewport()) {
+    } else if (startupTab === 'delivery') {
         switchToTab('delivery');
     } else {
         // None of the branches above ran switchToTab() for the plain default-Dashboard case — set
@@ -2057,24 +2067,13 @@ async function init() {
         }
         ensureYearMonthInitialized(state.currentYear, state.currentMonth);
         ensureDeliveryEarningsForMonth(state.currentYear, state.currentMonth);
-        // Re-derive which tab to land on using the SAME rules as the pre-pull selection above
-        // (minus postReloadTab, a one-time sessionStorage flag already consumed there) — but now
-        // reading state.activeTab AFTER the pull, since that field isn't in VIEW_SETTING_STATE_KEYS
-        // and so just got overwritten by whatever the last push saved. document.body.dataset.activeTab
-        // itself is still whatever the PRE-pull selection set (switchToTab is the only thing that
-        // updates it, and hasn't run since) — reading that instead of state.activeTab here would
-        // silently ignore the just-pulled tab entirely, confirmed as a real bug in this same fix
-        // while testing it live. Calling switchToTab (for whichever tab wins) also recomputes every
-        // date-dependent bit of that tab's own state — delivery's find-this-week logic included —
-        // against the now-corrected currentYear/currentMonth instead of whatever month the pull
-        // briefly set it to.
-        if (state.activeTab && state.activeTab !== 'dashboard') {
-            switchToTab(state.activeTab);
-        } else if (isMobileViewport()) {
-            switchToTab('delivery');
-        } else {
-            switchToTab('dashboard');
-        }
+        // Land on the same startupTab decided before the pull (not the pulled state.activeTab, which
+        // just got overwritten by whatever the last push saved). Re-running switchToTab also
+        // recomputes every date-dependent bit of that tab's state — delivery's find-this-week logic
+        // included — against the now-corrected currentYear/currentMonth.
+        state.dashboardType = 'personal';
+        state.savingsPoolView = 'household';
+        switchToTab(startupTab);
     }
 
     // Auto Sync only turns on if that pull actually confirmed real (or confirmed-empty) data —
@@ -2279,6 +2278,47 @@ window.addEventListener('beforeunload', flushPendingSave);
 // chance to complete before the eventual close in the common case, meaningfully narrowing that
 // window even though it can't close it entirely.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPendingSave(); });
+
+// Reopening the app after being away should land on today, same as a fresh load does (see init()'s
+// post-pull reset) — but a phone/browser that merely RESUMES a suspended page never re-runs init()
+// at all, so whatever month was open when it was backgrounded (e.g. Oct 2030, browsed ahead) simply
+// stays on screen. Per explicit user request, 2026-10-07. Waits a few minutes first so a quick
+// app-switch mid-task doesn't yank the view out from under the user, and never fires while a dialog
+// is open (mid-edit). Only the viewed period/day is reset — tab, view mode, and any selected card
+// are left exactly as they were.
+const RESUME_JUMP_TO_TODAY_AFTER_MS = 5 * 60 * 1000;
+let _viewHiddenAtMs = null;
+function resetViewedPeriodToToday() {
+    const now = new Date();
+    state.ccYear = now.getFullYear();
+    state.ccMonth = MONTH_ORDER[now.getMonth()];
+    state.ccSelectedDate = formatLocalDate(now);
+    state.currentYear = now.getFullYear();
+    state.currentMonth = MONTH_ORDER[now.getMonth()];
+    state.selectedDate = formatLocalDate(now);
+    populateYearSelect();
+    const monthSelectEl = document.getElementById('month-select');
+    if (monthSelectEl) monthSelectEl.value = state.currentMonth;
+    const transDateEl = document.getElementById('trans-date');
+    if (transDateEl) {
+        transDateEl.value = state.selectedDate;
+        transDateEl.dataset.isoDate = state.selectedDate;
+    }
+    ensureYearMonthInitialized(state.currentYear, state.currentMonth);
+    ensureDeliveryEarningsForMonth(state.currentYear, state.currentMonth);
+    switchToTab(document.body.dataset.activeTab || state.activeTab || 'dashboard');
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        _viewHiddenAtMs = Date.now();
+        return;
+    }
+    const hiddenFor = _viewHiddenAtMs === null ? 0 : Date.now() - _viewHiddenAtMs;
+    _viewHiddenAtMs = null;
+    if (hiddenFor < RESUME_JUMP_TO_TODAY_AFTER_MS) return;
+    if (document.querySelector('dialog[open]')) return;
+    resetViewedPeriodToToday();
+});
 
 // Just the debounced IndexedDB write, no cache invalidation and no auto-push scheduling — called
 // from saveDatabase() below as the actual persistence step. Kept as its own small function
@@ -6726,6 +6766,18 @@ function setupEventListeners() {
     document.getElementById('asia-trans-type')?.addEventListener('change', updateQuickAddFormFields);
     document.getElementById('asia-joint-direction')?.addEventListener('change', updateQuickAddFormFields);
 
+    // Sidebar accordion account pickers (see syncSidebarAccountSubnav()) — jump to the tab if needed,
+    // then click the matching original toggle button, which owns the real state change + render.
+    document.querySelectorAll('[data-nav-dashboard-type]').forEach(btn => btn.addEventListener('click', () => {
+        if ((document.body.dataset.activeTab || 'dashboard') !== 'dashboard') switchToTab('dashboard');
+        document.querySelector(`#dashboard-toggle-container [data-type="${btn.dataset.navDashboardType}"]`)?.click();
+        closeMobileSidebar();
+    }));
+    document.querySelectorAll('[data-nav-savings-pool]').forEach(btn => btn.addEventListener('click', () => {
+        if ((document.body.dataset.activeTab || 'dashboard') !== 'savings') switchToTab('savings');
+        document.querySelector(`#savings-pool-toggle [data-savings-pool="${btn.dataset.navSavingsPool}"]`)?.click();
+        closeMobileSidebar();
+    }));
     document.querySelectorAll('#savings-pool-toggle [data-savings-pool]').forEach(btn => btn.addEventListener('click', () => {
         state.savingsPoolView = SAVINGS_TRACKER_REGISTRY[btn.dataset.savingsPool] ? btn.dataset.savingsPool : 'household';
         saveDatabase();
@@ -11980,7 +12032,28 @@ function updateGlobalNavVisibility() {
     }
 }
 
+// Sidebar accordion account pickers (Dashboard: Jason/Joint/Asia, Savings Tracker: Jason/Asia/Travel/
+// Emergency) — a group is open only while its own tab is the active one, and the entry matching the
+// current state.dashboardType / state.savingsPoolView is highlighted. Read straight from state, so it
+// stays correct however the account changed (sidebar click, startup reset, Drive pull). Called from
+// updateGlobalTogglesPlacement(), which every render and tab switch already runs.
+function syncSidebarAccountSubnav() {
+    const activeTab = document.body.dataset.activeTab || 'dashboard';
+    const savingsPool = (state.savingsPoolView && typeof SAVINGS_TRACKER_REGISTRY !== 'undefined' && SAVINGS_TRACKER_REGISTRY[state.savingsPoolView])
+        ? state.savingsPoolView : 'household';
+    document.querySelectorAll('.nav-subgroup').forEach(group => {
+        group.classList.toggle('open', group.dataset.parentTab === activeTab);
+    });
+    document.querySelectorAll('[data-nav-dashboard-type]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.navDashboardType === (state.dashboardType || 'personal'));
+    });
+    document.querySelectorAll('[data-nav-savings-pool]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.navSavingsPool === savingsPool);
+    });
+}
+
 function updateGlobalTogglesPlacement() {
+    syncSidebarAccountSubnav();
     const host = document.getElementById('global-toggles-host');
     const hostLeft = document.getElementById('header-left-actions');
     const hostRight = document.getElementById('header-right-actions');
@@ -12024,10 +12097,10 @@ function updateGlobalTogglesPlacement() {
             let targetHost = host;
             
             if (activeTab === 'dashboard') {
-                if (id === 'dashboard-toggle-container') {
-                    shouldBeVisible = true;
-                    targetHost = hostIdentity;
-                }
+                // dashboard-toggle-container (Jason/Joint/Asia) is intentionally never shown here
+                // anymore — the sidebar accordion under Dashboard replaced it (per explicit user
+                // request, 2026-10-07). It stays in the DOM, hidden, because it still owns the real
+                // click handlers/state the sidebar buttons drive.
                 if (id === 'view-toggle-container') {
                     shouldBeVisible = true;
                     targetHost = hostViewToggle;
@@ -12048,14 +12121,9 @@ function updateGlobalTogglesPlacement() {
                     if (id === 'cc-scope-toggle' && state.ccViewMode === 'list') { shouldBeVisible = true; targetHost = hostRight; }
                 }
             } else if (activeTab === 'savings') {
-                // Same dedicated identity-toggle slot the Checking dashboard's Jason/Joint/Asia
-                // toggle uses (right under the page title, always visible regardless of scroll) —
-                // per explicit user request, 2026-08-09: was buried inside the Savings Metrics card
-                // further down the page, easy to lose track of which pool was selected.
-                if (id === 'savings-pool-toggle') {
-                    shouldBeVisible = true;
-                    targetHost = hostIdentity;
-                }
+                // savings-pool-toggle is intentionally never shown here anymore — the sidebar
+                // accordion under Savings Tracker replaced it (2026-10-07), same as the Dashboard's
+                // Jason/Joint/Asia toggle above. Kept in the DOM, hidden, as the handler owner.
                 if (id === 'savings-header-view-toggle') {
                     shouldBeVisible = true;
                     targetHost = hostRight;
