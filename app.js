@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-10-18 09:16';
+const BUILD_VERSION = '2026-10-18 09:28';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -25713,7 +25713,14 @@ function getVacationChargesForSource(sourceKey) {
                 results.push({
                     id: dynId,
                     date: ch.date,
-                    description: `${trip.name}: ${ch.merchant || ch.description || 'Actual Charge'}`,
+                    // No "<trip name>:" prefix — the merchant/description are exactly what was typed when
+                    // the charge was logged (per explicit user request, 2026-10-18); the trip is shown by
+                    // the card ledger's own Trip column instead. merchant/rawDescription let the card sync
+                    // fill those two ledger columns separately.
+                    description: ch.merchant || ch.description || 'Actual Charge',
+                    merchant: ch.merchant || '',
+                    rawDescription: ch.description || '',
+                    isActualCharge: true,
                     amount: signedAmt,
                     isSplitterDynamic: true,
                     vacationTripId: trip.id
@@ -26011,6 +26018,14 @@ function syncVacationMasterCardCharges() {
                     if (!tx.vacationDynamicId || tx.vacationTripId !== trip.id) continue;
                     const current = desiredById.get(tx.vacationDynamicId);
                     if (current && tx.date === current.date && Math.abs((Number(tx.amount) || 0) + current.amount) < 0.005) {
+                        // Rows posted before the merchant/description fix carry the trip name in both —
+                        // correct those in place (the amount/date match, so nothing is reposted).
+                        if (current.isActualCharge) {
+                            const wantMerchant = current.merchant || '';
+                            const wantDescription = current.rawDescription || current.merchant || 'Actual Charge';
+                            if (tx.merchant !== wantMerchant) tx.merchant = wantMerchant;
+                            if (tx.description !== wantDescription) tx.description = wantDescription;
+                        }
                         desiredById.delete(tx.vacationDynamicId); // already correct as-is, nothing to repost
                         continue;
                     }
@@ -26038,7 +26053,10 @@ function syncVacationMasterCardCharges() {
                 if (!state.cardCalendars[cardId][key]) state.cardCalendars[cardId][key] = [];
                 state.cardCalendars[cardId][key].push({
                     id: 'c-' + Math.random().toString(36).substr(2, 9),
-                    date: charge.date, merchant: trip.name, description: charge.description, trip: trip.name,
+                    date: charge.date,
+                    merchant: charge.isActualCharge ? (charge.merchant || '') : trip.name,
+                    description: charge.isActualCharge ? (charge.rawDescription || charge.merchant || 'Actual Charge') : charge.description,
+                    trip: trip.name,
                     amount: -charge.amount, transactionKind: 'charge', owner,
                     interestRate: activeCard ? (activeCard.interestRate || 0) : 0,
                     isRecurring: false, recurringDay: 0, recurringSeriesId: '',
