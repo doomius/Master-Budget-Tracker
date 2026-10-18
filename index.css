@@ -6953,3 +6953,48 @@ body.is-mobile-screen #joint-expenses-content .data-table th,
 }
 
 
+
+
+/* Itinerary planned-vs-actual chip (one per day, plus a full-trip one on the last day) — also the click
+   target for the itemized popout. Yellow = planned only, nothing actual logged yet; green = at/under
+   budget; red = over budget. Lines stack and wrap instead of truncating so the result line is never cut
+   off in a narrow week column. */
+.vacation-week-allday-chip.vacation-expense-chip {
+    cursor: pointer;
+    display: block;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.3;
+    color: var(--text-primary);
+    border: 1px solid transparent;
+}
+.vacation-expense-chip:hover {
+    filter: brightness(1.15);
+}
+.vacation-expense-chip .vacation-expense-line {
+    display: block;
+}
+.vacation-expense-chip .vacation-expense-result {
+    display: block;
+    font-weight: 700;
+    margin-top: 2px;
+}
+.vacation-week-allday-chip.vacation-expense-chip.vacation-expense-planned {
+    background: rgba(250, 204, 21, 0.28);
+    border-color: #facc15;
+}
+.vacation-week-allday-chip.vacation-expense-chip.vacation-expense-under {
+    background: rgba(16, 185, 129, 0.28);
+    border-color: var(--color-success);
+}
+.vacation-week-allday-chip.vacation-expense-chip.vacation-expense-under .vacation-expense-result {
+    color: #4ade80;
+}
+.vacation-week-allday-chip.vacation-expense-chip.vacation-expense-over {
+    background: rgba(244, 63, 94, 0.22);
+    border-color: var(--color-danger);
+}
+.vacation-week-allday-chip.vacation-expense-chip.vacation-expense-over .vacation-expense-result {
+    color: #fb7185;
+}
