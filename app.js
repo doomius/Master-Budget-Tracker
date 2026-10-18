@@ -4,7 +4,7 @@
 // it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
 // Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
 // guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-10-07 12:28';
+const BUILD_VERSION = '2026-10-18 09:16';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -177,6 +177,7 @@ const VACATION_CATEGORY_ICONS = {
     excursions: '🎟️',
     airportTransfers: '🚐',
     souvenirs: '🛍️',
+    misc: '🧺',
     attractions: '🎟️',
     rentalCar: '🚗',
     travelInsurance: '🛡️',
@@ -884,7 +885,8 @@ const VACATION_TYPE_CATEGORIES = {
         { key: 'excursions', label: 'Excursions/Tours', prepaid: false },
         { key: 'rentalCar', label: 'Rental Car', prepaid: false },
         { key: 'petCare', label: 'Pet Care', prepaid: false },
-        { key: 'souvenirs', label: 'Souvenirs', prepaid: false }
+        { key: 'souvenirs', label: 'Souvenirs & Merch', prepaid: false },
+        { key: 'misc', label: 'Misc (Snacks, Drugstore, etc.)', prepaid: false }
     ],
     // Same shape as City Destination (see isCitylikeTripType() — Road Trip shares every
     // city-specific UI gate: no cruise/resort cost section, no Onboard Credits, no Pre/Post-Trip
@@ -901,7 +903,8 @@ const VACATION_TYPE_CATEGORIES = {
         { key: 'excursions', label: 'Excursions/Tours', prepaid: false },
         { key: 'rentalCar', label: 'Rental Car', prepaid: false },
         { key: 'petCare', label: 'Pet Care', prepaid: false },
-        { key: 'souvenirs', label: 'Souvenirs', prepaid: false }
+        { key: 'souvenirs', label: 'Souvenirs & Merch', prepaid: false },
+        { key: 'misc', label: 'Misc (Snacks, Drugstore, etc.)', prepaid: false }
     ],
     allInclusive: [
         { key: 'airfare', label: 'Airfare', prepaid: true },
@@ -914,6 +917,8 @@ const VACATION_TYPE_CATEGORIES = {
         { key: 'excursions', label: 'Excursions/Tours', prepaid: false },
         { key: 'airportTransfers', label: 'Airport Transfers', prepaid: false },
         { key: 'petCare', label: 'Pet Care', prepaid: false },
+        { key: 'souvenirs', label: 'Souvenirs & Merch', prepaid: false },
+        { key: 'misc', label: 'Misc (Snacks, Drugstore, etc.)', prepaid: false },
         { key: 'cruiseFolio', label: 'Resort Incidental/Folio Charges', prepaid: false }
     ],
     cruise: [
@@ -928,6 +933,8 @@ const VACATION_TYPE_CATEGORIES = {
         { key: 'airportTransfers', label: 'Airport Transfers', prepaid: false },
         { key: 'petCare', label: 'Pet Care', prepaid: false },
         { key: 'prePostFoodBeverage', label: 'Pre/Post-Cruise Food & Beverage', prepaid: false },
+        { key: 'souvenirs', label: 'Souvenirs & Merch', prepaid: false },
+        { key: 'misc', label: 'Misc (Snacks, Drugstore, etc.)', prepaid: false },
         { key: 'cruiseFolio', label: 'Cruise Folio (Onboard Charges)', prepaid: false }
     ]
 };
@@ -4014,6 +4021,24 @@ function migrateDatabase() {
         if (trip.useActualCharges === undefined) { trip.useActualCharges = false; migrated = true; }
         if (trip.consolidatePlaceholders === undefined) { trip.consolidatePlaceholders = true; migrated = true; }
         if (!Array.isArray(trip.actualCharges)) { trip.actualCharges = []; migrated = true; }
+        // Misc (+ Souvenirs & Merch on cruise/all-inclusive trips, which never had one) joined the default
+        // category set 2026-10-18 — add them to any trip that's current, upcoming, or ended within the last
+        // week so an in-progress trip can log snacks/drugstore runs/concert merch without hand-building
+        // custom categories. Past trips are left alone (an empty $0 row each would just be clutter).
+        // Never touches an existing category, and only adds a key the trip doesn't already have.
+        if (Array.isArray(trip.categories)) {
+            const recentCutoff = formatLocalDate(new Date(Date.now() - 7 * 86400000));
+            if (!trip.endDate || trip.endDate >= recentCutoff) {
+                const wantedKeys = ['misc'];
+                if (trip.type === 'cruise' || trip.type === 'allInclusive') wantedKeys.push('souvenirs');
+                createVacationCategoriesForType(trip.type).forEach(def => {
+                    if (wantedKeys.includes(def.key) && !trip.categories.some(c => c.key === def.key)) {
+                        trip.categories.push(def);
+                        migrated = true;
+                    }
+                });
+            }
+        }
         (trip.lodging || []).forEach(l => {
             if (l.address && l.address1 === undefined) { l.address1 = l.address; migrated = true; }
         });
@@ -25414,199 +25439,213 @@ function calcCruiseFolioAndPerksBreakdown(trip) {
     };
 }
 
+// The still-to-be-spent planned items for a trip (unbooked flights/lodging/excursions/activities/
+// add-ons, plus every non-prepaid category's budget) — extracted from getVacationChargesForSource()
+// so the ledger placeholder, the calendar's Total Planned Expenses chip, AND the new per-day /
+// full-trip expense popouts (buildVacationExpenseModel) all read ONE implementation instead of three
+// copies that could drift apart. Each breakdown entry may carry `date` (the day it naturally falls
+// on) or `spread: true` (an undated per-category budget the daily view splits evenly across the trip's
+// days); entries with neither are trip-level only.
+function getVacationPlannedBreakdown(trip) {
+    const cfg = trip.cruisePaymentConfig || {};
+    const cruiseCostAmount = cfg.cruiseCostAmount || 0;
+    const deposits = cfg.deposits || cfg.depositPayments || [];
+    const depositTotal = deposits.length > 0 ? deposits.reduce((sum, d) => sum + (Number(d.amount) || 0), 0) : (Number(cfg.depositAmount) || 0);
+
+    let combinedTotal = 0;
+    const breakdown = [];
+
+    // 1. Cruise / Package Base remaining balance
+    const cruiseCat = (trip.categories || []).find(c => c.key === 'cruiseCost');
+    if (cruiseCat && cfg.paymentMode !== 'prepaid') {
+        if (cfg.remainingPaymentSource !== 'shortTermLoan') {
+            const rem = Math.max(0, cruiseCostAmount - depositTotal);
+            if (rem > 0.005) {
+                combinedTotal += rem;
+                breakdown.push({ label: 'Remaining Cruise Balance', amount: rem, key: 'cruiseCost', icon: '🚢' });
+            }
+        }
+    }
+
+    // 2. Flights
+    const flightCat = (trip.categories || []).find(c => c.key === 'airfare' || c.key === 'flights');
+    let flightsTotalCost = 0;
+    (trip.flights || []).forEach(f => {
+        const cost = Number(f.cost) || 0;
+        flightsTotalCost += cost;
+        if (!f.isBooked && !f.paymentDate && !f.prepaidTxId) {
+            if (cost > 0.005) {
+                combinedTotal += cost;
+                const legsStr = (f.legs || []).map(l => `${l.departureAirport || ''}→${l.arrivalAirport || ''}`).filter(Boolean).join(', ');
+                breakdown.push({ label: `Airfare${legsStr ? ' (' + legsStr + ')' : ''}`, amount: cost, key: 'airfare', icon: '✈️', date: ((f.legs || [])[0]?.departureDateTime || '').slice(0, 10) || null });
+            }
+        }
+    });
+    if (flightCat) {
+        const catPlanned = Number(flightCat.plannedAmount) || Number(flightCat.budgetAmount) || 0;
+        if (catPlanned > flightsTotalCost) {
+            const extra = catPlanned - flightsTotalCost;
+            if (!flightCat.prepaidTxId && !flightCat.paymentDate) {
+                combinedTotal += extra;
+                breakdown.push({ label: `${flightCat.label} (Budgeted Balance)`, amount: extra, key: flightCat.key, icon: '✈️' });
+            }
+        }
+    }
+
+    // 3. Lodging (Unbooked itemized lodging & unbooked lodging category budget)
+    const lodgingCat = (trip.categories || []).find(c => c.key === 'lodging' || c.key === 'prePostHotel' || c.key === 'resortCost' || c.key === 'hotel');
+    let lodgingTotalCost = 0;
+    (trip.lodging || []).forEach(l => {
+        const cost = Number(l.cost) || 0;
+        const taxesFeesAmt = Number(l.taxesFeesAmount) || 0;
+        const inRoomAmt = Number(l.inRoomChargesAmount) || 0;
+        lodgingTotalCost += cost + taxesFeesAmt + inRoomAmt;
+        if (!l.isBooked && !l.paymentDate && !l.prepaidTxId) {
+            if (cost > 0.005) {
+                combinedTotal += cost;
+                breakdown.push({ label: `Lodging: ${l.name || 'Hotel'}`, amount: cost, key: 'lodging', icon: '🏨', date: l.checkIn || null });
+            }
+        }
+        // Taxes/fees and in-room charges book their own one-off transaction the moment a date
+        // is set (applyVacationLodgingFeeBooking, wired from the lodging dialog submit handler)
+        // — while unbooked, they need to flow into the SAME combined placeholder the room cost
+        // above does, or clearing the date just makes the amount vanish instead of moving it
+        // into the in-trip budgeted total/calendar chip. Per explicit user request, 2026-08-19.
+        if (!l.taxesFeesDate && !l.taxesFeesTxId) {
+            if (taxesFeesAmt > 0.005) {
+                combinedTotal += taxesFeesAmt;
+                breakdown.push({ label: `Lodging Taxes & Fees: ${l.name || 'Hotel'}`, amount: taxesFeesAmt, key: 'lodging', icon: '🏨', date: l.checkOut || l.checkIn || null });
+            }
+        }
+        if (!l.inRoomChargesDate && !l.inRoomChargesTxId) {
+            if (inRoomAmt > 0.005) {
+                combinedTotal += inRoomAmt;
+                breakdown.push({ label: `Lodging In-Room Charges: ${l.name || 'Hotel'}`, amount: inRoomAmt, key: 'lodging', icon: '🏨', date: l.checkOut || l.checkIn || null });
+            }
+        }
+    });
+    if (lodgingCat) {
+        const catPlanned = Number(lodgingCat.plannedAmount) || Number(lodgingCat.budgetAmount) || 0;
+        if (catPlanned > lodgingTotalCost) {
+            const extra = catPlanned - lodgingTotalCost;
+            if (!lodgingCat.prepaidTxId && !lodgingCat.paymentDate) {
+                combinedTotal += extra;
+                breakdown.push({ label: `${lodgingCat.label} (Budgeted)`, amount: extra, key: lodgingCat.key, icon: '🏨' });
+            }
+        }
+    }
+
+    // 4. Excursions
+    const exCat = (trip.categories || []).find(c => c.key === 'excursions');
+    let exTotalCost = 0;
+    (trip.excursions || []).forEach(ex => {
+        const cost = Number(ex.cost) || 0;
+        exTotalCost += cost;
+        if (!ex.paymentDate && !ex.prepaidTxId) {
+            if (cost > 0.005) {
+                combinedTotal += cost;
+                breakdown.push({ label: `Excursion: ${ex.name || 'Excursion'}`, amount: cost, key: 'excursions', icon: '🏝️', date: ex.date || null });
+            }
+        }
+    });
+    if (exCat) {
+        const catPlanned = Number(exCat.plannedAmount) || Number(exCat.budgetAmount) || 0;
+        if (catPlanned > exTotalCost) {
+            const extra = catPlanned - exTotalCost;
+            combinedTotal += extra;
+            breakdown.push({ label: `${exCat.label} (Budgeted)`, amount: extra, key: exCat.key, icon: '🏝️' });
+        }
+    }
+
+    // 5. Pre/Post Activities
+    (trip.prePostActivities || []).forEach(act => {
+        const cost = Number(act.cost) || 0;
+        if (!act.paymentDate && !act.prepaidTxId) {
+            if (cost > 0.005) {
+                combinedTotal += cost;
+                breakdown.push({ label: `Activity: ${act.name || 'Activity'}`, amount: cost, key: act.expenseCategoryKey || 'activities', icon: '🎯', date: act.date || null });
+            }
+        }
+    });
+
+    // 6. Add-Ons & Cruise Folio Perks Calculation
+    const folioCalculated = calcCruiseFolioAndPerksBreakdown(trip);
+    const addonCat = (trip.categories || []).find(c => c.key === 'addons');
+    let addonTotalCost = 0;
+    let netAddonFolioSum = 0;
+    const addonSubItems = [];
+
+    folioCalculated.processedAddons.forEach(ad => {
+        addonTotalCost += ad.totalRawCost;
+        // Same fix as the "In-Trip Budgeted" total below (search calcCruiseFolioAndPerksBreakdown's
+        // own 2026-08-26 comment for the full story) — never applied here until now.
+        // calcCruiseFolioAndPerksBreakdown() hardcodes netCost to 0 and prepaid:true for any
+        // add-on flagged prepaid (a PLAN, not a payment — e.g. every Bar Tab package addon gets
+        // this unconditionally, and a "Pre-Paid Gratuity" line just from its own prepaid
+        // checkbox), which silently dropped its cost from this placeholder/calendar-chip total
+        // entirely instead of counting it as still-owed. Confirmed real bug, 2026-09-21 (Virgin
+        // Voyages trip: Bar Tab/Excursion/Gratuity add-ons totaling $750 were missing from the
+        // calendar chip and AMEX placeholder even though In-Trip Budgeted correctly included
+        // them — the two totals should always match). Use the same "actually booked" check (a
+        // real payment date/tx/isBooked, not the mere prepaid flag) every other item type in
+        // this function already uses to decide whether it belongs here at all.
+        const actuallyBooked = ad.isBooked || ad.paymentDate || ad.prepaidTxId;
+        if (!actuallyBooked) {
+            const cost = ad.prepaid ? (Number(ad.totalRawCost) || 0) : (Number(ad.netCost) || 0);
+            if (cost > 0.005) {
+                netAddonFolioSum += cost;
+                const subLabel = `${ad.name || 'Add-On'}${ad.coveredBy !== 'Billed to Ship Folio' ? ' (' + ad.coveredBy + ')' : ''}`;
+                addonSubItems.push({ label: subLabel, amount: cost, date: ad.date || null });
+            }
+        }
+    });
+
+    if (!trip.isFolioSettled && netAddonFolioSum > 0.005) {
+        combinedTotal += netAddonFolioSum;
+        breakdown.push({
+            label: 'Ship Folio Add-Ons Total',
+            amount: netAddonFolioSum,
+            key: 'addons',
+            icon: '🍹',
+            items: addonSubItems
+        });
+    }
+
+    if (addonCat) {
+        const catPlanned = Number(addonCat.plannedAmount) || Number(addonCat.budgetAmount) || 0;
+        if (catPlanned > addonTotalCost) {
+            const extra = catPlanned - addonTotalCost;
+            combinedTotal += extra;
+            breakdown.push({ label: `${addonCat.label} (Budgeted)`, amount: extra, key: addonCat.key, icon: '🎟️' });
+        }
+    }
+
+    // 7. All other categories (Food, Fuel, Uber, Parking, Shopping, Souvenirs, Port Fees, Tips, etc.)
+    const specialKeys = new Set(['cruiseCost', 'airfare', 'flights', 'lodging', 'prePostHotel', 'resortCost', 'hotel', 'excursions', 'addons']);
+    (trip.categories || []).forEach(cat => {
+        if (specialKeys.has(cat.key)) return;
+        const planned = Number(cat.plannedAmount) || Number(cat.budgetAmount) || 0;
+        if (cat.prepaid && (cat.prepaidTxId || cat.paymentDate || cat.isBooked)) {
+            // Prepaid item, paid before trip
+        } else {
+            if (planned > 0.005) {
+                combinedTotal += planned;
+                breakdown.push({ label: cat.label, amount: planned, key: cat.key, icon: getVacationCategoryIcon(cat.key), spread: true });
+            }
+        }
+    });
+    return { combinedTotal, breakdown };
+}
+
 function getVacationChargesForSource(sourceKey) {
     const results = [];
     (state.vacationTrips || []).forEach(trip => {
         if (!trip.useActualCharges) {
             if (trip.masterPaymentSource !== sourceKey) return;
 
-            const cfg = trip.cruisePaymentConfig || {};
-            const cruiseCostAmount = cfg.cruiseCostAmount || 0;
-            const deposits = cfg.deposits || cfg.depositPayments || [];
-            const depositTotal = deposits.length > 0 ? deposits.reduce((sum, d) => sum + (Number(d.amount) || 0), 0) : (Number(cfg.depositAmount) || 0);
-
-            let combinedTotal = 0;
-            const breakdown = [];
-
-            // 1. Cruise / Package Base remaining balance
-            const cruiseCat = (trip.categories || []).find(c => c.key === 'cruiseCost');
-            if (cruiseCat && cfg.paymentMode !== 'prepaid') {
-                if (cfg.remainingPaymentSource !== 'shortTermLoan') {
-                    const rem = Math.max(0, cruiseCostAmount - depositTotal);
-                    if (rem > 0.005) {
-                        combinedTotal += rem;
-                        breakdown.push({ label: 'Remaining Cruise Balance', amount: rem, key: 'cruiseCost', icon: '🚢' });
-                    }
-                }
-            }
-
-            // 2. Flights
-            const flightCat = (trip.categories || []).find(c => c.key === 'airfare' || c.key === 'flights');
-            let flightsTotalCost = 0;
-            (trip.flights || []).forEach(f => {
-                const cost = Number(f.cost) || 0;
-                flightsTotalCost += cost;
-                if (!f.isBooked && !f.paymentDate && !f.prepaidTxId) {
-                    if (cost > 0.005) {
-                        combinedTotal += cost;
-                        const legsStr = (f.legs || []).map(l => `${l.departureAirport || ''}→${l.arrivalAirport || ''}`).filter(Boolean).join(', ');
-                        breakdown.push({ label: `Airfare${legsStr ? ' (' + legsStr + ')' : ''}`, amount: cost, key: 'airfare', icon: '✈️' });
-                    }
-                }
-            });
-            if (flightCat) {
-                const catPlanned = Number(flightCat.plannedAmount) || Number(flightCat.budgetAmount) || 0;
-                if (catPlanned > flightsTotalCost) {
-                    const extra = catPlanned - flightsTotalCost;
-                    if (!flightCat.prepaidTxId && !flightCat.paymentDate) {
-                        combinedTotal += extra;
-                        breakdown.push({ label: `${flightCat.label} (Budgeted Balance)`, amount: extra, key: flightCat.key, icon: '✈️' });
-                    }
-                }
-            }
-
-            // 3. Lodging (Unbooked itemized lodging & unbooked lodging category budget)
-            const lodgingCat = (trip.categories || []).find(c => c.key === 'lodging' || c.key === 'prePostHotel' || c.key === 'resortCost' || c.key === 'hotel');
-            let lodgingTotalCost = 0;
-            (trip.lodging || []).forEach(l => {
-                const cost = Number(l.cost) || 0;
-                const taxesFeesAmt = Number(l.taxesFeesAmount) || 0;
-                const inRoomAmt = Number(l.inRoomChargesAmount) || 0;
-                lodgingTotalCost += cost + taxesFeesAmt + inRoomAmt;
-                if (!l.isBooked && !l.paymentDate && !l.prepaidTxId) {
-                    if (cost > 0.005) {
-                        combinedTotal += cost;
-                        breakdown.push({ label: `Lodging: ${l.name || 'Hotel'}`, amount: cost, key: 'lodging', icon: '🏨' });
-                    }
-                }
-                // Taxes/fees and in-room charges book their own one-off transaction the moment a date
-                // is set (applyVacationLodgingFeeBooking, wired from the lodging dialog submit handler)
-                // — while unbooked, they need to flow into the SAME combined placeholder the room cost
-                // above does, or clearing the date just makes the amount vanish instead of moving it
-                // into the in-trip budgeted total/calendar chip. Per explicit user request, 2026-08-19.
-                if (!l.taxesFeesDate && !l.taxesFeesTxId) {
-                    if (taxesFeesAmt > 0.005) {
-                        combinedTotal += taxesFeesAmt;
-                        breakdown.push({ label: `Lodging Taxes & Fees: ${l.name || 'Hotel'}`, amount: taxesFeesAmt, key: 'lodging', icon: '🏨' });
-                    }
-                }
-                if (!l.inRoomChargesDate && !l.inRoomChargesTxId) {
-                    if (inRoomAmt > 0.005) {
-                        combinedTotal += inRoomAmt;
-                        breakdown.push({ label: `Lodging In-Room Charges: ${l.name || 'Hotel'}`, amount: inRoomAmt, key: 'lodging', icon: '🏨' });
-                    }
-                }
-            });
-            if (lodgingCat) {
-                const catPlanned = Number(lodgingCat.plannedAmount) || Number(lodgingCat.budgetAmount) || 0;
-                if (catPlanned > lodgingTotalCost) {
-                    const extra = catPlanned - lodgingTotalCost;
-                    if (!lodgingCat.prepaidTxId && !lodgingCat.paymentDate) {
-                        combinedTotal += extra;
-                        breakdown.push({ label: `${lodgingCat.label} (Budgeted)`, amount: extra, key: lodgingCat.key, icon: '🏨' });
-                    }
-                }
-            }
-
-            // 4. Excursions
-            const exCat = (trip.categories || []).find(c => c.key === 'excursions');
-            let exTotalCost = 0;
-            (trip.excursions || []).forEach(ex => {
-                const cost = Number(ex.cost) || 0;
-                exTotalCost += cost;
-                if (!ex.paymentDate && !ex.prepaidTxId) {
-                    if (cost > 0.005) {
-                        combinedTotal += cost;
-                        breakdown.push({ label: `Excursion: ${ex.name || 'Excursion'}`, amount: cost, key: 'excursions', icon: '🏝️' });
-                    }
-                }
-            });
-            if (exCat) {
-                const catPlanned = Number(exCat.plannedAmount) || Number(exCat.budgetAmount) || 0;
-                if (catPlanned > exTotalCost) {
-                    const extra = catPlanned - exTotalCost;
-                    combinedTotal += extra;
-                    breakdown.push({ label: `${exCat.label} (Budgeted)`, amount: extra, key: exCat.key, icon: '🏝️' });
-                }
-            }
-
-            // 5. Pre/Post Activities
-            (trip.prePostActivities || []).forEach(act => {
-                const cost = Number(act.cost) || 0;
-                if (!act.paymentDate && !act.prepaidTxId) {
-                    if (cost > 0.005) {
-                        combinedTotal += cost;
-                        breakdown.push({ label: `Activity: ${act.name || 'Activity'}`, amount: cost, key: act.expenseCategoryKey || 'activities', icon: '🎯' });
-                    }
-                }
-            });
-
-            // 6. Add-Ons & Cruise Folio Perks Calculation
-            const folioCalculated = calcCruiseFolioAndPerksBreakdown(trip);
-            const addonCat = (trip.categories || []).find(c => c.key === 'addons');
-            let addonTotalCost = 0;
-            let netAddonFolioSum = 0;
-            const addonSubItems = [];
-
-            folioCalculated.processedAddons.forEach(ad => {
-                addonTotalCost += ad.totalRawCost;
-                // Same fix as the "In-Trip Budgeted" total below (search calcCruiseFolioAndPerksBreakdown's
-                // own 2026-08-26 comment for the full story) — never applied here until now.
-                // calcCruiseFolioAndPerksBreakdown() hardcodes netCost to 0 and prepaid:true for any
-                // add-on flagged prepaid (a PLAN, not a payment — e.g. every Bar Tab package addon gets
-                // this unconditionally, and a "Pre-Paid Gratuity" line just from its own prepaid
-                // checkbox), which silently dropped its cost from this placeholder/calendar-chip total
-                // entirely instead of counting it as still-owed. Confirmed real bug, 2026-09-21 (Virgin
-                // Voyages trip: Bar Tab/Excursion/Gratuity add-ons totaling $750 were missing from the
-                // calendar chip and AMEX placeholder even though In-Trip Budgeted correctly included
-                // them — the two totals should always match). Use the same "actually booked" check (a
-                // real payment date/tx/isBooked, not the mere prepaid flag) every other item type in
-                // this function already uses to decide whether it belongs here at all.
-                const actuallyBooked = ad.isBooked || ad.paymentDate || ad.prepaidTxId;
-                if (!actuallyBooked) {
-                    const cost = ad.prepaid ? (Number(ad.totalRawCost) || 0) : (Number(ad.netCost) || 0);
-                    if (cost > 0.005) {
-                        netAddonFolioSum += cost;
-                        const subLabel = `${ad.name || 'Add-On'}${ad.coveredBy !== 'Billed to Ship Folio' ? ' (' + ad.coveredBy + ')' : ''}`;
-                        addonSubItems.push({ label: subLabel, amount: cost });
-                    }
-                }
-            });
-
-            if (!trip.isFolioSettled && netAddonFolioSum > 0.005) {
-                combinedTotal += netAddonFolioSum;
-                breakdown.push({
-                    label: 'Ship Folio Add-Ons Total',
-                    amount: netAddonFolioSum,
-                    key: 'addons',
-                    icon: '🍹',
-                    items: addonSubItems
-                });
-            }
-
-            if (addonCat) {
-                const catPlanned = Number(addonCat.plannedAmount) || Number(addonCat.budgetAmount) || 0;
-                if (catPlanned > addonTotalCost) {
-                    const extra = catPlanned - addonTotalCost;
-                    combinedTotal += extra;
-                    breakdown.push({ label: `${addonCat.label} (Budgeted)`, amount: extra, key: addonCat.key, icon: '🎟️' });
-                }
-            }
-
-            // 7. All other categories (Food, Fuel, Uber, Parking, Shopping, Souvenirs, Port Fees, Tips, etc.)
-            const specialKeys = new Set(['cruiseCost', 'airfare', 'flights', 'lodging', 'prePostHotel', 'resortCost', 'hotel', 'excursions', 'addons']);
-            (trip.categories || []).forEach(cat => {
-                if (specialKeys.has(cat.key)) return;
-                const planned = Number(cat.plannedAmount) || Number(cat.budgetAmount) || 0;
-                if (cat.prepaid && (cat.prepaidTxId || cat.paymentDate || cat.isBooked)) {
-                    // Prepaid item, paid before trip
-                } else {
-                    if (planned > 0.005) {
-                        combinedTotal += planned;
-                        breakdown.push({ label: cat.label, amount: planned, key: cat.key, icon: getVacationCategoryIcon(cat.key) });
-                    }
-                }
-            });
+            const planned = getVacationPlannedBreakdown(trip);
+            const combinedTotal = planned.combinedTotal;
+            const breakdown = planned.breakdown;
 
             if (trip.consolidatePlaceholders !== false) {
                 if (combinedTotal > 0.005) {
@@ -25683,6 +25722,239 @@ function getVacationChargesForSource(sourceKey) {
         }
     });
     return results;
+}
+
+// ---- Per-day / full-trip expense estimate vs. actual (itinerary chips + click-to-open popouts) ----
+// Per explicit user request, 2026-10-18 (while on an active trip): every itinerary day gets an
+// "Est." chip (that day's planned spend) and an "Actual" chip (what was really logged that day, with
+// an under/over-budget flag), each opening a popout with the total on top and itemized rows below, and
+// the trip's last day adds a full-trip comparison. All of it reads getVacationPlannedBreakdown() — the
+// same still-to-be-spent list behind the ledger placeholder and the last-day Total Planned Expenses
+// chip — so the numbers can't drift from them. Planned items that carry a `date` land on that day;
+// undated per-category budgets (Food, Rideshare, Souvenirs, Misc...) are split evenly across the trip's
+// days so a day's estimate means something; anything else (e.g. a "(Budgeted)" balance, a remaining
+// cruise payment) has no natural day and shows only in the full-trip views. Actual = non-estimate
+// logged charges (signed, credits negative) plus any category actual-entry that isn't just the mirror
+// of a logged charge (same id) or of a pre-trip excursion payment (those were paid before the trip
+// and were never part of the in-trip estimate).
+function buildVacationExpenseModel(trip) {
+    const planned = getVacationPlannedBreakdown(trip);
+    const tripDays = [];
+    if (trip.startDate && trip.endDate && trip.startDate <= trip.endDate) {
+        const cursor = new Date(trip.startDate + 'T00:00:00');
+        const end = new Date(trip.endDate + 'T00:00:00');
+        while (cursor <= end && tripDays.length < 366) {
+            tripDays.push(formatLocalDate(cursor));
+            cursor.setDate(cursor.getDate() + 1);
+        }
+    }
+    const perDay = {};
+    const dayBucket = dateStr => perDay[dateStr] || (perDay[dateStr] = { estimated: [], actual: [] });
+    const tripLevel = [];
+    const spreadItems = [];
+    const place = (item, dateStr, spread) => {
+        if (dateStr) {
+            dayBucket(dateStr).estimated.push(item);
+        } else if (spread && tripDays.length) {
+            spreadItems.push({ ...item, shareDays: tripDays.length });
+            const share = item.amount / tripDays.length;
+            tripDays.forEach(d => dayBucket(d).estimated.push({ ...item, amount: share, share: true, shareOf: item.amount, shareDays: tripDays.length }));
+        } else {
+            tripLevel.push(item);
+        }
+    };
+    planned.breakdown.forEach(b => {
+        if (b.items && b.items.length) {
+            b.items.forEach(sub => place({ label: sub.label, amount: sub.amount, icon: b.icon, key: b.key }, sub.date, false));
+        } else {
+            place({ label: b.label, amount: b.amount, icon: b.icon, key: b.key }, b.date, !!b.spread);
+        }
+    });
+    // A logged estimate ("This is an estimate") is a plan too — dated on the day it was logged for, and
+    // it keeps counting as that day's estimate even after being promoted to an actual charge, so the
+    // day shows planned-vs-real for it (same rule the In-Trip Budgeted tile applies).
+    const actualCharges = trip.actualCharges || [];
+    actualCharges.forEach(ch => {
+        const est = Number(ch.estimatedAmount) || 0;
+        if (est <= 0.005) return;
+        place({
+            label: `${resolveVacationLinkedCategoryLabel(trip, ch.expenseCategoryKey, 'Estimate')}: ${ch.merchant || ch.description || 'Estimate'}`,
+            amount: ch.direction === 'credit' ? -est : est,
+            icon: '📝', key: ch.expenseCategoryKey || 'estimate'
+        }, ch.date, false);
+    });
+    const chargeIds = new Set(actualCharges.map(ch => ch.id));
+    actualCharges.forEach(ch => {
+        if (ch.isEstimate || !ch.date) return;
+        const amt = Number(ch.amount) || 0;
+        if (Math.abs(amt) <= 0.005) return;
+        const catLabel = ch.expenseCategoryKey ? resolveVacationLinkedCategoryLabel(trip, ch.expenseCategoryKey, '') : '';
+        dayBucket(ch.date).actual.push({
+            label: ch.merchant || ch.description || 'Actual Charge',
+            chargeId: ch.id,
+            note: catLabel,
+            amount: ch.direction === 'credit' ? -amt : amt,
+            icon: ch.direction === 'credit' ? '↩️' : '💵'
+        });
+    });
+    (trip.categories || []).forEach(cat => {
+        if (cat.prepaid) return;
+        (cat.actualEntries || []).forEach(entry => {
+            if (!entry.date || chargeIds.has(entry.id)) return;
+            if (typeof entry.id === 'string' && entry.id.startsWith('excursion-')) return;
+            const amt = Number(entry.amount) || 0;
+            if (Math.abs(amt) <= 0.005) return;
+            dayBucket(entry.date).actual.push({ label: `${cat.label}: ${entry.note || 'Actual'}`, note: '', amount: amt, icon: '💵' });
+        });
+    });
+    return { trip, tripDays, perDay, tripLevel, spreadItems };
+}
+
+function getVacationDayExpenseSummary(model, dateStr) {
+    const bucket = model.perDay[dateStr] || { estimated: [], actual: [] };
+    const estimatedTotal = bucket.estimated.reduce((sum, i) => sum + i.amount, 0);
+    const actualTotal = bucket.actual.reduce((sum, i) => sum + i.amount, 0);
+    return { dateStr, estimated: bucket.estimated, actual: bucket.actual, estimatedTotal, actualTotal, variance: actualTotal - estimatedTotal };
+}
+
+function getVacationTripExpenseSummary(model) {
+    const dates = Array.from(new Set([...model.tripDays, ...Object.keys(model.perDay)])).sort();
+    const rows = dates.map(d => getVacationDayExpenseSummary(model, d));
+    const tripLevelTotal = model.tripLevel.reduce((sum, i) => sum + i.amount, 0);
+    const estimatedTotal = rows.reduce((sum, r) => sum + r.estimatedTotal, 0) + tripLevelTotal;
+    const actualTotal = rows.reduce((sum, r) => sum + r.actualTotal, 0);
+    return { rows, tripLevelTotal, estimatedTotal, actualTotal, variance: actualTotal - estimatedTotal };
+}
+
+// Under/over wording shared by the chips and popouts — positive variance means actual ran OVER plan.
+function formatVacationVarianceLabel(variance, short) {
+    if (Math.abs(variance) < 0.005) return short ? '✅ On budget' : 'Right on budget';
+    return variance > 0
+        ? `${short ? '⚠️' : ''} ${formatVacationMoney(variance)} over${short ? '' : ' budget'}`.trim()
+        : `${short ? '✅' : ''} ${formatVacationMoney(-variance)} under${short ? '' : ' budget'}`.trim();
+}
+
+// One planned-vs-actual chip, used for a day and for the whole trip (per explicit user request,
+// 2026-10-18: a separate Estimate chip and Actual chip just repeated the same details in a different
+// order). Yellow with only the planned total until anything actual is logged; after that it shows
+// Planned on the first line, Actual below, and a result line — green "under" with the difference, or a
+// red ⚠️ "over" with the overage. `hasActual` is "something real was logged," not "actual != 0", so a
+// day with only a refund still flips out of the yellow planned-only state.
+function buildVacationExpenseChip({ icon, plannedLabel, planned, actual, hasActual, kind, dateStr, title }) {
+    const variance = actual - planned;
+    let state = 'planned';
+    let resultLine = '';
+    if (hasActual) {
+        state = variance > 0.005 ? 'over' : 'under';
+        resultLine = Math.abs(variance) < 0.005
+            ? '<span class="vacation-expense-result">✅ On budget</span>'
+            : variance > 0
+                ? `<span class="vacation-expense-result">⚠️ ${formatVacationMoney(variance)} over budget</span>`
+                : `<span class="vacation-expense-result">✅ ${formatVacationMoney(-variance)} under budget</span>`;
+    }
+    return `<div class="vacation-week-allday-chip vacation-expense-chip vacation-expense-${state}" role="button" tabindex="0" data-expense-popout="${kind}" data-date="${dateStr}" title="${escapeHTML(title)}">` +
+        `<span class="vacation-expense-line">${icon} ${plannedLabel} ${formatVacationMoney(planned)}</span>` +
+        (hasActual ? `<span class="vacation-expense-line">💵 Actual ${formatVacationMoney(actual)}</span>${resultLine}` : '') +
+        `</div>`;
+}
+
+// All-day-row chips for one itinerary day (shared by the Week and Day views): the day's single
+// planned-vs-actual chip, plus — on the trip's last day — the full-trip chip. `hasConsolidatedChip`
+// says whether the existing last-day Total Planned Expenses chip is already being drawn (it becomes
+// the click target for the full-trip estimate popout) so a second trip-estimate chip isn't added.
+function getVacationExpenseChipsHtml(trip, model, dateStr, hasConsolidatedChip) {
+    const chips = [];
+    const sum = getVacationDayExpenseSummary(model, dateStr);
+    if (Math.abs(sum.estimatedTotal) > 0.005 || sum.actual.length) {
+        chips.push(buildVacationExpenseChip({
+            icon: '📝', plannedLabel: 'Planned', planned: sum.estimatedTotal, actual: sum.actualTotal,
+            hasActual: sum.actual.length > 0, kind: 'day', dateStr,
+            title: "Click for this day's planned expenses, actual charges, and budget comparison"
+        }));
+    }
+    if (trip.endDate === dateStr) {
+        const tripSum = getVacationTripExpenseSummary(model);
+        if (!hasConsolidatedChip && Math.abs(tripSum.estimatedTotal) > 0.005) {
+            chips.push(`<div class="vacation-week-allday-chip vacation-expense-chip vacation-expense-planned" role="button" tabindex="0" data-expense-popout="trip-estimate" data-date="${dateStr}" title="Click for the full trip estimate"><span class="vacation-expense-line">🧾 Trip Estimate ${formatVacationMoney(tripSum.estimatedTotal)}</span></div>`);
+        }
+        const tripHasActual = tripSum.rows.some(r => r.actual.length > 0);
+        if (Math.abs(tripSum.estimatedTotal) > 0.005 || tripHasActual) {
+            chips.push(buildVacationExpenseChip({
+                icon: '📊', plannedLabel: 'Trip planned', planned: tripSum.estimatedTotal, actual: tripSum.actualTotal,
+                hasActual: tripHasActual, kind: 'trip-comparison', dateStr,
+                title: 'Click for the full trip estimate vs. actual comparison'
+            }));
+        }
+    }
+    return chips;
+}
+
+function openVacationExpensePopout(kind, dateStr) {
+    const trip = getSelectedVacationTrip();
+    const dialog = document.getElementById('vacation-expense-popout');
+    const titleEl = document.getElementById('vacation-expense-popout-title');
+    const bodyEl = document.getElementById('vacation-expense-popout-body');
+    if (!trip || !dialog || !titleEl || !bodyEl) return;
+    const model = buildVacationExpenseModel(trip);
+    const money = formatVacationMoney;
+    const goodColor = 'var(--color-success)';
+    const badColor = 'var(--color-danger)';
+    const varianceColor = v => (v > 0.005 ? badColor : goodColor);
+    const itemsTable = (items, emptyText) => items.length
+        ? `<table class="data-table" style="width:100%;"><tbody>${items.map(i => {
+            const sub = i.share ? `<div class="muted-text" style="font-size:0.75rem;">Daily share of ${money(i.shareOf)} budget ÷ ${i.shareDays} days</div>` : (i.note ? `<div class="muted-text" style="font-size:0.75rem;">${escapeHTML(i.note)}</div>` : '');
+            // Logged charges are no longer calendar events, so this is now the way to open one for editing/deleting.
+            const editBtn = i.chargeId ? `<td style="text-align:right; width:1%;"><button type="button" class="action-btn small-btn outline-btn" data-expense-edit-charge="${escapeHTML(i.chargeId)}">Edit</button></td>` : '';
+            return `<tr><td>${i.icon ? escapeHTML(i.icon) + ' ' : ''}${escapeHTML(i.label)}${sub}</td><td style="text-align:right; white-space:nowrap; vertical-align:top;">${money(i.amount)}</td>${editBtn}</tr>`;
+        }).join('')}</tbody></table>`
+        : `<p class="muted-text">${emptyText}</p>`;
+    const sectionHeader = (label, total) => `<div style="display:flex; justify-content:space-between; font-weight:700; color:#a5b4fc; margin:0.9rem 0 0.35rem; font-family:var(--font-heading);"><span>${label}</span><span>${money(total)}</span></div>`;
+    const compareBlock = (est, act, variance, estLabel, actLabel) => `
+        <div style="border:1px solid var(--glass-border); border-radius:8px; padding:0.75rem; display:grid; grid-template-columns:1fr auto; gap:0.25rem 1rem; font-size:0.9rem;">
+            <span>${estLabel}</span><strong style="text-align:right;">${money(est)}</strong>
+            <span>${actLabel}</span><strong style="text-align:right;">${money(act)}</strong>
+            <span style="font-weight:700;">Result</span><strong style="text-align:right; color:${varianceColor(variance)};">${escapeHTML(formatVacationVarianceLabel(variance, false))}</strong>
+        </div>`;
+
+    if (kind === 'day') {
+        const sum = getVacationDayExpenseSummary(model, dateStr);
+        const dayLabel = formatDateDisplay(dateStr);
+        titleEl.textContent = `📝 Estimated — ${dayLabel}: ${money(sum.estimatedTotal)}`;
+        const estSection = sectionHeader('Planned (itemized)', sum.estimatedTotal) + itemsTable(sum.estimated, 'Nothing planned for this day.');
+        const actSection = sectionHeader('Actual charges (itemized)', sum.actualTotal) + itemsTable(sum.actual, 'No actual charges logged for this day yet.');
+        const compare = compareBlock(sum.estimatedTotal, sum.actualTotal, sum.variance, 'Estimated for this day', 'Actual so far');
+        bodyEl.innerHTML = estSection + (sum.actual.length ? '<div style="margin-top:1rem;"></div>' + compare + actSection : '');
+    } else if (kind === 'trip-estimate') {
+        const tripSum = getVacationTripExpenseSummary(model);
+        titleEl.textContent = `🧾 Full Trip Estimate: ${money(tripSum.estimatedTotal)}`;
+        const dated = [];
+        tripSum.rows.forEach(r => r.estimated.filter(i => !i.share).forEach(i => dated.push({ ...i, label: `${formatDateDisplay(r.dateStr)} — ${i.label}` })));
+        const spread = model.spreadItems.map(i => ({ ...i, label: `${i.label} (budget, split across ${i.shareDays} days)` }));
+        const datedTotal = dated.reduce((sum, i) => sum + i.amount, 0);
+        const spreadTotal = spread.reduce((sum, i) => sum + i.amount, 0);
+        bodyEl.innerHTML =
+            sectionHeader('Scheduled on a specific day', datedTotal) + itemsTable(dated, 'No dated items.') +
+            sectionHeader('Category budgets (spread daily)', spreadTotal) + itemsTable(spread, 'No category budgets.') +
+            (model.tripLevel.length ? sectionHeader('Not tied to a day', tripSum.tripLevelTotal) + itemsTable(model.tripLevel, '') : '');
+    } else if (kind === 'trip-comparison') {
+        const tripSum = getVacationTripExpenseSummary(model);
+        titleEl.textContent = `📊 Full Trip: Estimate vs. Actual`;
+        const dayRows = tripSum.rows.filter(r => Math.abs(r.estimatedTotal) > 0.005 || r.actual.length).map(r => `
+            <tr>
+                <td>${escapeHTML(formatDateDisplay(r.dateStr))}</td>
+                <td style="text-align:right;">${money(r.estimatedTotal)}</td>
+                <td style="text-align:right;">${r.actual.length ? money(r.actualTotal) : '—'}</td>
+                <td style="text-align:right; white-space:nowrap; color:${r.actual.length ? varianceColor(r.variance) : 'var(--text-secondary)'};">${r.actual.length ? escapeHTML(formatVacationVarianceLabel(r.variance, true)) : '—'}</td>
+            </tr>`).join('');
+        bodyEl.innerHTML =
+            compareBlock(tripSum.estimatedTotal, tripSum.actualTotal, tripSum.variance, 'Full trip estimate', 'Actual spend so far') +
+            `<div style="font-weight:700; color:#a5b4fc; margin:0.9rem 0 0.35rem; font-family:var(--font-heading);">Day by day</div>` +
+            `<table class="data-table" style="width:100%;"><thead><tr><th>Day</th><th style="text-align:right;">Estimated</th><th style="text-align:right;">Actual</th><th style="text-align:right;">Result</th></tr></thead><tbody>${dayRows || '<tr><td colspan="4" class="muted-text">No planned or actual expenses yet.</td></tr>'}</tbody></table>` +
+            (tripSum.tripLevelTotal ? `<p class="muted-text" style="margin-top:0.6rem; font-size:0.8rem;">The estimate also includes ${money(tripSum.tripLevelTotal)} that isn't tied to a specific day (see Full Trip Estimate).</p>` : '');
+    } else {
+        return;
+    }
+    dialog.showModal();
 }
 
 function getVacationChargesForSourceInMonth(sourceKey, year, monthShort) {
@@ -27504,9 +27776,6 @@ function buildVacationSpilloverContinuationEvents(trip, dateStr, prevItin, prevD
     prevItin.addons.forEach(ad => {
         pushIfSpills(ad.startTime || ad.time, ad.endTime, shipTz, 'vacation-week-event-excursion', '🍹', ad.name || 'Add-On', 'addon', ad.id);
     });
-    prevItin.actualCharges.forEach(ch => {
-        pushIfSpills(ch.startTime, ch.endTime, shipTz, ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense', ch.isEstimate ? '📝' : '💵', `${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''}`, 'actual-charge', ch.id);
-    });
     if (prevItin.cruiseDay && prevItin.cruiseDay.dayType !== 'seaDay') {
         const d = prevItin.cruiseDay;
         const portDayTz = getVacationPortDayTimeZone(trip, prevDateStr);
@@ -27531,6 +27800,7 @@ function renderVacationWeekGrid(trip) {
     document.getElementById('vacation-week-title').textContent = `${formatDateDisplay(weekDates[0])} – ${formatDateDisplay(weekDates[weekDates.length - 1])}`;
     const todayStr = formatLocalDate(new Date());
     const itins = weekDates.map(dateStr => getVacationItineraryForDate(trip, dateStr));
+    const expenseModel = buildVacationExpenseModel(trip);
 
     document.getElementById('vacation-week-header-row').innerHTML = '<div></div>' + weekDates.map(dateStr => {
         const d = new Date(dateStr + 'T00:00:00');
@@ -27563,13 +27833,13 @@ function renderVacationWeekGrid(trip) {
             const costLabel = ad.coveredBy !== 'Billed to Ship Folio' ? `${formatVacationMoney(ad.netCost)} (${ad.coveredBy})` : formatVacationMoney(ad.netCost);
             chips.push(`<div class="vacation-week-allday-chip vacation-week-event-excursion" data-event-type="addon" data-event-id="${ad.id}" data-date="${dateStr}">🍹 ${escapeHTML(ad.name || 'Add-On')} — ${costLabel}</div>`);
         });
-        itin.actualCharges.filter(ch => !ch.startTime).forEach(ch => {
-            chips.push(`<div class="vacation-week-allday-chip ${ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense'}" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dateStr}">${ch.isEstimate ? '📝' : '💵'} ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.isEstimate ? 'Estimate' : ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
-        });
+        // Individual logged charges no longer draw as calendar events (per explicit user request,
+        // 2026-10-18) — the day's "Actual" chip (getVacationExpenseChipsHtml) opens them itemized.
         itin.charges.forEach(cat => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense">💵 ${escapeHTML(cat.label)} — ${formatVacationMoney(getVacationCategoryDisplayAmount(cat, trip))}${cat.prepaid ? (cat.prepaidTxId ? ' (Booked)' : ' (Planned)') : ''}</div>`));
         if (itin.consolidatedCharge) {
-            chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense" title="${escapeHTML(itin.consolidatedCharge.tooltip)}">💵 Total Planned Expenses — ${formatVacationMoney(itin.consolidatedCharge.amount)}</div>`);
+            chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense vacation-expense-chip" role="button" tabindex="0" data-expense-popout="trip-estimate" data-date="${dateStr}" title="${escapeHTML(itin.consolidatedCharge.tooltip)}">💵 Total Planned Expenses — ${formatVacationMoney(itin.consolidatedCharge.amount)}</div>`);
         }
+        getVacationExpenseChipsHtml(trip, expenseModel, dateStr, !!itin.consolidatedCharge).forEach(html => chips.push(html));
         weekAlldayTotalCount += chips.length;
         return weekAlldayCollapsed
             ? `<div class="vacation-week-allday-cell muted-text vacation-allday-collapsed-summary">${chips.length ? chips.length + ' hidden' : ''}</div>`
@@ -27731,24 +28001,6 @@ function renderVacationWeekGrid(trip) {
                 type: 'addon', id: ad.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
             });
         });
-        mergeVacationEventsAcrossMidnight(itin.actualCharges, prevItin.actualCharges, dateStr, prevDateStr, viewTzForLocalEvents, ch => ch.startTime, (ch, baseDateStr) => shipTz).forEach(({ item: ch, baseDateStr }) => {
-            const conv = convertTimeBetweenZones(baseDateStr, ch.startTime, shipTz, viewTzForLocalEvents);
-            const convEnd = convertTimeBetweenZones(baseDateStr, ch.endTime, shipTz, viewTzForLocalEvents);
-            const startTime = conv.timeStr || ch.startTime;
-            const endTime = convEnd.timeStr || ch.endTime;
-            const startMin = vacationTimeStrToMinutes(startTime);
-            if (startMin === null) return;
-            let endMin = vacationTimeStrToMinutes(endTime);
-            endMin = vacationAdjustEndMinForDateRollover(startMin, endMin, conv.dateStr || baseDateStr, convEnd.dateStr || baseDateStr);
-            const durationMin = (endMin !== null && endMin > startMin) ? (endMin - startMin) : 30;
-            const chTimeLabel = (endMin !== null && endMin > startMin) ? `${formatVacationTimeLabel(startTime)} - ${formatVacationTimeLabel(endTime)}` : formatVacationTimeLabel(startTime);
-            events.push({
-                top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense',
-                label: `${ch.isEstimate ? '📝' : '💵'} ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''} (${formatVacationMoney(ch.amount)})`,
-                tooltip: formatVacationRawTimeTooltip(baseDateStr, ch.startTime, ch.endTime, shipTz),
-                type: 'actual-charge', id: ch.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
-            });
-        });
         if (itin.cruiseDay && itin.cruiseDay.dayType !== 'seaDay') {
             const d = itin.cruiseDay;
             // portDayTz above already resolves this exact day's own port (falling back to the
@@ -27852,6 +28104,7 @@ function renderVacationDayGrid(trip) {
 
     const itin = getVacationItineraryForDate(trip, dayDateStr);
     const todayStr = formatLocalDate(new Date());
+    const expenseModel = buildVacationExpenseModel(trip);
 
     const chips = [];
     itin.lodgingCheckIns.filter(l => !l.checkInTime).forEach(l => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-lodging" data-event-type="lodging" data-event-id="${l.id}" data-date="${dayDateStr}">🏨 Check-In — ${escapeHTML(l.name || '')}</div>`));
@@ -27868,13 +28121,11 @@ function renderVacationDayGrid(trip) {
         const costLabel = ad.coveredBy !== 'Billed to Ship Folio' ? `${formatVacationMoney(ad.netCost)} (${ad.coveredBy})` : formatVacationMoney(ad.netCost);
         chips.push(`<div class="vacation-week-allday-chip vacation-week-event-excursion" data-event-type="addon" data-event-id="${ad.id}" data-date="${dayDateStr}">🍹 ${escapeHTML(ad.name || 'Add-On')} — ${costLabel}</div>`);
     });
-    itin.actualCharges.filter(ch => !ch.startTime).forEach(ch => {
-        chips.push(`<div class="vacation-week-allday-chip ${ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense'}" data-event-type="actual-charge" data-event-id="${ch.id}" data-date="${dayDateStr}">${ch.isEstimate ? '📝' : '💵'} ${escapeHTML(ch.merchant || ch.description || 'Actual Charge')} — ${formatVacationMoney(ch.amount)} (${ch.isEstimate ? 'Estimate' : ch.direction === 'credit' ? 'Credit' : 'Charge'})</div>`);
-    });
     itin.charges.forEach(cat => chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense">💵 ${escapeHTML(cat.label)} — ${formatVacationMoney(getVacationCategoryDisplayAmount(cat, trip))}${cat.prepaid ? (cat.prepaidTxId ? ' (Booked)' : ' (Planned)') : ''}</div>`));
     if (itin.consolidatedCharge) {
-        chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense" title="${escapeHTML(itin.consolidatedCharge.tooltip)}">💵 Total Planned Expenses — ${formatVacationMoney(itin.consolidatedCharge.amount)}</div>`);
+        chips.push(`<div class="vacation-week-allday-chip vacation-week-event-expense vacation-expense-chip" role="button" tabindex="0" data-expense-popout="trip-estimate" data-date="${dayDateStr}" title="${escapeHTML(itin.consolidatedCharge.tooltip)}">💵 Total Planned Expenses — ${formatVacationMoney(itin.consolidatedCharge.amount)}</div>`);
     }
+    getVacationExpenseChipsHtml(trip, expenseModel, dayDateStr, !!itin.consolidatedCharge).forEach(html => chips.push(html));
 
     const alldayEl = document.getElementById('vacation-day-allday-row');
     if (alldayEl) {
@@ -28050,24 +28301,6 @@ function renderVacationDayGrid(trip) {
             label: `🍹 ${adTimeLabel} — ${ad.name || 'Add-On'} — ${costLabel}`,
             tooltip: formatVacationRawTimeTooltip(baseDateStr, rawTimeStr, ad.endTime, shipTz),
             type: 'addon', id: ad.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
-        });
-    });
-    mergeVacationEventsAcrossMidnight(itin.actualCharges, prevItin.actualCharges, dayDateStr, prevDayDateStr, viewTz, ch => ch.startTime, (ch, baseDateStr) => shipTz).forEach(({ item: ch, baseDateStr }) => {
-        const conv = convertTimeBetweenZones(baseDateStr, ch.startTime, shipTz, viewTz);
-        const convEnd = convertTimeBetweenZones(baseDateStr, ch.endTime, shipTz, viewTz);
-        const startTime = conv.timeStr || ch.startTime;
-        const endTime = convEnd.timeStr || ch.endTime;
-        const startMin = vacationTimeStrToMinutes(startTime);
-        if (startMin === null) return;
-        let endMin = vacationTimeStrToMinutes(endTime);
-        endMin = vacationAdjustEndMinForDateRollover(startMin, endMin, conv.dateStr || baseDateStr, convEnd.dateStr || baseDateStr);
-        const durationMin = (endMin !== null && endMin > startMin) ? (endMin - startMin) : 30;
-        const chTimeLabel = (endMin !== null && endMin > startMin) ? `${formatVacationTimeLabel(startTime)} - ${formatVacationTimeLabel(endTime)}` : formatVacationTimeLabel(startTime);
-        events.push({
-            top: (startMin / 60) * H, height: Math.max((durationMin / 60) * H, 28), cls: ch.isEstimate ? 'vacation-week-event-estimate' : 'vacation-week-event-expense',
-            label: `${ch.isEstimate ? '📝' : '💵'} ${chTimeLabel} — ${ch.merchant || ch.description || 'Charge'}${ch.isEstimate ? ' (Est.)' : ''} (${formatVacationMoney(ch.amount)})`,
-            tooltip: formatVacationRawTimeTooltip(baseDateStr, ch.startTime, ch.endTime, shipTz),
-            type: 'actual-charge', id: ch.id, date: conv.dateStr || baseDateStr, startMin, endMin: startMin + durationMin
         });
     });
     if (itin.cruiseDay && itin.cruiseDay.dayType !== 'seaDay') {
@@ -28594,8 +28827,6 @@ function setupVacationEventListeners() {
         }
         const merchant = (document.getElementById('vacation-quick-merchant')?.value || '').trim();
         const description = (document.getElementById('vacation-quick-description')?.value || '').trim();
-        const startTime = document.getElementById('vacation-quick-start-time')?.value || '';
-        const endTime = document.getElementById('vacation-quick-end-time')?.value || '';
         const expenseCategoryKey = document.getElementById('vacation-quick-category')?.value || '';
         const paymentSource = document.getElementById('vacation-quick-source')?.value || trip.masterPaymentSource;
         // Read directly from the hidden input the shared .direction-toggle-group click handler
@@ -28616,8 +28847,6 @@ function setupVacationEventListeners() {
         const actualCharge = {
             id: genVacationId('actual'),
             date,
-            startTime,
-            endTime,
             merchant,
             description,
             expenseCategoryKey,
@@ -28651,8 +28880,6 @@ function setupVacationEventListeners() {
         document.getElementById('vacation-quick-merchant').value = '';
         document.getElementById('vacation-quick-description').value = '';
         document.getElementById('vacation-quick-amount').value = '';
-        document.getElementById('vacation-quick-start-time').value = '';
-        document.getElementById('vacation-quick-end-time').value = '';
         setDirectionToggleValue('vacation-quick-direction-toggle', 'vacation-quick-direction', 'charge');
         const isEstimateEl = document.getElementById('vacation-quick-is-estimate');
         if (isEstimateEl) isEstimateEl.checked = false;
@@ -29326,6 +29553,27 @@ function setupVacationEventListeners() {
         document.getElementById(tileId)?.addEventListener('click', () => openVacationBreakdownModal(tileId));
     });
     document.getElementById('btn-close-vacation-breakdown')?.addEventListener('click', () => document.getElementById('vacation-breakdown-modal')?.close());
+    // Per-day / full-trip expense chips (see getVacationExpenseChipsHtml) — delegated since the all-day rows
+    // are rebuilt via innerHTML on every render.
+    document.addEventListener('click', e => {
+        const chip = e.target.closest('[data-expense-popout]');
+        if (chip) openVacationExpensePopout(chip.dataset.expensePopout, chip.dataset.date);
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const chip = e.target.closest?.('[data-expense-popout]');
+        if (chip) { e.preventDefault(); openVacationExpensePopout(chip.dataset.expensePopout, chip.dataset.date); }
+    });
+    document.getElementById('btn-close-vacation-expense-popout')?.addEventListener('click', () => document.getElementById('vacation-expense-popout')?.close());
+    document.getElementById('vacation-expense-popout')?.addEventListener('click', e => {
+        const btn = e.target.closest('[data-expense-edit-charge]');
+        if (!btn) return;
+        const trip = getSelectedVacationTrip();
+        const charge = (trip?.actualCharges || []).find(ch => ch.id === btn.dataset.expenseEditCharge);
+        if (!charge || typeof window.openVacationActualChargeDialog !== 'function') return;
+        document.getElementById('vacation-expense-popout').close();
+        window.openVacationActualChargeDialog(trip, charge);
+    });
     document.getElementById('btn-download-vacation-breakdown-csv')?.addEventListener('click', () => downloadVacationBreakdownCSV());
 
     // Restores a trip's consolidated "Total Planned Expenses" placeholder after it was previously
