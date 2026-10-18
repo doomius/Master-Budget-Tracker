@@ -1591,16 +1591,6 @@
                                                 <select id="vacation-quick-source" class="custom-select"></select>
                                             </div>
                                         </div>
-                                        <div class="form-row">
-                                            <div class="form-group">
-                                                <label for="vacation-quick-start-time">Start Time</label>
-                                                <input type="time" id="vacation-quick-start-time" class="custom-input">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="vacation-quick-end-time">End Time</label>
-                                                <input type="time" id="vacation-quick-end-time" class="custom-input">
-                                            </div>
-                                        </div>
                                         <div class="form-group">
                                             <label for="vacation-quick-merchant">Merchant</label>
                                             <input type="text" id="vacation-quick-merchant" class="custom-input" placeholder="e.g. Island Cafe, Taxi, Souvenirs">
@@ -4014,6 +4004,16 @@
          downloadVacationBreakdownCSV() in app.js. Not a <form> — nothing here is edited, just viewed
          and optionally exported, so a plain glass-modal <dialog> with direct button handlers is
          simpler than the form method="dialog" pattern every other vacation dialog uses. -->
+    <!-- Itemized per-day / full-trip expense popouts opened from the itinerary's Est./Actual/Trip chips
+         (see openVacationExpensePopout() in app.js). Per explicit user request, 2026-10-18. -->
+    <dialog id="vacation-expense-popout" class="glass-modal" style="max-width: 520px; width: 92vw;">
+        <h3 id="vacation-expense-popout-title">Expenses</h3>
+        <div id="vacation-expense-popout-body" style="max-height:60vh; overflow-y:auto; margin:0.75rem 0;"></div>
+        <div class="modal-buttons">
+            <button type="button" class="action-btn outline-btn" id="btn-close-vacation-expense-popout">Close</button>
+        </div>
+    </dialog>
+
     <dialog id="vacation-breakdown-modal" class="glass-modal">
         <h3 id="vacation-breakdown-modal-title">Breakdown</h3>
         <div id="vacation-breakdown-modal-body" style="max-height:60vh; overflow-y:auto; margin:0.75rem 0;"></div>
