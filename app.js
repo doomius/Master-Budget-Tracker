@@ -5229,9 +5229,82 @@ function removeLinkedCheckingPaymentLeg(removedCardTx) {
         const idx = (list || []).findIndex(t => t.linkedPaymentId === removedCardTx.linkedPaymentId);
         if (idx > -1) list.splice(idx, 1);
     });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
+        const idx = (list || []).findIndex(t => t.linkedPaymentId === removedCardTx.linkedPaymentId);
+        if (idx > -1) list.splice(idx, 1);
+    });
     if (state.jointRegister) {
         const idx = state.jointRegister.findIndex(t => t.linkedPaymentId === removedCardTx.linkedPaymentId);
         if (idx > -1) state.jointRegister.splice(idx, 1);
+    }
+}
+
+// Every manual payment to a credit card or loan must be funded from a real account, so the card-side
+// payment entry always travels with a checking-side leg (same linkedPaymentId) in whichever register
+// matches the chosen funding source — Jason's, Joint, or Asia's checking. Callers that want a savings
+// tracker as the source use postAdHocSavingsWithdrawalToCard() instead. Confirmed real report,
+// 2026-10-26: a card-ledger payment entered with Ownership "Joint" had no checking leg at all, so it
+// never reached the joint ledger. Returns the checking-side entry that was created.
+function postCheckingLegForCardPayment({ source, cardId, dateStr, amount, description, linkId, extra = {} }) {
+    const dateObj = new Date(dateStr + 'T00:00:00');
+    const mShort = MONTH_ORDER[dateObj.getMonth()];
+    const key = `${dateObj.getFullYear()}-${mShort}`;
+    ensureYearMonthInitialized(dateObj.getFullYear(), mShort);
+    const rounded = -Math.abs(amount);
+    const base = { date: dateStr, description, amount: rounded, linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: Date.now(), ...extra };
+    let leg;
+    if (source === 'joint') {
+        leg = { id: 'j-' + Math.random().toString(36).substr(2, 9), type: 'expense', name: description, ...base };
+        if (!state.jointRegister) state.jointRegister = [];
+        state.jointRegister.push(leg);
+    } else if (source === 'asia') {
+        leg = { id: 'a-' + Math.random().toString(36).substr(2, 9), ...base };
+        if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
+        state.asiaCalendar[key].push(leg);
+    } else {
+        leg = { id: 'p-' + Math.random().toString(36).substr(2, 9), ...base };
+        if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
+        state.personalCalendar[key].push(leg);
+    }
+    return leg;
+}
+
+// True for a manually-entered "payment" row on a card/loan ledger that has no checking or savings leg
+// behind it (a hand-entered payment from before funding sources were required). Automatic, payoff-plan,
+// manual-loan, balance-adjustment, and savings-tracker payments all carry their own links and are
+// excluded.
+function isUnfundedCardPayment(tx) {
+    if (!tx || tx.transactionKind !== 'payment' || !(Number(tx.amount) > 0)) return false;
+    if (tx.linkedPaymentId || tx.automaticPaymentId || tx.payoffTargetId) return false;
+    if (tx.isAutomaticCardPayment || tx.isPayoffPlan || tx.isManualLoanPayment || tx.isBalanceAdjustment || tx.isDebtConsolidationPayment) return false;
+    return true;
+}
+
+// Called when a card/loan ledger payment is saved from the Edit dialog. A payment that has no
+// checking leg yet gets one in the register matching its Funding Source (tx.owner); a payment edited
+// into a charge/credit loses its leg; an existing leg is moved/updated afterwards by
+// syncLinkedPayoffPayment(). Savings-tracker-funded, automatic, consolidation, and balance-adjustment
+// entries manage their own funding and are left alone.
+function ensureEditedCardPaymentFunding(tx, cardId) {
+    if (!tx || tx.isAutomaticCardPayment || tx.isDebtConsolidationPayment || tx.isBalanceAdjustment) return;
+    if (String(tx.linkedPaymentId || '').startsWith('savxferpay-')) return;
+    if (tx.transactionKind === 'payment' && Number(tx.amount) > 0) {
+        if (!tx.linkedPaymentId) {
+            const card = state.loans.find(l => l.id === cardId);
+            const linkId = 'manual-pmt-' + Math.random().toString(36).substr(2, 9);
+            postCheckingLegForCardPayment({
+                source: tx.owner || 'joint', cardId, dateStr: tx.date, amount: tx.amount,
+                description: `Pmt: ${card ? card.name : 'Card'}`, linkId
+            });
+            tx.linkedPaymentId = linkId;
+            tx.payoffTargetId = cardId;
+        } else if (!tx.payoffTargetId) {
+            tx.payoffTargetId = cardId;
+        }
+    } else if (tx.linkedPaymentId && !tx.isPayoffPlan && !tx.isManualLoanPayment) {
+        removeLinkedCheckingPaymentLeg(tx);
+        delete tx.linkedPaymentId;
+        delete tx.payoffTargetId;
     }
 }
 
@@ -7204,18 +7277,7 @@ function setupEventListeners() {
             state.cardCalendars[accountId][key].push(loanEntry);
         }
         const checkingDescription = `Pmt: ${loan.name} (Extra)`;
-        if (source === 'joint') {
-            state.jointRegister.push({
-                id: 'j-' + Math.random().toString(36).slice(2, 11), type: 'expense', name: checkingDescription,
-                description: checkingDescription, date: dateStr, amount: -checkingAmount, linkedPaymentId: linkId, payoffTargetId: accountId
-            });
-        } else {
-            if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
-            state.personalCalendar[key].push({
-                id: 'p-' + Math.random().toString(36).slice(2, 11), date: dateStr, description: checkingDescription,
-                amount: -checkingAmount, linkedPaymentId: linkId, payoffTargetId: accountId
-            });
-        }
+        postCheckingLegForCardPayment({ source, cardId: accountId, dateStr, amount: checkingAmount, description: checkingDescription, linkId });
         refreshMaterializedCardStatementCharges(accountId);
         loan.currentBal = calculateCardLedgerBalance(accountId);
         saveDatabase();
@@ -9075,6 +9137,7 @@ function setupEventListeners() {
 
     document.getElementById('edit-tx-kind')?.addEventListener('change', (e) => {
         const isCharge = e.target.value === 'charge';
+        populateEditTxOwnerOptions(e.target.value, document.getElementById('edit-tx-owner')?.dataset.trackerLinked === '1');
         // Keep the Charge/Deposit toggle in sync with this dropdown too — see the toggle's own click
         // handler for why these two controls need to agree (only one of them drives what saves).
         setDirectionToggleValue('edit-trans-direction-group', 'edit-trans-direction', isCharge ? 'charge' : 'deposit');
@@ -10897,6 +10960,8 @@ function setupEventListeners() {
                 recurringSeriesId: recurringEnabled ? 'series-' + Math.random().toString(36).substr(2, 9) : ''
             };
             state.cardCalendars[duplicateCardId][key].push(duplicateTx);
+            if (newOwner === 'tracker-linked') duplicateTx.owner = 'joint';
+            ensureEditedCardPaymentFunding(duplicateTx, duplicateCardId);
             adjustCardCurrentBalance(duplicateCardId, signedAmount);
             updateTransactionPaymentPlan(duplicateCardId, duplicateTx, newKind === 'charge' && document.getElementById('edit-tx-payment-plan').checked);
             saveDatabase();
@@ -10960,7 +11025,7 @@ function setupEventListeners() {
                 tx.description = newDesc;
                 tx.merchant = newMerchant;
                 tx.transactionKind = isLoanInterest ? 'interest' : (tx.isAutomaticCardPayment ? (editDir === 'charge' ? 'charge' : 'payment') : newKind);
-                tx.owner = newOwner;
+                if (newOwner !== 'tracker-linked') tx.owner = newOwner;
                 tx.trip = newTrip;
                 tx.amount = newAmtSigned;
                 mirrorCardTxEditToVacationActualCharge(tx);
@@ -10981,6 +11046,7 @@ function setupEventListeners() {
                 }
                 if (!isLoanInterest) {
                     updateTransactionPaymentPlan(cardId, tx, newKind === 'charge' && document.getElementById('edit-tx-payment-plan').checked);
+                    ensureEditedCardPaymentFunding(tx, cardId);
                     syncLinkedPayoffPayment(tx);
                 }
 
@@ -13468,6 +13534,17 @@ function populateSavingsSourceOptions() {
 // value 'asia', so two unprefixed options would collide on the same value and selecting the tracker
 // would silently be read as the checking account instead.
 const CC_TRANS_OWNER_TRACKER_PREFIX = 'tracker:';
+// A payment's Ownership select doubles as its required funding source, so relabel the field and its
+// options to say so; charges/credits keep the plain ownership wording.
+function applyOwnerSelectKindLabels(select, kind) {
+    const isPayment = kind === 'payment';
+    const names = isPayment
+        ? { jason: "Jason's Checking", joint: 'Joint Checking', asia: "Asia's Checking" }
+        : { jason: 'Jason', joint: 'Joint', asia: 'Asia' };
+    [...select.options].forEach(opt => { if (names[opt.value]) opt.textContent = names[opt.value]; });
+    const label = select.id ? document.querySelector(`label[for="${select.id}"]`) : null;
+    if (label) label.textContent = isPayment ? 'Funding Source' : 'Ownership';
+}
 function populateCcTransOwnerOptions(kind) {
     const select = document.getElementById('cc-trans-owner');
     if (!select) return;
@@ -13479,7 +13556,10 @@ function populateCcTransOwnerOptions(kind) {
         opt.textContent = label;
         select.appendChild(opt);
     });
-    if (kind === 'payment') {
+    // Savings trackers can only fund a credit card's payment (postAdHocSavingsWithdrawalToCard
+    // rejects loans), so don't offer them while a loan is selected.
+    const selectedAccount = state.loans.find(l => l.id === state.ccSelectedCardId);
+    if (kind === 'payment' && selectedAccount?.type !== 'loan') {
         const group = document.createElement('optgroup');
         group.label = 'Pay From a Savings Tracker';
         Object.values(SAVINGS_TRACKER_REGISTRY).forEach(trackerDef => {
@@ -13490,7 +13570,33 @@ function populateCcTransOwnerOptions(kind) {
         });
         select.appendChild(group);
     }
-    if ([...select.options].some(o => o.value === prevValue)) select.value = prevValue;
+    // New manual card/loan transactions default to Joint unless the user already picked something.
+    select.value = [...select.options].some(o => o.value === prevValue) ? prevValue : 'joint';
+    applyOwnerSelectKindLabels(select, kind);
+}
+
+// Edit dialog's counterpart: Ownership for a charge/credit, Funding Source (checking accounts only)
+// for a payment. A payment already funded from a savings tracker keeps that link instead — it can be
+// re-pointed from the Savings tab, not here.
+function populateEditTxOwnerOptions(kind, keepTrackerLinked = false) {
+    const select = document.getElementById('edit-tx-owner');
+    if (!select) return;
+    const prevValue = select.value;
+    select.innerHTML = '';
+    [['jason', 'Jason'], ['joint', 'Joint'], ['asia', 'Asia']].forEach(([value, label]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+    });
+    if (keepTrackerLinked && kind === 'payment') {
+        const opt = document.createElement('option');
+        opt.value = 'tracker-linked';
+        opt.textContent = 'Savings tracker (linked)';
+        select.appendChild(opt);
+    }
+    select.value = [...select.options].some(o => o.value === prevValue) ? prevValue : 'joint';
+    applyOwnerSelectKindLabels(select, kind);
 }
 
 function renderSavingsTab() {
@@ -17450,7 +17556,9 @@ function openEditTransactionModal(txId, date) {
     merchantGroup.classList.toggle('hidden', !isCCContext);
     merchantInput.value = '';
     cardMetaGroup.classList.toggle('hidden', !isCCContext);
-    ownerInput.value = 'jason';
+    ownerInput.dataset.trackerLinked = '';
+    populateEditTxOwnerOptions('charge');
+    ownerInput.value = 'joint';
     tripInput.value = '';
 
     recurringGroup.classList.toggle('hidden', !isCCContext);
@@ -17478,8 +17586,12 @@ function openEditTransactionModal(txId, date) {
             document.getElementById('edit-tx-desc').value = tx.description;
             document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
             merchantInput.value = tx.merchant || '';
-            document.getElementById('edit-tx-kind').value = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
-            ownerInput.value = tx.owner || 'jason';
+            const openKind = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
+            document.getElementById('edit-tx-kind').value = openKind;
+            const trackerFunded = String(tx.linkedPaymentId || '').startsWith('savxferpay-');
+            ownerInput.dataset.trackerLinked = trackerFunded ? '1' : '';
+            populateEditTxOwnerOptions(openKind, trackerFunded);
+            ownerInput.value = (trackerFunded && openKind === 'payment') ? 'tracker-linked' : (tx.owner || 'jason');
             tripInput.value = tx.trip || '';
             populateTransactionPaymentPlanFields(tx, cardId);
             document.getElementById('edit-payment-plan-group')?.classList.toggle('hidden', tx.amount >= 0);
@@ -17585,8 +17697,12 @@ function openEditTransactionModal(txId, date) {
             document.getElementById('edit-tx-desc').value = tx.description;
             document.getElementById('edit-tx-amount').value = Math.abs(tx.amount);
             merchantInput.value = tx.merchant || '';
-            document.getElementById('edit-tx-kind').value = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
-            ownerInput.value = tx.owner || 'jason';
+            const openKind = tx.transactionKind || (tx.amount < 0 ? 'charge' : 'payment');
+            document.getElementById('edit-tx-kind').value = openKind;
+            const trackerFunded = String(tx.linkedPaymentId || '').startsWith('savxferpay-');
+            ownerInput.dataset.trackerLinked = trackerFunded ? '1' : '';
+            populateEditTxOwnerOptions(openKind, trackerFunded);
+            ownerInput.value = (trackerFunded && openKind === 'payment') ? 'tracker-linked' : (tx.owner || 'jason');
             tripInput.value = tx.trip || '';
             populateTransactionPaymentPlanFields(tx, cardId);
             document.getElementById('edit-payment-plan-group')?.classList.toggle('hidden', tx.amount >= 0);
@@ -18280,7 +18396,10 @@ function getTransactionIndicatorBadges(tx) {
     const vacationPlaceholder = tx.vacationPlaceholder
         ? '<span class="cc-source-badge manual" title="Trip placeholder — scheduled by the Vacation Planner, not yet confirmed as the actual charge. Edit this transaction to confirm or adjust it.">🧳 Trip Placeholder</span>'
         : '';
-    return `${belowThreshold}${recurring}${transfer}${source}${overridden}${getPlaceholderBadge(tx)}${vacationPlaceholder}`;
+    const unfunded = isUnfundedCardPayment(tx)
+        ? '<span class="cc-source-badge manual" title="This payment has no checking or savings account behind it. Edit it and pick a Funding Source to post it to that account\'s ledger.">&#9888; No Funding Source</span>'
+        : '';
+    return `${belowThreshold}${recurring}${transfer}${source}${overridden}${getPlaceholderBadge(tx)}${vacationPlaceholder}${unfunded}`;
 }
 // Plain-text version of the same badges, for feeding into free-text search — strips markup/entities
 // down to the words a user would actually type (Manual, Recurring, Overridden, Balance Transfer,
@@ -23253,7 +23372,7 @@ function openLoanExtraPayment(accountId, entryId = '') {
     document.getElementById('loan-extra-payment-amount').value = existing
         ? Math.abs(Number(existing.originalRequestedAmount ?? existing.amount) || 0).toFixed(2)
         : '';
-    document.getElementById('loan-extra-payment-source').value = existing?.owner || loan.paymentSource || 'jason';
+    document.getElementById('loan-extra-payment-source').value = existing?.owner || 'joint';
 
     const typeGroup = document.getElementById('loan-extra-payment-type-group');
     const typeSelect = document.getElementById('loan-extra-payment-type');
@@ -35385,7 +35504,7 @@ function setupCCDashboardListeners() {
                 document.getElementById('cc-trans-amount').value = '';
                 document.getElementById('cc-trans-kind').value = 'charge';
                 populateCcTransOwnerOptions('charge');
-                document.getElementById('cc-trans-owner').value = 'jason';
+                document.getElementById('cc-trans-owner').value = 'joint';
                 document.getElementById('cc-trans-trip').value = '';
                 document.getElementById('cc-trans-recurring').checked = false;
                 document.getElementById('cc-recurring-day-group')?.classList.add('hidden');
@@ -35397,26 +35516,16 @@ function setupCCDashboardListeners() {
             const linkId = 'manual-pmt-' + Math.random().toString(36).substr(2, 9);
             ensureYearMonthInitialized(y, mShort);
 
-            const checkingTxId = (source === 'joint' ? 'j-' : 'p-') + Math.random().toString(36).substr(2, 9);
             const pmtDesc = `Pmt: ${activeCard ? activeCard.name : 'Card'}`;
             const nowStamp = Date.now();
+            const sourceLabel = source === 'joint' ? 'Joint' : source === 'asia' ? "Asia's" : 'Personal';
 
-            if (source === 'jason') {
-                state.personalCalendar[key].push({
-                    id: checkingTxId, date: dateStr, description: pmtDesc,
-                    amount: -Math.abs(amount), linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
-                });
-            } else {
-                state.jointRegister.push({
-                    id: checkingTxId, date: dateStr, name: pmtDesc, description: pmtDesc,
-                    amount: -Math.abs(amount), linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
-                });
-            }
+            postCheckingLegForCardPayment({ source, cardId, dateStr, amount, description: pmtDesc, linkId });
 
             state.cardCalendars[cardId][key].push({
                 id: 'c-' + Math.random().toString(36).substr(2, 9),
                 date: dateStr,
-                description: `Payment from ${source === 'joint' ? 'Joint' : 'Personal'} Checking`,
+                description: `Payment from ${sourceLabel} Checking`,
                 amount: Math.abs(amount), transactionKind: 'payment', owner: source,
                 linkedPaymentId: linkId, payoffTargetId: cardId, createdAt: nowStamp
             });
@@ -35431,12 +35540,12 @@ function setupCCDashboardListeners() {
             document.getElementById('cc-trans-amount').value = '';
             document.getElementById('cc-trans-kind').value = 'charge';
             populateCcTransOwnerOptions('charge');
-            document.getElementById('cc-trans-owner').value = 'jason';
+            document.getElementById('cc-trans-owner').value = 'joint';
             document.getElementById('cc-trans-trip').value = '';
             document.getElementById('cc-trans-recurring').checked = false;
             document.getElementById('cc-recurring-day-group')?.classList.add('hidden');
             document.getElementById('cc-trans-recurring-day').value = '';
-            logSuccess(`Payment of $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} to ${activeCard ? activeCard.name : 'Card'} recorded from ${source === 'joint' ? 'Joint' : 'Personal'} Checking.`);
+            logSuccess(`Payment of $${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} to ${activeCard ? activeCard.name : 'Card'} recorded from ${sourceLabel} Checking.`);
             return;
         }
 
@@ -35483,7 +35592,7 @@ function setupCCDashboardListeners() {
         document.getElementById('cc-trans-desc').value = '';
         document.getElementById('cc-trans-amount').value = '';
         document.getElementById('cc-trans-kind').value = 'charge';
-        document.getElementById('cc-trans-owner').value = 'jason';
+        document.getElementById('cc-trans-owner').value = 'joint';
         document.getElementById('cc-trans-trip').value = '';
         document.getElementById('cc-trans-recurring').checked = false;
         document.getElementById('cc-recurring-day-group')?.classList.add('hidden');
