@@ -9520,6 +9520,13 @@ function setupEventListeners() {
                 // deleted/overridden entries — see their own comments. Per explicit user request,
                 // 2026-08-05.
                 materializeAutomaticPaymentsForward(loan.id);
+                // materializeAutomaticPaymentsForward() only rebuilds the next 24 months, but an
+                // installment loan's future payment/interest rows can already be materialized far
+                // beyond that (e.g. through 2067) — those kept the OLD monthly payment and rate forever
+                // after an edit, silently stretching the payoff date. Confirmed real report,
+                // 2026-10-28: changing a student loan's payment from $675 to $683 left every row from
+                // Nov 2028 on at $675. Rebuild every already-materialized current/future month too.
+                refreshMaterializedCardStatementCharges(loan.id);
 
                 logSystem(`Updated payoff target: ${name}`);
                 saveLoanConsolidationSelections(loan.id, type, name, fundingDate);
