@@ -4821,7 +4821,8 @@ const VIEW_SETTING_STATE_KEYS = [
     // debtSummaryCollapsed used to be plain module-level objects (never in `state` at all, so
     // never persisted or synced); columnFilterState is the serialized snapshot of every table's
     // column-search filters (see serializeColumnFilterState).
-    'debtOverviewSort', 'debtOverviewHideZero', 'debtSummaryCollapsed', 'columnFilterState'
+    'debtOverviewSort', 'debtOverviewHideZero', 'debtSummaryCollapsed', 'columnFilterState',
+    'showArchivedLoans'
 ];
 
 async function resetViewSettingsToDefaults() {
@@ -9069,7 +9070,55 @@ function setupEventListeners() {
         // Debt Consolidation is loan-only (credit cards can't fund a payoff) — available whether
         // adding or editing since 2026-09-03, see the section's own comment in app.js.
         document.getElementById('loan-consolidation-section')?.classList.toggle('hidden', isCredit);
+        updateLoanTypeSections(isCredit, state.loans.find(l => l.id === document.getElementById('loan-edit-id').value));
         updateStoreCardFields();
+    });
+
+    // Student loan checkbox + autopay discount editor + archive buttons.
+    document.getElementById('loan-is-student')?.addEventListener('change', updateLoanStudentFields);
+    document.getElementById('btn-add-loan-discount')?.addEventListener('click', () => {
+        const percent = parseFloat(document.getElementById('loan-discount-percent').value);
+        const startDate = document.getElementById('loan-discount-start').value;
+        const endDate = document.getElementById('loan-discount-end').value;
+        if (!Number.isFinite(percent) || percent <= 0) { alert('Enter the discount as a number of APR percentage points, e.g. 0.25.'); return; }
+        if (startDate && endDate && endDate < startDate) { alert('The stop date must be on or after the start date.'); return; }
+        const entry = { id: editingLoanDiscountId || 'disc-' + Math.random().toString(36).substr(2, 9), percent, startDate, endDate };
+        if (editingLoanDiscountId) tempEditingLoanDiscounts = tempEditingLoanDiscounts.map(d => d.id === editingLoanDiscountId ? entry : d);
+        else tempEditingLoanDiscounts.push(entry);
+        resetLoanDiscountEditor();
+        renderEditingLoanDiscounts();
+    });
+    document.getElementById('btn-cancel-loan-discount-edit')?.addEventListener('click', resetLoanDiscountEditor);
+    document.getElementById('loan-discount-list')?.addEventListener('click', (e) => {
+        const editBtn = e.target.closest('[data-edit-loan-discount]');
+        const removeBtn = e.target.closest('[data-remove-loan-discount]');
+        if (removeBtn) {
+            tempEditingLoanDiscounts = tempEditingLoanDiscounts.filter(d => d.id !== removeBtn.dataset.removeLoanDiscount);
+            if (editingLoanDiscountId === removeBtn.dataset.removeLoanDiscount) resetLoanDiscountEditor();
+            renderEditingLoanDiscounts();
+        } else if (editBtn) {
+            const discount = tempEditingLoanDiscounts.find(d => d.id === editBtn.dataset.editLoanDiscount);
+            if (!discount) return;
+            editingLoanDiscountId = discount.id;
+            document.getElementById('loan-discount-percent').value = discount.percent;
+            document.getElementById('loan-discount-start').value = discount.startDate || '';
+            document.getElementById('loan-discount-end').value = discount.endDate || '';
+            document.getElementById('btn-add-loan-discount').textContent = 'Save Discount';
+            document.getElementById('btn-cancel-loan-discount-edit')?.classList.remove('hidden');
+        }
+    });
+    document.getElementById('btn-archive-loan')?.addEventListener('click', () => {
+        const id = document.getElementById('loan-edit-id').value;
+        const loan = state.loans.find(l => l.id === id);
+        if (loan && confirm(`Archive "${loan.name}"? It will be hidden from the Loans page and account switchers. You can bring it back with "Show archived loans".`)) archiveLoanAccount(id, true);
+    });
+    document.getElementById('btn-unarchive-loan')?.addEventListener('click', () => {
+        archiveLoanAccount(document.getElementById('loan-edit-id').value, false);
+    });
+    document.getElementById('loan-summary-show-archived')?.addEventListener('change', (event) => {
+        state.showArchivedLoans = event.target.checked;
+        saveDatabase();
+        renderLoansTab();
     });
 
     const updateMortgageMinimumPayment = () => {
@@ -9343,10 +9392,23 @@ function setupEventListeners() {
         const splitterCycleOverride = document.getElementById('loan-splitter-cycle').value;
         const isExemptFromSplitter = document.getElementById('loan-exempt-splitter').checked;
 
+        const isStudentLoan = type === 'loan' && document.getElementById('loan-is-student').checked;
+        const studentSubAmount = isStudentLoan ? Math.max(0, parseFloat(document.getElementById('loan-student-sub-amount').value) || 0) : 0;
+        const studentSubRate = isStudentLoan ? Math.max(0, parseFloat(document.getElementById('loan-student-sub-rate').value) || 0) : 0;
+        const studentUnsubAmount = isStudentLoan ? Math.max(0, parseFloat(document.getElementById('loan-student-unsub-amount').value) || 0) : 0;
+        const studentUnsubRate = isStudentLoan ? Math.max(0, parseFloat(document.getElementById('loan-student-unsub-rate').value) || 0) : 0;
+        const autopayDiscounts = type === 'loan' ? normalizeLoanAutopayDiscounts(tempEditingLoanDiscounts) : [];
         const isMortgage = type === 'loan' && document.getElementById('loan-is-mortgage').checked;
         const escrowAmount = isMortgage ? (parseFloat(document.getElementById('loan-mortgage-escrow').value) || 0) : 0;
         const piAmount = isMortgage ? (parseFloat(document.getElementById('loan-mortgage-pi').value) || 0) : 0;
         const extraPayment = isMortgage ? (parseFloat(document.getElementById('loan-mortgage-extra').value) || 0) : 0;
+
+        // A student account's single "APR" is just the weighted average of its two loan types' rates
+        // (before any autopay discount) — kept so every screen that shows loan.interestRate still has a
+        // sensible number; the real accrual uses the two rates via getLoanEffectiveRateOnDate().
+        const savedRate = isStudentLoan
+            ? getStudentLoanBlendedBaseRate({ studentSubAmount, studentSubRate, studentUnsubAmount, studentUnsubRate, interestRate: rate })
+            : rate;
 
         let adjustedMonthly = monthly;
         if (isMortgage) {
@@ -9368,7 +9430,13 @@ function setupEventListeners() {
                 loan.startBal = start;
                 loan.fundingDate = fundingDate;
                 loan.currentBal = current;
-                loan.interestRate = rate;
+                loan.interestRate = savedRate;
+                loan.isStudentLoan = isStudentLoan;
+                loan.studentSubAmount = studentSubAmount;
+                loan.studentSubRate = studentSubRate;
+                loan.studentUnsubAmount = studentUnsubAmount;
+                loan.studentUnsubRate = studentUnsubRate;
+                loan.autopayDiscounts = autopayDiscounts;
                 loan.dueDay = due;
                 loan.statementDay = statementDay;
                 loan.monthlyMin = adjustedMonthly;
@@ -9470,7 +9538,13 @@ function setupEventListeners() {
                 startBal: start,
                 fundingDate: fundingDate,
                 currentBal: current,
-                interestRate: rate,
+                interestRate: savedRate,
+                isStudentLoan: isStudentLoan,
+                studentSubAmount: studentSubAmount,
+                studentSubRate: studentSubRate,
+                studentUnsubAmount: studentUnsubAmount,
+                studentUnsubRate: studentUnsubRate,
+                autopayDiscounts: autopayDiscounts,
                 dueDay: due,
                 statementDay: statementDay,
                 monthlyMin: adjustedMonthly,
@@ -10165,6 +10239,14 @@ function setupEventListeners() {
         document.getElementById('loan-mortgage-extra').value = 0;
         document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
         document.getElementById('loan-mortgage-fields')?.classList.add('hidden');
+
+        // Reset student loan / autopay discount fields
+        document.getElementById('loan-is-student').checked = false;
+        ['loan-student-sub-amount', 'loan-student-sub-rate', 'loan-student-unsub-amount', 'loan-student-unsub-rate'].forEach(id => { document.getElementById(id).value = 0; });
+        tempEditingLoanDiscounts = [];
+        resetLoanDiscountEditor();
+        renderEditingLoanDiscounts();
+        updateLoanTypeSections(isCredit, null);
 
         // Reset Debt Consolidation fields — loan-only (isCredit false here means type === 'loan'),
         // never for a new credit card. Needs the loan's own Funding Date, which was just reset to
@@ -23424,6 +23506,15 @@ function applyDebtSummaryCollapsedState(type) {
 // the Loans/Credit Cards overview list (both the card grid and table row) so this is visible
 // without opening the settings dialog at all.
 function getCardStatusBadges(account) {
+    if (account.type === 'loan') {
+        const loanBadges = [];
+        if (account.archived) loanBadges.push('<span class="debt-status-badge fee">Archived</span>');
+        if (isStudentLoanModelActive(account)) loanBadges.push('<span class="debt-status-badge plans">Student Loan</span>');
+        const todayStr = formatLocalDate(new Date());
+        const discount = getLoanAutopayDiscountPercent(account, todayStr);
+        if (discount > 0) loanBadges.push(`<span class="debt-status-badge promo">${formatLoanDiscountPercent(discount)} Autopay Discount</span>`);
+        return loanBadges.join('');
+    }
     if (account.type !== 'credit') return '';
     const todayStr = formatLocalDate(new Date());
     const badges = [];
@@ -23462,7 +23553,12 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
     applyDebtSummaryCollapsedState(type);
 
     const isLoanType = type === 'loan';
-    let accounts = state.loans.filter(item => item.type === type);
+    // Archived (paid-off) loans stay out of the Loans page unless "Show archived loans" is checked.
+    let accounts = state.loans.filter(item => item.type === type && !(isLoanType && item.archived && !state.showArchivedLoans));
+    if (isLoanType) {
+        const showArchivedBox = document.getElementById('loan-summary-show-archived');
+        if (showArchivedBox) showArchivedBox.checked = !!state.showArchivedLoans;
+    }
     if (getDebtOverviewHideZero()[type]) accounts = accounts.filter(account => Math.abs(calculateCardLedgerBalance(account.id)) > 0.005);
     const ownershipFilter = state.debtOwnershipFilter || 'all';
     document.querySelectorAll(`#debt-ownership-filter-${type} .segment-btn`).forEach(btn => {
@@ -24248,7 +24344,8 @@ function updateTabTitles() {
             const balance = calculateCardLedgerBalance(loan.id);
             const startBal = Number(loan.startBal) || 0;
             const paidPct = getLoanPaidPercent(loan, balance);
-            const apr = Number(loan.interestRate) || 0;
+            // The APR actually accruing today, after any active autopay discount.
+            const apr = getLoanEffectiveRateOnDate(loan, formatLocalDate(new Date()));
             const monthlyPayment = getLoanDebtPaymentAmount(loan);
             const icon = getDebtAccountIcon(loan);
             // Current Balance and Projected Payoff live here (the truly-sticky page header — see
@@ -31887,6 +31984,106 @@ function applyCardAnnualFeeForMonth(card, year, month) {
     });
 }
 
+// ---------------------------------------------------------------------------------------------
+// Installment-loan autopay discounts and student loans (added 2026-10-28).
+//
+// Autopay discounts: loan.autopayDiscounts = [{ id, percent, startDate, endDate }]. Each active
+// discount lowers the loan's APR by `percent` points for the days between its (optional) start date
+// and (optional) stop date, inclusive; a blank stop date never expires. E.g. 1% through 2028-06-30,
+// then 0.25% from 2028-07-01 on. Rates are floored at 0.
+//
+// Student loans: loan.isStudentLoan with studentSubAmount/studentSubRate (subsidized) and
+// studentUnsubAmount/studentUnsubRate (unsubsidized). Federal rules: interest is simple daily
+// interest on principal only (unpaid interest is never charged interest itself), and a payment goes
+// to accrued interest first, then to principal. Because principal payments/charges are split across
+// the two loan types in proportion, the subsidized share of principal never changes, so the two
+// tranches collapse to one blended daily rate on total principal — see getLoanEffectiveRateOnDate().
+// ---------------------------------------------------------------------------------------------
+function normalizeLoanAutopayDiscounts(list) {
+    return (Array.isArray(list) ? list : []).map(d => ({
+        id: d.id || 'disc-' + Math.random().toString(36).substr(2, 9),
+        percent: Math.max(0, Number(d.percent) || 0),
+        startDate: d.startDate || '',
+        endDate: d.endDate || ''
+    })).filter(d => d.percent > 0);
+}
+
+function getLoanAutopayDiscountPercent(loan, dateStr) {
+    return (loan?.autopayDiscounts || []).reduce((sum, d) => {
+        if (d.startDate && dateStr < d.startDate) return sum;
+        if (d.endDate && dateStr > d.endDate) return sum;
+        return sum + (Number(d.percent) || 0);
+    }, 0);
+}
+
+function getStudentLoanPrincipalTotal(loan) {
+    return Math.max(0, Number(loan?.studentSubAmount) || 0) + Math.max(0, Number(loan?.studentUnsubAmount) || 0);
+}
+
+// A student-loan account with no amounts entered has nothing to split, so it falls back to the
+// ordinary single-rate loan model rather than computing a blended rate from zeros.
+function isStudentLoanModelActive(loan) {
+    return !!loan?.isStudentLoan && getStudentLoanPrincipalTotal(loan) > 0;
+}
+
+function getStudentLoanBlendedBaseRate(loan) {
+    const total = getStudentLoanPrincipalTotal(loan);
+    if (total <= 0) return Number(loan?.interestRate) || 0;
+    const share = Math.max(0, Number(loan.studentSubAmount) || 0) / total;
+    return share * (Number(loan.studentSubRate) || 0) + (1 - share) * (Number(loan.studentUnsubRate) || 0);
+}
+
+// The APR (percent) actually accruing on `dateStr`, after any active autopay discounts.
+function getLoanEffectiveRateOnDate(loan, dateStr) {
+    if (!loan) return 0;
+    const discount = getLoanAutopayDiscountPercent(loan, dateStr);
+    if (isStudentLoanModelActive(loan)) {
+        const total = getStudentLoanPrincipalTotal(loan);
+        const share = Math.max(0, Number(loan.studentSubAmount) || 0) / total;
+        const subRate = Math.max(0, (Number(loan.studentSubRate) || 0) - discount);
+        const unsubRate = Math.max(0, (Number(loan.studentUnsubRate) || 0) - discount);
+        return share * subRate + (1 - share) * unsubRate;
+    }
+    return Math.max(0, (Number(loan.interestRate) || 0) - discount);
+}
+
+// Accrued-but-unpaid interest sitting inside a student loan's balance, replayed from the account's
+// starting balance through `transactions` (ledger rows already limited to the dates that count). The
+// part of Starting Balance above the entered principal amounts is the opening interest owed; each
+// posted interest charge adds to it; each payment pays it down first. Principal is then simply
+// balance minus this figure. Same-date order is charges, interest, payments.
+function getStudentLoanInterestOwed(loan, transactions) {
+    let owed = Math.max(0, getAccountBalanceSeed(loan) - getStudentLoanPrincipalTotal(loan));
+    const rank = tx => (Number(tx.amount) >= 0 ? 2 : (tx.isLoanEstimatedInterest || tx.transactionKind === 'interest') ? 1 : 0);
+    [...transactions]
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)) || rank(a) - rank(b))
+        .forEach(tx => {
+            const amount = Number(tx.amount);
+            if (amount < 0) {
+                if (tx.isLoanEstimatedInterest || tx.transactionKind === 'interest') owed += Math.abs(amount);
+            } else {
+                owed = Math.max(0, owed - amount);
+            }
+        });
+    return owed;
+}
+
+function getStudentLoanInterestOwedAtDate(loan, dateStr) {
+    const transactions = Object.values(state.cardCalendars?.[loan.id] || {})
+        .flatMap(list => list || [])
+        .filter(tx => !tx.billOccurrenceDeleted && tx.date && tx.date <= dateStr && Number.isFinite(Number(tx.amount)));
+    return getStudentLoanInterestOwed(loan, transactions);
+}
+
+// True when an installment loan is fully paid off as of today (and, for a not-yet-funded loan, has
+// actually been funded) — the condition for being allowed to archive it.
+function isLoanPaidOff(loan) {
+    if (!loan || loan.type !== 'loan') return false;
+    const todayStr = formatLocalDate(new Date());
+    if (loan.fundingDate && loan.fundingDate > todayStr) return false;
+    return calculateCardLedgerBalance(loan.id, todayStr) <= 0.005;
+}
+
 // Posts an installment loan's monthly estimated interest as a stable, read-only ledger row on
 // the loan's configured closing/statement day. Rebuilding removes the generated row first, so
 // edited, removed, or early payments immediately recalculate the interest and stop it after payoff.
@@ -31934,7 +32131,13 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
     });
     dailyBalance = Math.max(0, dailyBalance);
 
-    const dailyRate = Math.max(0, Number(loan.interestRate) || 0) / 100 / 365;
+    // The rate can change mid-cycle (an autopay discount starting or expiring), so it's looked up per
+    // day. Student loans accrue on principal only: track the interest still owed inside the balance
+    // and exclude it from the day's accrual base (see getStudentLoanInterestOwed()).
+    const studentModel = isStudentLoanModelActive(loan);
+    let studentOwed = studentModel
+        ? getStudentLoanInterestOwed(loan, allTransactions.filter(tx => tx.date <= previousClosingDateStr))
+        : 0;
     let accruedInterest = 0;
     let accruedDays = 0;
     const cursor = new Date(previousClosingDate);
@@ -31946,12 +32149,15 @@ function postInstallmentLoanInterestForMonth(loanId, year, month) {
             const amount = Number(tx.amount);
             if (dateStr === closingDateStr && (amount > 0 || tx.isBalanceAdjustment)) return;
             dailyBalance += amount < 0 ? Math.abs(amount) : -Math.abs(amount);
+            if (studentModel && amount > 0) studentOwed = Math.max(0, studentOwed - amount);
         });
         dailyBalance = Math.max(0, dailyBalance);
-        accruedInterest += dailyBalance * dailyRate;
+        const accrualBase = studentModel ? Math.max(0, dailyBalance - Math.min(studentOwed, dailyBalance)) : dailyBalance;
+        accruedInterest += accrualBase * getLoanEffectiveRateOnDate(loan, dateStr) / 100 / 365;
         accruedDays += 1;
         cursor.setDate(cursor.getDate() + 1);
     }
+    const dailyRate = getLoanEffectiveRateOnDate(loan, closingDateStr) / 100 / 365;
 
     let balanceBeforeInterest = getAccountBalanceSeed(loan);
     allTransactions.forEach(tx => {
@@ -32663,7 +32869,11 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
     });
 
     let balance = Math.max(0, calculateCardLedgerBalance(loanId, todayStr));
-    const monthlyRate = Math.max(0, Number(loan.interestRate) || 0) / 1200;
+    // Student loans accrue on principal only — `studentOwed` is the interest still inside `balance`
+    // (see getStudentLoanInterestOwed()). Every other loan keeps the plain monthly-rate approximation,
+    // now using the APR in effect on each interest date so an autopay discount's start/expiry shows up.
+    const studentModel = isStudentLoanModelActive(loan);
+    let studentOwed = studentModel ? Math.min(balance, getStudentLoanInterestOwedAtDate(loan, todayStr)) : 0;
     const dueDay = Math.min(31, Math.max(1, Number(loan.dueDay) || 1));
     const closingDay = Math.min(31, Math.max(1, Number(loan.statementDay) || 1));
     const monthlyPayment = getLoanDebtPaymentAmount(loan);
@@ -32694,7 +32904,17 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
         // closing date, before same-day payments when both dates are the same.
         if (currentDate.getDate() === interestDay && lastInterestMonthYear !== monthYearKey && balance > 0.01) {
             lastInterestMonthYear = monthYearKey;
-            balance += balance * monthlyRate;
+            const rateOnDay = getLoanEffectiveRateOnDate(loan, dateStr) / 100;
+            if (studentModel) {
+                const previousMonthDays = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0).getDate();
+                const previousClose = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, Math.min(closingDay, previousMonthDays));
+                const cycleDays = Math.round((new Date(currentDate.getFullYear(), currentDate.getMonth(), interestDay) - previousClose) / 86400000);
+                const interest = Math.max(0, balance - studentOwed) * rateOnDay * cycleDays / 365;
+                balance += interest;
+                studentOwed += interest;
+            } else {
+                balance += balance * (rateOnDay / 12);
+            }
         }
 
         const dayTxs = txsByDate[dateStr] || [];
@@ -32708,6 +32928,7 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
                 if (scheduledExtra > 0) scheduledExtraApplied = true;
                 const payment = Math.min(balance, amount + scheduledExtra);
                 balance -= payment;
+                studentOwed = Math.max(0, studentOwed - payment);
                 totalPaid += payment;
             } else if (amount < 0) {
                 balance += Math.abs(amount);
@@ -32719,6 +32940,7 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
         if (loan.paymentEndDate && dateStr === loan.paymentEndDate && autoPaymentMonths.has(monthKey) && balance > 0.01) {
             totalPaid += balance;
             balance = 0;
+            studentOwed = 0;
         }
 
 
@@ -32736,6 +32958,7 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
                     : monthlyPayment + Math.max(0, Number(extraScheduledAmount) || 0);
                 const payment = Math.min(balance, scheduledAmount);
                 balance -= payment;
+                studentOwed = Math.max(0, studentOwed - payment);
                 totalPaid += payment;
                 autoPaymentMonths.add(monthKey);
             }
@@ -32745,6 +32968,7 @@ function projectInstallmentLoanPayoffPath(loanId, monthsCount, startPayDateStr, 
             const payment = Math.min(balance, Math.max(0, Number(additionalMonthlyAmount) || 0));
             if (payment > 0.005) {
                 balance -= payment;
+                studentOwed = Math.max(0, studentOwed - payment);
                 totalPaid += payment;
                 additionalPayments.push({ date: dateStr, amount: payment });
             }
@@ -34335,6 +34559,8 @@ function resetXferEditor() {
 let tempEditingPaymentPlans = [];
 let editingPaymentPlanId = '';
 let tempEditingCustomSchedule = [];
+let tempEditingLoanDiscounts = [];
+let editingLoanDiscountId = '';
 let editingCustomScheduleId = '';
 
 function resetExistingPlanEditor() {
@@ -36664,8 +36890,10 @@ function populateChargeAutocomplete(cardId) {
 function getSortedAccountsOfSameType(cardId) {
     const current = state.loans.find(c => c.id === cardId);
     if (!current) return [];
+    // Archived loans are left out of the prev/next cycle and the jump-to dropdown, except the one
+    // that's currently open (so it still appears in its own selector).
     return state.loans
-        .filter(item => item.type === current.type)
+        .filter(item => item.type === current.type && (!item.archived || item.id === cardId))
         .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
 }
 
@@ -37867,6 +38095,100 @@ function applyDebtConsolidation(loanId, payoffs, payoffDate, cashOutAmount, cash
     }
 }
 
+// Autopay-discount editor inside the loan dialog (works on tempEditingLoanDiscounts; saved with the
+// loan). A blank Stop Date means the discount never expires.
+function formatLoanDiscountPercent(percent) {
+    return `${Number(percent).toFixed(3).replace(/\.?0+$/, '')}%`;
+}
+
+function renderEditingLoanDiscounts() {
+    const list = document.getElementById('loan-discount-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const sorted = [...tempEditingLoanDiscounts].sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
+    if (!sorted.length) {
+        list.innerHTML = '<span class="muted-text">No autopay discounts. Add one below if your servicer lowers the rate for autopay.</span>';
+        return;
+    }
+    sorted.forEach(discount => {
+        const item = document.createElement('div');
+        item.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:.5rem; background:rgba(255,255,255,0.03); padding:.4rem .6rem; border-radius:6px;';
+        const range = `${discount.startDate ? 'from ' + formatDateDisplay(discount.startDate) : 'from the start'} ${discount.endDate ? 'through ' + formatDateDisplay(discount.endDate) : '— no expiration'}`;
+        item.innerHTML = `<span><strong>${formatLoanDiscountPercent(discount.percent)} off</strong> <span class="muted-text">${range}</span></span>
+            <span style="display:flex; gap:.35rem;">
+                <button type="button" class="action-btn small-btn outline-btn" data-edit-loan-discount="${discount.id}">Edit</button>
+                <button type="button" class="action-btn small-btn danger-btn" data-remove-loan-discount="${discount.id}">&times;</button>
+            </span>`;
+        list.appendChild(item);
+    });
+}
+
+function resetLoanDiscountEditor() {
+    editingLoanDiscountId = '';
+    ['loan-discount-percent', 'loan-discount-start', 'loan-discount-end'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const addBtn = document.getElementById('btn-add-loan-discount');
+    if (addBtn) addBtn.textContent = '+ Add Discount';
+    document.getElementById('btn-cancel-loan-discount-edit')?.classList.add('hidden');
+}
+
+// Section visibility for the student-loan / discount / archive blocks, which only apply to
+// installment loans (and Archive only to a loan that already exists).
+function updateLoanTypeSections(isCredit, loan) {
+    document.getElementById('loan-student-section')?.classList.toggle('hidden', isCredit);
+    document.getElementById('loan-discount-section')?.classList.toggle('hidden', isCredit);
+    updateLoanStudentFields();
+    updateLoanArchiveSection(isCredit ? null : loan);
+}
+
+function updateLoanStudentFields() {
+    const isStudent = !!document.getElementById('loan-is-student')?.checked && document.getElementById('loan-type-field')?.value === 'loan';
+    document.getElementById('loan-student-fields')?.classList.toggle('hidden', !isStudent);
+    // A student account's rate comes from its two loan types, so the single APR field steps aside.
+    document.getElementById('loan-apr-group')?.classList.toggle('hidden', isStudent);
+    const apr = document.getElementById('loan-interest-rate');
+    if (apr) apr.required = !isStudent;
+}
+
+function updateLoanArchiveSection(loan) {
+    const section = document.getElementById('loan-archive-section');
+    if (!section) return;
+    section.classList.toggle('hidden', !loan || loan.type !== 'loan');
+    if (!loan || loan.type !== 'loan') return;
+    const archiveBtn = document.getElementById('btn-archive-loan');
+    const unarchiveBtn = document.getElementById('btn-unarchive-loan');
+    const hint = document.getElementById('loan-archive-hint');
+    const paidOff = isLoanPaidOff(loan);
+    archiveBtn?.classList.toggle('hidden', !!loan.archived);
+    unarchiveBtn?.classList.toggle('hidden', !loan.archived);
+    if (archiveBtn) archiveBtn.disabled = !paidOff;
+    if (hint) {
+        hint.textContent = loan.archived
+            ? `Archived${loan.archivedDate ? ' on ' + formatDateDisplay(loan.archivedDate) : ''}. Hidden from the Loans page and account switchers unless "Show archived loans" is checked.`
+            : (paidOff
+                ? 'Paid off — archiving hides this loan from the Loans page and account switchers.'
+                : 'A loan can be archived once its balance is $0.');
+    }
+}
+
+function archiveLoanAccount(loanId, archive) {
+    const loan = state.loans.find(l => l.id === loanId && l.type === 'loan');
+    if (!loan) return;
+    if (archive && !isLoanPaidOff(loan)) {
+        alert('This loan still has a balance. It can be archived once it is paid off.');
+        return;
+    }
+    loan.archived = !!archive;
+    loan.archivedDate = archive ? formatLocalDate(new Date()) : '';
+    if (archive && state.ccSelectedCardId === loanId) state.ccSelectedCardId = '';
+    saveDatabase();
+    document.getElementById('loan-dialog')?.close();
+    renderApp();
+    logSuccess(`${archive ? 'Archived' : 'Unarchived'} loan: ${loan.name}.`);
+}
+
 function openEditLoanModal(loanId) {
     const dialog = document.getElementById('loan-dialog');
     const loan = state.loans.find(l => l.id === loanId);
@@ -37891,6 +38213,14 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-current-bal').readOnly = true;
     document.getElementById('btn-loan-settings-adjust-balance')?.classList.remove('hidden');
     document.getElementById('loan-interest-rate').value = loan.interestRate || 0;
+    document.getElementById('loan-is-student').checked = !!loan.isStudentLoan;
+    document.getElementById('loan-student-sub-amount').value = loan.studentSubAmount || 0;
+    document.getElementById('loan-student-sub-rate').value = loan.studentSubRate || 0;
+    document.getElementById('loan-student-unsub-amount').value = loan.studentUnsubAmount || 0;
+    document.getElementById('loan-student-unsub-rate').value = loan.studentUnsubRate || 0;
+    tempEditingLoanDiscounts = normalizeLoanAutopayDiscounts(JSON.parse(JSON.stringify(loan.autopayDiscounts || [])));
+    resetLoanDiscountEditor();
+    renderEditingLoanDiscounts();
     document.getElementById('loan-due-day').value = loan.dueDay || 15;
     document.getElementById('loan-statement-day').value = loan.statementDay || 1;
     document.getElementById('loan-monthly-min').value = loan.monthlyMin;
@@ -37988,6 +38318,7 @@ function openEditLoanModal(loanId) {
     document.getElementById('loan-mortgage-extra').value = loan.extraPayment || 0;
     document.getElementById('loan-mortgage-section')?.classList.toggle('hidden', isCredit);
     document.getElementById('loan-mortgage-fields')?.classList.toggle('hidden', !isMortgage);
+    updateLoanTypeSections(isCredit, loan);
 
     // Debt Consolidation — available for an existing loan too since 2026-09-03 (see
     // saveLoanConsolidationSelections()'s own comment). Build the picker fresh (excludes this loan
