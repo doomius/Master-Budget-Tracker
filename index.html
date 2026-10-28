@@ -1651,6 +1651,7 @@
                                         <input type="search" id="loan-summary-search" class="custom-input debt-summary-search" placeholder="🔍 Search loans..." style="margin:0; width:160px;">
                                         <label>Sort <select id="loan-summary-sort" class="custom-select debt-summary-sort"><option value="name">Account name</option><option value="balance-desc">Balance: high to low</option><option value="balance-asc">Balance: low to high</option></select></label>
                                         <label class="checkbox-label"><input type="checkbox" id="loan-summary-hide-zero"> Hide $0 balances</label>
+                                        <label class="checkbox-label"><input type="checkbox" id="loan-summary-show-archived"> Show archived loans</label>
                                         <div class="segmented-control" id="debt-ownership-filter-loan">
                                             <button type="button" class="segment-btn active" data-debt-ownership="all">All</button>
                                             <button type="button" class="segment-btn" data-debt-ownership="joint">Joint</button>
@@ -2519,7 +2520,7 @@
             </div>
 
             <div class="form-row">
-                <div class="form-group">
+                <div class="form-group" id="loan-apr-group">
                     <label for="loan-interest-rate">Interest Rate (APR %)</label>
                     <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-interest-rate" required class="custom-input" value="0">
                 </div>
@@ -2642,6 +2643,77 @@
                             <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" id="loan-mortgage-extra" class="custom-input" value="0">
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Student Loans (Installment Loans only). Splits the account into a subsidized and an
+                 unsubsidized portion, each with its own APR. Federal student loan interest is simple
+                 daily interest on principal only (no interest-on-interest), and every payment goes to
+                 accrued interest first, then principal — see getStudentLoanInterestOwed() in app.js. -->
+            <div id="loan-student-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <input type="checkbox" id="loan-is-student" style="cursor:pointer;">
+                    <label for="loan-is-student" style="font-family:var(--font-heading); font-weight:600; color:#a5b4fc; font-size:0.95rem; margin:0; cursor:pointer;">Is this a Student Loan account?</label>
+                </div>
+                <div class="hidden" id="loan-student-fields">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="loan-student-sub-amount">Subsidized Amount</label>
+                            <div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" step="0.01" min="0" id="loan-student-sub-amount" class="custom-input" value="0"></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="loan-student-sub-rate">Subsidized APR (%)</label>
+                            <input type="number" autocomplete="off" step="0.001" min="0" id="loan-student-sub-rate" class="custom-input" value="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="loan-student-unsub-amount">Unsubsidized Amount</label>
+                            <div class="input-prefix-wrapper"><span class="input-prefix">$</span><input type="number" autocomplete="off" step="0.01" min="0" id="loan-student-unsub-amount" class="custom-input" value="0"></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="loan-student-unsub-rate">Unsubsidized APR (%)</label>
+                            <input type="number" autocomplete="off" step="0.001" min="0" id="loan-student-unsub-rate" class="custom-input" value="0">
+                        </div>
+                    </div>
+                    <small class="muted-text" id="loan-student-hint">These two amounts are the principal behind this account's Starting Balance; any Starting Balance above them is treated as accrued, unpaid interest. Interest accrues daily on principal only (it never compounds on unpaid interest), and each payment pays accrued interest first, then principal across both loan types in proportion.</small>
+                </div>
+            </div>
+
+            <!-- Autopay Interest Discounts (Installment Loans only): each one lowers the APR by its
+                 percentage points while active. A blank Stop Date means it never expires. -->
+            <div id="loan-discount-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <h4 style="font-family:var(--font-heading); color:#a5b4fc; font-size:1rem; margin-bottom:.5rem;">Autopay Interest Discounts</h4>
+                <div id="loan-discount-list" style="display:flex; flex-direction:column; gap:.4rem; margin-bottom:1rem;"></div>
+                <div style="background:rgba(255,255,255,.02); padding:.75rem; border:1px dashed var(--glass-border); border-radius:6px;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;" for="loan-discount-percent">Discount (APR points)</label>
+                            <input type="number" autocomplete="off" step="0.001" min="0" id="loan-discount-percent" class="custom-input" placeholder="e.g. 0.25">
+                        </div>
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;" for="loan-discount-start">Start Date (optional)</label>
+                            <input type="date" id="loan-discount-start" class="custom-input">
+                        </div>
+                        <div class="form-group">
+                            <label style="font-size:0.75rem;" for="loan-discount-end">Stop Date (blank = never expires)</label>
+                            <input type="date" id="loan-discount-end" class="custom-input">
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:.5rem; margin-top:.75rem;">
+                        <button type="button" id="btn-add-loan-discount" class="action-btn small-btn solid-btn">+ Add Discount</button>
+                        <button type="button" id="btn-cancel-loan-discount-edit" class="action-btn small-btn hidden">Cancel Edit</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Archive (existing Installment Loans only): hides a paid-off loan from the Loans page and
+                 account switchers; "Show archived loans" on the Loans page brings it back into view. -->
+            <div id="loan-archive-section" class="hidden" style="margin-top: 1rem; border-top: 1px solid var(--glass-border); padding-top: 1rem;">
+                <div style="display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;">
+                    <button type="button" id="btn-archive-loan" class="action-btn small-btn outline-btn">Archive Loan</button>
+                    <button type="button" id="btn-unarchive-loan" class="action-btn small-btn outline-btn hidden">Unarchive Loan</button>
+                    <small class="muted-text" id="loan-archive-hint"></small>
                 </div>
             </div>
 
