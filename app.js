@@ -1289,6 +1289,61 @@ function computeAnnualFederalTax(adjustedAnnualWage, filingStatus, step2cChecked
     return 0;
 }
 
+// Scheduled deduction changes and premium holidays (added 2026-11-04).
+//
+// cfg.deductionChanges = [{ id, type: 'medical'|'dental'|'hsa'|'fsa', amount, startDate }] — from the
+// first paycheck dated on/after startDate, that deduction's per-paycheck amount is `amount` (the
+// latest applicable change per type wins). cfg.premiumHolidays = [{ id, date, skips: [...] }] — a
+// holiday lands on the first paycheck dated on/after its date that no earlier paycheck already
+// covers, and every deduction key in `skips` ('medical'|'dental'|'hsa'|'fsa'|'item:<additionalItemId>')
+// is $0 on that paycheck. Both are resolved per paycheck date by resolvePayrollDeductionsForDate(),
+// which feeds getJasonPayrollAmount()/getAsiaPayrollAmount() (kept identical — see their comments).
+const PAYROLL_DEDUCTION_FIELDS = { medical: 'pretaxMedical', dental: 'pretaxDental', hsa: 'pretaxHSA', fsa: 'pretaxFSA' };
+const PAYROLL_DEDUCTION_LABELS = { medical: 'Medical', dental: 'Dental', hsa: 'HSA', fsa: 'FSA' };
+
+// Paycheck dates for the years around `dateStr`, sorted — enough to find the paycheck just before it.
+function getNearbyPaycheckDates(dateStr, datesForYearFn) {
+    const year = Number(dateStr.slice(0, 4));
+    return [...(datesForYearFn(year - 1) || []), ...(datesForYearFn(year) || []), ...(datesForYearFn(year + 1) || [])].sort();
+}
+
+// The first paycheck dated on or after `dateStr` (or '' if none is found within two years).
+function getFirstPaycheckOnOrAfter(dateStr, datesForYearFn) {
+    const year = Number(dateStr.slice(0, 4));
+    const all = [...(datesForYearFn(year) || []), ...(datesForYearFn(year + 1) || []), ...(datesForYearFn(year + 2) || [])].sort();
+    return all.find(d => d >= dateStr) || '';
+}
+
+function resolvePayrollDeductionsForDate(cfg, dateStr, datesForYearFn) {
+    const ded = cfg.deductions || {};
+    const changes = cfg.deductionChanges || [];
+    const holidays = cfg.premiumHolidays || [];
+    if (!changes.length && !holidays.length) return ded;
+    const out = { ...ded };
+
+    Object.entries(PAYROLL_DEDUCTION_FIELDS).forEach(([type, field]) => {
+        const latest = changes
+            .filter(c => c.type === type && c.startDate && c.startDate <= dateStr)
+            .sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)))
+            .pop();
+        if (latest) out[field] = Math.max(0, Number(latest.amount) || 0);
+    });
+
+    if (holidays.length) {
+        const dates = getNearbyPaycheckDates(dateStr, datesForYearFn);
+        const previous = dates.filter(d => d < dateStr).pop() || '';
+        const skipped = new Set();
+        holidays.forEach(h => {
+            if (h.date && h.date <= dateStr && (!previous || h.date > previous)) (h.skips || []).forEach(key => skipped.add(key));
+        });
+        Object.entries(PAYROLL_DEDUCTION_FIELDS).forEach(([type, field]) => { if (skipped.has(type)) out[field] = 0; });
+        if (skipped.size && Array.isArray(out.additionalItems)) {
+            out.additionalItems = out.additionalItems.map(item => skipped.has('item:' + item.id) ? { ...item, amount: 0 } : item);
+        }
+    }
+    return out;
+}
+
 // Full gross-to-net paycheck breakdown for one paycheck's gross amount, per IRS Pub 15-T Worksheet
 // 1A (federal withholding) plus standard FICA rules. Traditional 401(k)/Section 125 pretax benefits
 // (medical/dental/HSA/FSA) reduce wages for FEDERAL withholding purposes, but — a common gotcha —
@@ -1471,8 +1526,10 @@ function getJasonPayrollAmount(year, monthShort, dateStr) {
     // thing through the gross-to-net calculator — with the estimates' cumulative 401(k) bump
     // layered on top of the configured base traditional 401(k) percent.
     const grossThisPaycheck = rate + (paycheckIdx === 0 ? (Number(cfg.stipendAmount) || 0) : 0);
-    const effectiveCfg = k401TotalBump > 0
-        ? { ...cfg, deductions: { ...cfg.deductions, traditional401kPercent: (Number(cfg.deductions?.traditional401kPercent) || 0) + k401TotalBump } }
+    // Scheduled premium changes / premium holidays for this exact paycheck date.
+    const paycheckDeductions = resolvePayrollDeductionsForDate(cfg, dateStr, getPaycheckDatesForYear);
+    const effectiveCfg = (k401TotalBump > 0 || paycheckDeductions !== cfg.deductions)
+        ? { ...cfg, deductions: { ...paycheckDeductions, traditional401kPercent: (Number(cfg.deductions?.traditional401kPercent) || 0) + k401TotalBump } }
         : cfg;
     return calculatePaycheckBreakdown(grossThisPaycheck, effectiveCfg).netPay;
 }
@@ -1750,6 +1807,7 @@ function renderPayrollAddedDeductionsList() {
 
     listContainer.innerHTML = '';
     const items = getActivePayrollConfig().deductions.additionalItems || [];
+    renderPayrollHolidaySkipOptions();
 
     if (items.length === 0) {
         listContainer.innerHTML = '<p class="muted-text" style="text-align: center; font-size: 0.85rem; padding: 0.5rem;">No additional deductions added yet.</p>';
@@ -1813,6 +1871,89 @@ function renderPayrollAddedIncomeList() {
         });
 
         listContainer.appendChild(item);
+    });
+}
+
+// Scheduled Deduction Changes + Premium Holidays lists in the Payroll dialog. Same convention as
+// Projected Pay Increases / Additional Deductions: they live directly on the active payroll config and
+// are mutated + saved immediately on add/delete, independent of the main form's Save button.
+function getActivePayrollPaycheckDatesFn() {
+    return _payrollConfigTarget === 'asia' ? getAsiaPaycheckDatesForYear : getPaycheckDatesForYear;
+}
+
+function getPayrollSkipLabel(key) {
+    if (PAYROLL_DEDUCTION_LABELS[key]) return PAYROLL_DEDUCTION_LABELS[key];
+    const item = (getActivePayrollConfig().deductions?.additionalItems || []).find(i => 'item:' + i.id === key);
+    return item ? item.label : 'removed item';
+}
+
+function renderPayrollDeductionChangesList() {
+    const list = document.getElementById('payroll-ded-change-list');
+    if (!list) return;
+    const cfg = getActivePayrollConfig();
+    const changes = [...(cfg.deductionChanges || [])].sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)));
+    if (!changes.length) {
+        list.innerHTML = '<p class="muted-text" style="text-align: center; font-size: 0.85rem; padding: 0.5rem;">No scheduled deduction changes yet.</p>';
+        return;
+    }
+    list.innerHTML = '';
+    const datesFn = getActivePayrollPaycheckDatesFn();
+    changes.forEach(change => {
+        const first = getFirstPaycheckOnOrAfter(change.startDate, datesFn);
+        const item = document.createElement('div');
+        item.style = 'display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 4px;';
+        item.innerHTML = '<span><strong>' + (PAYROLL_DEDUCTION_LABELS[change.type] || change.type) + '</strong> &rarr; $' + (Number(change.amount) || 0).toFixed(2) +
+            '/check from ' + formatDateDisplay(change.startDate) +
+            (first ? ' <span class="muted-text">(first paycheck ' + formatDateDisplay(first) + ')</span>' : '') + '</span>' +
+            '<button type="button" class="action-btn small-btn danger-btn" style="padding: 2px 6px; font-size: 0.75rem;">Delete</button>';
+        item.querySelector('button').addEventListener('click', () => {
+            cfg.deductionChanges = (cfg.deductionChanges || []).filter(c => c.id !== change.id);
+            saveDatabase();
+            renderPayrollDeductionChangesList();
+        });
+        list.appendChild(item);
+    });
+}
+
+// The "skip these deductions" checkboxes: the four named deductions plus every Additional Deduction
+// row, rebuilt whenever that list changes.
+function renderPayrollHolidaySkipOptions() {
+    const box = document.getElementById('payroll-holiday-skips');
+    if (!box) return;
+    const checked = new Set([...box.querySelectorAll('input:checked')].map(i => i.value));
+    const options = Object.entries(PAYROLL_DEDUCTION_LABELS).map(([key, label]) => [key, label]);
+    (getActivePayrollConfig().deductions?.additionalItems || []).forEach(item => options.push(['item:' + item.id, item.label]));
+    box.innerHTML = options.map(([key, label]) =>
+        '<label style="display:flex; align-items:center; gap:0.3rem; cursor:pointer;"><input type="checkbox" value="' + escapeHTML(key) + '"' + (checked.has(key) ? ' checked' : '') + '> ' + escapeHTML(label) + '</label>'
+    ).join('');
+}
+
+function renderPayrollPremiumHolidaysList() {
+    renderPayrollHolidaySkipOptions();
+    const list = document.getElementById('payroll-holiday-list');
+    if (!list) return;
+    const cfg = getActivePayrollConfig();
+    const holidays = [...(cfg.premiumHolidays || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    if (!holidays.length) {
+        list.innerHTML = '<p class="muted-text" style="text-align: center; font-size: 0.85rem; padding: 0.5rem;">No premium holidays yet.</p>';
+        return;
+    }
+    list.innerHTML = '';
+    const datesFn = getActivePayrollPaycheckDatesFn();
+    holidays.forEach(holiday => {
+        const paycheck = getFirstPaycheckOnOrAfter(holiday.date, datesFn);
+        const skips = (holiday.skips || []).map(getPayrollSkipLabel).join(', ') || 'nothing selected';
+        const item = document.createElement('div');
+        item.style = 'display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 4px;';
+        item.innerHTML = '<span><strong>' + formatDateDisplay(holiday.date) + '</strong>: skip ' + escapeHTML(skips) +
+            (paycheck && paycheck !== holiday.date ? ' <span class="muted-text">(paycheck ' + formatDateDisplay(paycheck) + ')</span>' : '') + '</span>' +
+            '<button type="button" class="action-btn small-btn danger-btn" style="padding: 2px 6px; font-size: 0.75rem;">Delete</button>';
+        item.querySelector('button').addEventListener('click', () => {
+            cfg.premiumHolidays = (cfg.premiumHolidays || []).filter(h => h.id !== holiday.id);
+            saveDatabase();
+            renderPayrollPremiumHolidaysList();
+        });
+        list.appendChild(item);
     });
 }
 
@@ -11502,6 +11643,8 @@ function setupEventListeners() {
         renderPayrollEstimatesList();
         renderPayrollAddedDeductionsList();
         renderPayrollAddedIncomeList();
+        renderPayrollDeductionChangesList();
+        renderPayrollPremiumHolidaysList();
         updatePayrollPreview();
 
         document.getElementById('payroll-config-dialog')?.showModal();
@@ -11692,6 +11835,41 @@ function setupEventListeners() {
             updatePayrollPreview();
         });
     }
+
+    // Scheduled deduction change: new per-paycheck amount for Medical/Dental/HSA/FSA from a start date.
+    document.getElementById('btn-add-payroll-ded-change')?.addEventListener('click', () => {
+        const type = document.getElementById('payroll-ded-change-type').value;
+        const amount = parseFloat(document.getElementById('payroll-ded-change-amount').value);
+        const startDate = document.getElementById('payroll-ded-change-start').value;
+        if (!PAYROLL_DEDUCTION_FIELDS[type] || isNaN(amount) || amount < 0 || !startDate) {
+            alert('Choose a deduction, enter the new per-paycheck amount, and pick the start date.');
+            return;
+        }
+        const cfg = getActivePayrollConfig();
+        cfg.deductionChanges = (cfg.deductionChanges || []).filter(c => !(c.type === type && c.startDate === startDate));
+        cfg.deductionChanges.push({ id: 'dchg-' + Math.random().toString(36).substr(2, 9), type, amount, startDate });
+        document.getElementById('payroll-ded-change-amount').value = '';
+        document.getElementById('payroll-ded-change-start').value = '';
+        saveDatabase();
+        renderPayrollDeductionChangesList();
+    });
+
+    // Premium holiday: a date plus the deductions that aren't taken on that paycheck.
+    document.getElementById('btn-add-payroll-holiday')?.addEventListener('click', () => {
+        const date = document.getElementById('payroll-holiday-date').value;
+        const skips = [...document.querySelectorAll('#payroll-holiday-skips input:checked')].map(i => i.value);
+        if (!date || !skips.length) {
+            alert('Pick the holiday date and check at least one deduction to skip.');
+            return;
+        }
+        const cfg = getActivePayrollConfig();
+        cfg.premiumHolidays = cfg.premiumHolidays || [];
+        cfg.premiumHolidays.push({ id: 'phol-' + Math.random().toString(36).substr(2, 9), date, skips });
+        document.getElementById('payroll-holiday-date').value = '';
+        document.querySelectorAll('#payroll-holiday-skips input:checked').forEach(i => { i.checked = false; });
+        saveDatabase();
+        renderPayrollPremiumHolidaysList();
+    });
 
     // Add additional income item trigger — mirrors btn-add-payroll-deduction above.
     const btnAddPayrollIncome = document.getElementById('btn-add-payroll-income');
@@ -16172,8 +16350,10 @@ function getAsiaPayrollAmount(year, monthShort, dateStr) {
     });
 
     const grossThisPaycheck = rate + (paycheckIdx === 0 ? (Number(cfg.stipendAmount) || 0) : 0);
-    const effectiveCfg = k401TotalBump > 0
-        ? { ...cfg, deductions: { ...cfg.deductions, traditional401kPercent: (Number(cfg.deductions?.traditional401kPercent) || 0) + k401TotalBump } }
+    // Mirrors getJasonPayrollAmount(): scheduled premium changes / premium holidays for this date.
+    const paycheckDeductions = resolvePayrollDeductionsForDate(cfg, dateStr, getAsiaPaycheckDatesForYear);
+    const effectiveCfg = (k401TotalBump > 0 || paycheckDeductions !== cfg.deductions)
+        ? { ...cfg, deductions: { ...paycheckDeductions, traditional401kPercent: (Number(cfg.deductions?.traditional401kPercent) || 0) + k401TotalBump } }
         : cfg;
     return calculatePaycheckBreakdown(grossThisPaycheck, effectiveCfg).netPay;
 }
