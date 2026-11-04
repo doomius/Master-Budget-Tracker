@@ -4747,6 +4747,57 @@
                 <p style="font-size:0.7rem; color:var(--text-secondary); margin:0.5rem 0 0;">401(k) Traditional and the items above reduce federal taxable wages, but NOT Social Security/Medicare wages (a traditional 401(k) deferral is income-tax-exempt only, not payroll-tax-exempt). Roth 401(k) and "Other Post-Tax" reduce net pay only.</p>
             </div>
 
+            <!-- Scheduled Deduction Changes: a new per-paycheck amount for Medical/Dental/HSA/FSA that
+                 takes over starting with the first paycheck on or after a chosen date. -->
+            <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
+                <h4 style="margin: 0 0 0.5rem 0; font-family: var(--font-heading); font-size: 1rem; color: #a5b4fc;">Scheduled Deduction Changes</h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem 0.6rem; align-items: end; margin-bottom: 0.75rem; border-bottom: 1px dashed var(--glass-border); padding-bottom: 0.75rem;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label for="payroll-ded-change-type" style="font-size:0.75rem;">Deduction</label>
+                        <select id="payroll-ded-change-type" class="custom-select" style="padding:0.35rem; font-size:0.8rem; width:110px;">
+                            <option value="medical">Medical</option>
+                            <option value="dental">Dental</option>
+                            <option value="hsa">HSA</option>
+                            <option value="fsa">FSA</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label for="payroll-ded-change-amount" style="font-size:0.75rem;">New Amount ($/check)</label>
+                        <input type="number" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" step="0.01" min="0" id="payroll-ded-change-amount" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:110px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label for="payroll-ded-change-start" style="font-size:0.75rem;">Starts</label>
+                        <input type="date" id="payroll-ded-change-start" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:140px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <button type="button" class="action-btn solid-btn" id="btn-add-payroll-ded-change" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; height: 34px;">+ Add</button>
+                    </div>
+                </div>
+                <div style="max-height: 140px; overflow-y: auto;" id="payroll-ded-change-list"></div>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0.5rem 0 0;">The new amount replaces the current one beginning with the first paycheck on or after the start date, and stays in effect until a later change for the same deduction. 401(k) increases are tracked in Projected Pay Increases below.</p>
+            </div>
+
+            <!-- Premium Holidays: paychecks where selected deductions are not taken (e.g. the two
+                 "extra" biweekly paychecks a year when premiums are billed twice a month). -->
+            <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
+                <h4 style="margin: 0 0 0.5rem 0; font-family: var(--font-heading); font-size: 1rem; color: #a5b4fc;">Premium Holidays</h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: end; margin-bottom: 0.75rem; border-bottom: 1px dashed var(--glass-border); padding-bottom: 0.75rem;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label for="payroll-holiday-date" style="font-size:0.75rem;">Holiday Date</label>
+                        <input type="date" id="payroll-holiday-date" class="custom-input" style="padding:0.35rem; font-size:0.8rem; width:140px;">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:0.75rem;">Skip these deductions</label>
+                        <div id="payroll-holiday-skips" style="display:flex; flex-wrap:wrap; gap:0.25rem 0.75rem; font-size:0.8rem;"></div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <button type="button" class="action-btn solid-btn" id="btn-add-payroll-holiday" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; height: 34px;">+ Add</button>
+                    </div>
+                </div>
+                <div style="max-height: 140px; overflow-y: auto;" id="payroll-holiday-list"></div>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0.5rem 0 0;">On the paycheck dated on or after the holiday date (the first one that hasn't already been covered), the checked deductions are $0. Pre-tax deductions you skip also stop reducing taxable wages, so that paycheck's taxes change too.</p>
+            </div>
+
             <!-- Additional (unlimited, user-defined) Deductions -->
             <div style="border: 1px solid var(--glass-border); padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.02);">
                 <h4 style="margin: 0 0 0.5rem 0; font-family: var(--font-heading); font-size: 1rem; color: #a5b4fc;">Additional Deductions</h4>
