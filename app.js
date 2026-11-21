@@ -2866,6 +2866,41 @@ function migrateDatabase() {
         state.legacySuffixedBillDuplicatesRemoved20260722 = true;
         migrated = true;
     }
+    // Orphaned per-month-suffixed ledger rows for a Bill Tracker setting (linkedBillId like
+    // "bill-settings-bs-xxxx-2027-Mar"). The current engine only ever creates ONE canonical id per
+    // setting ("bill-settings-bs-xxxx") in whichever ledger its payment source points at, so a
+    // suffixed row is always a leftover from an older build — and removeBillLedgerEntries() only
+    // matches the exact canonical id, so it can never clean one up. The dedupe above removes a
+    // suffixed row only when a canonical twin sits in the SAME ledger on the SAME date, which misses
+    // the case where the bill's payment source later changed: confirmed real report, 2026-11-21 —
+    // Moxie Pest Control, moved from Joint Checking (15th) to the Amex card (1st), kept nine phantom
+    // quarterly -$165 rows in the joint ledger (Dec 2026 – Dec 2028) next to the correct Amex ones.
+    // Only future-dated, never-edited, never-deleted generated rows are removed (the canonical rows
+    // regenerate on the next bill sync), and deliberately not one-time-gated, for the same
+    // self-healing reason as the dedupe above.
+    {
+        const settingBillIds = new Set((state.billTrackerSettings || []).map(s => 'bill-settings-' + s.id));
+        const suffixedPattern = /^(.+)-(\d{4})-([A-Z][a-z]{2})$/;
+        const todayStr = formatLocalDate(new Date());
+        let removedOrphans = 0;
+        const isOrphanedSuffixedRow = tx => {
+            const match = suffixedPattern.exec(tx.linkedBillId || '');
+            return !!match && settingBillIds.has(match[1]) && tx.date >= todayStr && !tx.billOccurrenceOverridden && !tx.billOccurrenceDeleted;
+        };
+        const purgeOrphans = list => {
+            if (!Array.isArray(list) || list.length === 0) return list;
+            const kept = list.filter(tx => !isOrphanedSuffixedRow(tx));
+            removedOrphans += list.length - kept.length;
+            return kept;
+        };
+        Object.keys(state.personalCalendar || {}).forEach(key => { state.personalCalendar[key] = purgeOrphans(state.personalCalendar[key]); });
+        Object.keys(state.asiaCalendar || {}).forEach(key => { state.asiaCalendar[key] = purgeOrphans(state.asiaCalendar[key]); });
+        state.jointRegister = purgeOrphans(state.jointRegister);
+        Object.values(state.cardCalendars || {}).forEach(calendar => {
+            Object.keys(calendar || {}).forEach(key => { calendar[key] = purgeOrphans(calendar[key]); });
+        });
+        if (removedOrphans > 0) migrated = true;
+    }
     // A second, distinct duplicate pattern for mortgage bills specifically: an older code path posted
     // the mortgage's budgeted TRANSFER amount (loan.manualTransferAmount — what gets moved into joint
     // checking, which can be padded above the real payment) as if it were the actual ledger payment,
@@ -19096,6 +19131,253 @@ function findTodayMarkerIndex(sortedList, todayStr, allowGapFallback) {
     return sortedList.length - 1;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Bulk select + delete for desktop List views (Personal / Joint / Asia dashboards and the credit
+// card / loan ledgers). Added 2026-11-21 per explicit user request: a checkbox beside each deletable
+// row plus a "select all shown" box in the header, and a floating bar to delete everything selected
+// in one confirmed action. Each list renderer calls enhanceListWithBulkSelect() as its last step, so
+// the checkboxes are injected into the already-built table (no column added, so every column-filter
+// index and divider colspan stays valid). A row only gets a checkbox if it has a Delete button, and
+// each row is deleted with the SAME semantics as its own Delete button — bill-generated rows are
+// flagged deleted for that occurrence, automatic payments are removed from both ledgers, dynamic
+// (calculated) rows are hidden — just without a confirm dialog per row. Hidden on mobile.
+// ---------------------------------------------------------------------------------------------
+let _bulkSelectedIds = new Set();
+let _bulkSelectContext = '';
+let _bulkSelectContainer = null;
+let _bulkSelectKind = '';
+const BULK_DELETE_BUTTON_SELECTOR = '.delete-list-tx-btn, .delete-joint-btn, .hide-dynamic-list-tx-btn, .hide-dynamic-joint-btn, .delete-loan-entry-btn';
+
+function enhanceListWithBulkSelect(container, kind) {
+    if (!container) return;
+    const contextKey = `${kind}:${state.dashboardType || ''}:${state.ccSelectedCardId || ''}`;
+    if (_bulkSelectContext !== contextKey) {
+        _bulkSelectedIds = new Set();
+        _bulkSelectContext = contextKey;
+    }
+    _bulkSelectContainer = container;
+    _bulkSelectKind = kind;
+    const table = container.querySelector('table');
+    if (!table || isMobileViewport()) {
+        _bulkSelectedIds.clear();
+        refreshBulkSelectBar();
+        return;
+    }
+    const rows = [...table.querySelectorAll('tbody tr[data-id]')].filter(tr => tr.querySelector(BULK_DELETE_BUTTON_SELECTOR));
+    const liveIds = new Set(rows.map(tr => tr.dataset.id));
+    [..._bulkSelectedIds].forEach(id => { if (!liveIds.has(id)) _bulkSelectedIds.delete(id); });
+
+    const headerBox = document.createElement('input');
+    headerBox.type = 'checkbox';
+    headerBox.className = 'bulk-select-all';
+    headerBox.title = 'Select all shown';
+    const syncHeaderBox = () => {
+        const visible = rows.filter(tr => tr.style.display !== 'none');
+        const selected = visible.filter(tr => _bulkSelectedIds.has(tr.dataset.id)).length;
+        headerBox.checked = visible.length > 0 && selected === visible.length;
+        headerBox.indeterminate = selected > 0 && selected < visible.length;
+    };
+    rows.forEach(tr => {
+        const firstCell = tr.querySelector('td');
+        if (!firstCell) return;
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.className = 'bulk-row-check';
+        box.title = 'Select for bulk delete';
+        box.checked = _bulkSelectedIds.has(tr.dataset.id);
+        tr.classList.toggle('bulk-selected', box.checked);
+        // Clicking/double-clicking the box must not open the row editor, start a sort, or drag the row.
+        box.addEventListener('click', e => e.stopPropagation());
+        box.addEventListener('dblclick', e => e.stopPropagation());
+        box.addEventListener('change', () => {
+            if (box.checked) _bulkSelectedIds.add(tr.dataset.id); else _bulkSelectedIds.delete(tr.dataset.id);
+            tr.classList.toggle('bulk-selected', box.checked);
+            syncHeaderBox();
+            refreshBulkSelectBar();
+        });
+        firstCell.prepend(box);
+    });
+    const headerCell = table.querySelector('thead th');
+    if (headerCell && rows.length) {
+        headerBox.addEventListener('click', e => e.stopPropagation());
+        headerBox.addEventListener('change', () => {
+            rows.filter(tr => tr.style.display !== 'none').forEach(tr => {
+                if (headerBox.checked) _bulkSelectedIds.add(tr.dataset.id); else _bulkSelectedIds.delete(tr.dataset.id);
+                const box = tr.querySelector('.bulk-row-check');
+                if (box) box.checked = headerBox.checked;
+                tr.classList.toggle('bulk-selected', headerBox.checked);
+            });
+            refreshBulkSelectBar();
+        });
+        headerCell.prepend(headerBox);
+        syncHeaderBox();
+    }
+    refreshBulkSelectBar();
+}
+
+// The floating "N selected — Delete / Clear" bar lives next to the list container (so it disappears
+// along with the list when the user switches to Calendar view or another tab) and exists only while
+// something is selected.
+function refreshBulkSelectBar() {
+    const host = _bulkSelectContainer?.parentElement;
+    document.querySelectorAll('.bulk-select-bar').forEach(b => { if (b.parentElement !== host) b.remove(); });
+    let bar = host ? host.querySelector(':scope > .bulk-select-bar') : null;
+    const count = _bulkSelectedIds.size;
+    if (!host || !count) {
+        bar?.remove();
+        return;
+    }
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'bulk-select-bar';
+        bar.innerHTML = '<span class="bulk-select-count"></span>' +
+            '<button type="button" class="action-btn small-btn danger-btn bulk-select-delete">Delete selected</button>' +
+            '<button type="button" class="action-btn small-btn outline-btn bulk-select-clear">Clear</button>';
+        host.appendChild(bar);
+        bar.querySelector('.bulk-select-delete').addEventListener('click', bulkDeleteSelectedRows);
+        bar.querySelector('.bulk-select-clear').addEventListener('click', () => {
+            _bulkSelectedIds.clear();
+            _bulkSelectContainer?.querySelectorAll('.bulk-row-check, .bulk-select-all').forEach(box => { box.checked = false; box.indeterminate = false; });
+            _bulkSelectContainer?.querySelectorAll('tr.bulk-selected').forEach(tr => tr.classList.remove('bulk-selected'));
+            refreshBulkSelectBar();
+        });
+    }
+    bar.querySelector('.bulk-select-count').textContent = `${count} selected`;
+}
+
+function getBulkMonthKeyFromDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return `${d.getFullYear()}-${MONTH_ORDER[d.getMonth()]}`;
+}
+
+function bulkDeleteSelectedRows() {
+    const container = _bulkSelectContainer;
+    if (!container || !_bulkSelectedIds.size) return;
+    const items = [...container.querySelectorAll('tbody tr[data-id]')]
+        .filter(tr => _bulkSelectedIds.has(tr.dataset.id))
+        .map(tr => {
+            const btn = tr.querySelector(BULK_DELETE_BUTTON_SELECTOR);
+            if (!btn) return null;
+            const cells = tr.querySelectorAll('td');
+            const descCell = _bulkSelectKind === 'card' ? cells[2] : cells[1];
+            const amountCell = [...cells].find(td => td.dataset.detailValue && /^[+-]\$/.test(td.dataset.detailValue));
+            return {
+                id: tr.dataset.id,
+                date: tr.dataset.date || btn.dataset.date || '',
+                desc: (btn.dataset.desc || tr.dataset.desc || (descCell ? descCell.innerText : '') || 'transaction').replace(/\s+/g, ' ').trim(),
+                amountText: amountCell ? amountCell.dataset.detailValue : '',
+                key: btn.dataset.key || '',
+                dynamic: btn.classList.contains('hide-dynamic-list-tx-btn') || btn.classList.contains('hide-dynamic-joint-btn')
+            };
+        })
+        .filter(Boolean);
+    if (!items.length) return;
+
+    const preview = items.slice(0, 10).map(item => `• ${formatDateDisplay(item.date)} — ${item.desc.slice(0, 60)}${item.amountText ? ' (' + item.amountText + ')' : ''}`).join('\n');
+    const more = items.length > 10 ? `\n…and ${items.length - 10} more` : '';
+    if (!confirm(`Delete ${items.length} selected transaction${items.length === 1 ? '' : 's'}?\n\n${preview}${more}\n\nBill-generated rows are removed for that occurrence only (the bill setting is unchanged), automatic payments are removed from both ledgers, and calculated rows are hidden. This cannot be undone.`)) return;
+
+    let deleted = 0;
+    if (_bulkSelectKind === 'dashboard') deleted = bulkDeleteDashboardRows(items);
+    else if (_bulkSelectKind === 'card') deleted = bulkDeleteCardRows(items, state.ccSelectedCardId);
+    else if (_bulkSelectKind === 'loan') deleted = bulkDeleteLoanRows(items, state.ccSelectedCardId);
+
+    _bulkSelectedIds.clear();
+    saveDatabase();
+    renderApp();
+    logSystem(`Bulk deleted ${deleted} transaction${deleted === 1 ? '' : 's'}.`);
+}
+
+// Personal / Joint / Asia dashboard lists — each branch mirrors that list's own Delete button.
+function bulkDeleteDashboardRows(items) {
+    const type = state.dashboardType;
+    let count = 0;
+    items.forEach(item => {
+        if (item.dynamic) {
+            if (!deleteVacationDynamicActualChargeIfApplicable(item.id)) saveDynamicTxOverride(item.id, { deleted: true });
+            count++;
+            return;
+        }
+        if (type === 'joint') {
+            const index = state.jointRegister.findIndex(tx => tx.id === item.id);
+            if (index < 0) return;
+            const target = state.jointRegister[index];
+            if (target.isAutomaticCardPayment) {
+                deleteAutomaticPaymentBothLegs(target.automaticPaymentId);
+            } else if (target.linkedBillId) {
+                target.billOccurrenceDate = target.billOccurrenceDate || target.date;
+                target.billOccurrenceDeleted = true;
+            } else {
+                const removed = state.jointRegister.splice(index, 1)[0];
+                if (removed.transferId) Object.values(state.personalCalendar || {}).forEach(list => {
+                    const mirrorIndex = list.findIndex(tx => tx.transferId === removed.transferId);
+                    if (mirrorIndex > -1) list.splice(mirrorIndex, 1);
+                });
+                removeOrphanedManualTransferRecord(removed);
+                removeLinkedCardPaymentLeg(removed);
+            }
+            count++;
+        } else if (type === 'asia') {
+            const list = state.asiaCalendar[item.key || getBulkMonthKeyFromDate(item.date)] || [];
+            const idx = list.findIndex(tx => tx.id === item.id);
+            if (idx < 0) return;
+            const removed = list.splice(idx, 1)[0];
+            removeAsiaCheckingTransferMirror(removed, 'asia');
+            count++;
+        } else {
+            const list = state.personalCalendar[item.key || getBulkMonthKeyFromDate(item.date)] || [];
+            const idx = list.findIndex(tx => tx.id === item.id);
+            if (idx < 0) return;
+            const transaction = list[idx];
+            if (transaction.isAutomaticCardPayment) {
+                deleteAutomaticPaymentBothLegs(transaction.automaticPaymentId);
+            } else if (transaction.linkedBillId) {
+                transaction.billOccurrenceDate = transaction.billOccurrenceDate || transaction.date;
+                transaction.billOccurrenceOverridden = true;
+                transaction.billOccurrenceDeleted = true;
+            } else {
+                const removed = list.splice(idx, 1)[0];
+                removeCheckingTransferMirror(removed, 'personal');
+                removeLinkedCardPaymentLeg(removed);
+            }
+            count++;
+        }
+    });
+    return count;
+}
+
+// Credit card ledger. deleteCardTransactionWithRecurringChoice()'s bulk mode skips every prompt
+// (recurring/payoff-plan choices resolve to "just this occurrence") and its per-row statement
+// rebuild; one rebuild runs after the whole batch.
+function bulkDeleteCardRows(items, cardId) {
+    let count = 0;
+    items.forEach(item => {
+        const existed = (state.cardCalendars?.[cardId]?.[item.key] || []).some(tx => tx.id === item.id);
+        if (!existed) return;
+        const removed = deleteCardTransactionWithRecurringChoice(cardId, item.key, item.id, true, true);
+        if (removed) adjustCardCurrentBalance(cardId, removed.amount, -1);
+        count++;
+    });
+    refreshMaterializedCardStatementCharges(cardId);
+    return count;
+}
+
+// Loan ledger: only balance adjustments, extra payments, estimated interest and automatic payments
+// have Delete buttons there; the loan's balance is recomputed from its ledger afterward.
+function bulkDeleteLoanRows(items, accountId) {
+    let count = 0;
+    items.forEach(item => {
+        const found = findDebtLedgerEntry(accountId, item.id);
+        if (!found) return;
+        deleteCardTransactionWithRecurringChoice(accountId, found.key, item.id, true, true);
+        count++;
+    });
+    refreshMaterializedCardStatementCharges(accountId);
+    const account = state.loans.find(l => l.id === accountId);
+    if (account) account.currentBal = calculateCardLedgerBalance(accountId);
+    return count;
+}
+
 function renderPersonalList() {
     const container = document.getElementById('list-view-table-container');
     // The (Month Year)/(Year) suffix repeats what's already visible in the date-nav right above this
@@ -19388,6 +19670,7 @@ function renderPersonalList() {
 
     if (sortedList.length === 0) {
         container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No transactions logged for this period.</p>`;
+        enhanceListWithBulkSelect(container, 'dashboard');
         return;
     }
 
@@ -19487,6 +19770,7 @@ function renderPersonalList() {
         // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'personal');
+    enhanceListWithBulkSelect(container, 'dashboard');
     _updateListViewStickyOffset();
 }
 
@@ -19717,6 +20001,7 @@ function renderAsiaList() {
 
     if (sortedList.length === 0) {
         container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No Asia transactions logged for this period.</p>`;
+        enhanceListWithBulkSelect(container, 'dashboard');
         return;
     }
 
@@ -19804,6 +20089,7 @@ function renderAsiaList() {
         // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'asia');
+    enhanceListWithBulkSelect(container, 'dashboard');
     _updateListViewStickyOffset();
 }
 
@@ -20448,6 +20734,7 @@ function renderJointList() {
         // popup on tap instead). Per explicit user request, 2026-08-31.
     });
     wireListRowDragDrop(container, 'joint');
+    enhanceListWithBulkSelect(container, 'dashboard');
 }
 function showDayHighlightsDialog(sourceId) {
     const source = document.getElementById(sourceId);
@@ -35448,7 +35735,14 @@ function propagateRecurringChargeChanges(cardId, editedTx) {
 // `skipPlainConfirm` lets a caller that already put up its own confirm dialog (e.g.
 // deleteEditableDebtEntry, or the Day Highlights modal's wrapping confirm) avoid a second, redundant
 // prompt for the plain-delete fallback below — every other caller gets the confirm for free.
-function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConfirm) {
+// `bulk` (bulk-select delete, see bulkDeleteCardRows()): no confirm dialogs — a recurring-series or
+// payoff-plan payment resolves to "delete only this one", everything else to "yes" — and no per-call
+// statement rebuild/save/render (the batch does that once afterward).
+function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConfirm, bulk = false) {
+    const confirm = bulk
+        ? (message => !/recurring charge|Payoff Plan/.test(String(message)))
+        : window.confirm.bind(window);
+    const refreshCardCharges = bulk ? (() => {}) : refreshMaterializedCardStatementCharges;
     const list = state.cardCalendars?.[cardId]?.[key] || [];
     const tx = list.find(item => item.id === id);
     if (!tx) return null;
@@ -35461,16 +35755,18 @@ function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConf
         // returning null here deliberately skips their redundant handling, which means THIS branch
         // must do its own saveDatabase()/renderApp() since no caller will do it after a null return.
         deleteAutomaticPaymentBothLegs(tx.automaticPaymentId);
-        refreshMaterializedCardStatementCharges(cardId);
+        refreshCardCharges(cardId);
         logSystem(`Deleted automatic payment: ${tx.description}`);
-        saveDatabase();
-        renderApp();
+        if (!bulk) {
+            saveDatabase();
+            renderApp();
+        }
         return null;
     }
 
     if (tx.splitterItem) {
         tx.billOccurrenceDeleted = true;
-        refreshMaterializedCardStatementCharges(cardId);
+        refreshCardCharges(cardId);
         return tx;
     }
 
@@ -35496,7 +35792,7 @@ function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConf
                     if (item.recurringSeriesId === tx.recurringSeriesId && item.date >= tx.date) monthList.splice(i, 1);
                 }
             });
-            refreshMaterializedCardStatementCharges(cardId);
+            refreshCardCharges(cardId);
             return tx;
         }
     }
@@ -35526,7 +35822,7 @@ function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConf
                     if (monthList[i].payoffPlanId === planId && monthList[i].date >= fromDate) monthList.splice(i, 1);
                 }
             });
-            refreshMaterializedCardStatementCharges(cardId);
+            refreshCardCharges(cardId);
             return tx;
         }
     }
@@ -35545,7 +35841,7 @@ function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConf
             const savingsTx = (state[trackerDef.txStateKey] || []).find(s => s.linkedSavingsWithdrawalId === tx.linkedSavingsWithdrawalId);
             if (savingsTx) { SAVINGS_POOL_FUNCTIONS[trackerDef.id].deleteTx(savingsTx.id); break; }
         }
-        refreshMaterializedCardStatementCharges(cardId);
+        refreshCardCharges(cardId);
         return tx;
     }
 
@@ -35584,7 +35880,7 @@ function deleteCardTransactionWithRecurringChoice(cardId, key, id, skipPlainConf
 
     list.splice(list.indexOf(tx), 1);
     removeLinkedCheckingPaymentLeg(tx);
-    refreshMaterializedCardStatementCharges(cardId);
+    refreshCardCharges(cardId);
     return tx;
 }
 function setupInlineAutocomplete(inputId, datalistId) {
@@ -37890,6 +38186,7 @@ function renderCCCardList(cardId) {
 
     if (!txList.length) {
         container.innerHTML = `<p class="muted-text" style="text-align:center; padding:2rem;">No ${isLoan ? 'loan activity is scheduled' : 'card transactions match these filters'}.</p>`;
+        enhanceListWithBulkSelect(container, isLoan ? 'loan' : 'card');
         return;
     }
 
@@ -37906,6 +38203,7 @@ function renderCCCardList(cardId) {
         container.querySelectorAll('.edit-loan-interest-btn').forEach(btn => btn.addEventListener('click', () => openEditTransactionModal(btn.dataset.id, btn.dataset.date)));
         container.querySelectorAll('.edit-loan-auto-btn').forEach(btn => btn.addEventListener('click', () => openEditTransactionModal(btn.dataset.id, btn.dataset.date)));
         container.querySelectorAll('.delete-loan-entry-btn').forEach(btn => btn.addEventListener('click', () => deleteEditableDebtEntry(cardId, btn.dataset.id)));
+        enhanceListWithBulkSelect(container, 'loan');
         return;
     }
     container.querySelectorAll('.delete-list-tx-btn').forEach(btn => {
@@ -37944,6 +38242,7 @@ function renderCCCardList(cardId) {
         // freshly-opened edit modal — usually its Date field, whose own click-to-open-native-
         // picker listener then fired, reported as "double tap opens the calendar selector").
     });
+    enhanceListWithBulkSelect(container, 'card');
     _updateListViewStickyOffset();
 }
 
