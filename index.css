@@ -6998,3 +6998,51 @@ body.is-mobile-screen #joint-expenses-content .data-table th,
 .vacation-week-allday-chip.vacation-expense-chip.vacation-expense-over .vacation-expense-result {
     color: #fb7185;
 }
+
+/* Bulk select + delete for desktop List views (see enhanceListWithBulkSelect() in app.js). The
+   checkboxes sit inside the first cell of each row/header, so no column is added. Hidden on mobile. */
+.bulk-row-check,
+.bulk-select-all {
+    width: 15px;
+    height: 15px;
+    margin: 0 0.5rem 0 0;
+    vertical-align: middle;
+    cursor: pointer;
+    accent-color: #6366f1;
+}
+tr.bulk-selected td {
+    background: rgba(99, 102, 241, 0.14);
+}
+.bulk-select-bar {
+    /* sticky, not fixed: the list cards use backdrop-filter, which makes a fixed child position
+       itself against the card instead of the window. */
+    position: sticky;
+    bottom: 1.25rem;
+    width: fit-content;
+    margin: 1rem auto 0;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
+    background: rgba(20, 22, 40, 0.96);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(8px);
+}
+.bulk-select-count {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+body.is-mobile-screen .bulk-row-check,
+body.is-mobile-screen .bulk-select-all,
+body.is-mobile-screen .bulk-select-bar {
+    display: none;
+}
+
+tr.bulk-selected td:first-child,
+td:has(> .bulk-row-check),
+th:has(> .bulk-select-all) {
+    white-space: nowrap;
+}
