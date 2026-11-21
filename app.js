@@ -2901,6 +2901,38 @@ function migrateDatabase() {
         });
         if (removedOrphans > 0) migrated = true;
     }
+    // Ledger rows the bill sync wrongly posted from Savings Transfers splitter rows (linkedBillId
+    // "savxfer-..."; see the matching guard in syncBillLedgerEntry), plus empty month buckets and
+    // automatic-payment skip flags left behind for card/loan ids that no longer exist. The real
+    // savings transfers never carry a linkedBillId, so they're untouched.
+    {
+        const loanIds = new Set((state.loans || []).map(l => l.id));
+        let cleaned = 0;
+        const dropSavingsBillRows = list => {
+            if (!Array.isArray(list) || list.length === 0) return list;
+            const kept = list.filter(tx => !String(tx.linkedBillId || '').startsWith('savxfer-'));
+            cleaned += list.length - kept.length;
+            return kept;
+        };
+        Object.keys(state.personalCalendar || {}).forEach(key => { state.personalCalendar[key] = dropSavingsBillRows(state.personalCalendar[key]); });
+        Object.keys(state.asiaCalendar || {}).forEach(key => { state.asiaCalendar[key] = dropSavingsBillRows(state.asiaCalendar[key]); });
+        state.jointRegister = dropSavingsBillRows(state.jointRegister);
+        Object.entries(state.cardCalendars || {}).forEach(([cardId, calendar]) => {
+            Object.keys(calendar || {}).forEach(key => { calendar[key] = dropSavingsBillRows(calendar[key]); });
+            if (!loanIds.has(cardId) && Object.values(calendar || {}).every(list => !list || list.length === 0)) {
+                delete state.cardCalendars[cardId];
+                cleaned++;
+            }
+        });
+        Object.keys(state.automaticPaymentSkips || {}).forEach(linkId => {
+            const match = /^autopay-(.+)-\d{4}-\d{2}$/.exec(linkId);
+            if (match && !loanIds.has(match[1])) {
+                delete state.automaticPaymentSkips[linkId];
+                cleaned++;
+            }
+        });
+        if (cleaned > 0) migrated = true;
+    }
     // A second, distinct duplicate pattern for mortgage bills specifically: an older code path posted
     // the mortgage's budgeted TRANSFER amount (loan.manualTransferAmount — what gets moved into joint
     // checking, which can be padded above the real payment) as if it were the actual ledger payment,
@@ -32023,6 +32055,13 @@ function syncBillLedgerEntry(rawBill, year, month, allowBackfill = false) {
     // checking ledger. Skipping entirely also keeps removeBillLedgerEntries' legacy matching from
     // ever deleting the real payment entry (same label, date, and amount, but no linkedBillId).
     if (rawBill.linkedCardPaymentId) return;
+    // Same for a Savings Transfers row: syncSavingsTransferSettingsToAllMonths() posts the real
+    // transfer (savings tracker + checking mirror) itself; this row only exists to put that amount in
+    // the Bill Splitter budget. It's tagged entryType 'actual' with paymentSource = the setting's
+    // checkingSource ('joint'/'jason'/'asia', not 'jointChecking' etc.), so letting it through here
+    // posted a second copy of every transfer into state.cardCalendars['joint'] — a "card" that
+    // doesn't exist (confirmed in real data, 2026-11-21: 84 Rainy Day Fund rows, 2030-2036).
+    if (rawBill.savingsTransferSettingId) return;
     const bill = recalculateBillBudgetForPeriod(rawBill, year, month);
     const forceClean = !!bill.isMortgage || !!bill.billTrackerSettingId;
     // purgeOverrides: false — this is a regeneration sync, so entries the user individually edited
@@ -36500,8 +36539,15 @@ function skipAutomaticPaymentRegeneration(linkId) {
 // replaced), which was safe but left no way to actually skip a month's payment outright.
 function deleteAutomaticPaymentBothLegs(linkId) {
     if (!linkId) return;
-    removeAutomaticPaymentBothLegs(linkId);
+    // The skip flag MUST be set before removing: removeAutomaticPaymentBothLegs() ends by rebuilding
+    // the card's statements (refreshMaterializedCardStatementCharges -> rebuildDebtMonthFinance ->
+    // ensureAutomaticCardPaymentForMonth), which used to run while the month wasn't flagged yet and
+    // immediately recreated the payment it had just deleted — then the flag landed and protected
+    // the recreated copy forever. Confirmed real report, 2026-11-21: deleting an automatic payment
+    // (Amex interest-saving, Upstart loan) made it vanish and reappear on the next render, from
+    // either the single Delete button or bulk delete.
     skipAutomaticPaymentRegeneration(linkId);
+    removeAutomaticPaymentBothLegs(linkId);
 }
 
 // Shared removal core for both deleteAutomaticPaymentBothLegs() (user explicitly deletes a single
@@ -36781,6 +36827,37 @@ function getStatementClosingDateForPayment(card, dueDate) {
     }
     return `${closing.getFullYear()}-${String(closing.getMonth() + 1).padStart(2, '0')}-${String(closing.getDate()).padStart(2, '0')}`;
 }
+// A month flagged as skipped (the user deleted its automatic payment) must not hold an automatic
+// payment for that same link id in its OWN month bucket — one there is a copy recreated by the old
+// delete-ordering bug (see deleteAutomaticPaymentBothLegs). A payment the user MOVED to another
+// month lives in that other month's bucket and is left alone, as is anything the user hand-edited
+// (automaticPaymentOverridden) or anything dated before today (history is never rewritten here).
+// Removes the card leg and its checking-side leg dated in the same month.
+function removeRegeneratedSkippedAutomaticPayment(cardId, key, linkId) {
+    const todayStr = formatLocalDate(new Date());
+    const cardList = state.cardCalendars?.[cardId]?.[key];
+    if (!cardList) return;
+    const ghosts = cardList.filter(tx => tx.isAutomaticCardPayment && tx.automaticPaymentId === linkId && !tx.automaticPaymentOverridden && tx.date >= todayStr);
+    if (!ghosts.length) return;
+    const card = state.loans.find(l => l.id === cardId);
+    ghosts.forEach(ghost => {
+        cardList.splice(cardList.indexOf(ghost), 1);
+        if (card) card.currentBal = Math.max(0, (Number(card.currentBal) || 0) + Math.abs(Number(ghost.amount) || 0));
+    });
+    const monthPrefix = ghosts[0].date.slice(0, 7);
+    const isGhostLeg = tx => tx.automaticPaymentId === linkId && !tx.automaticPaymentOverridden && String(tx.date || '').startsWith(monthPrefix);
+    Object.values(state.personalCalendar || {}).forEach(list => {
+        for (let i = (list || []).length - 1; i >= 0; i--) if (isGhostLeg(list[i])) list.splice(i, 1);
+    });
+    Object.values(state.asiaCalendar || {}).forEach(list => {
+        for (let i = (list || []).length - 1; i >= 0; i--) if (isGhostLeg(list[i])) list.splice(i, 1);
+    });
+    for (let i = (state.jointRegister || []).length - 1; i >= 0; i--) {
+        if (isGhostLeg(state.jointRegister[i])) state.jointRegister.splice(i, 1);
+    }
+    invalidateContinuousBalanceCaches();
+}
+
 function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     const card = state.loans.find(item => item.id === cardId);
     if (!card) return;
@@ -36895,7 +36972,10 @@ function ensureAutomaticCardPaymentForMonth(cardId, year, month) {
     let linkId = `autopay-${cardId}-${year}-${String(monthIndex + 1).padStart(2, '0')}`;
     // This month's payment was deliberately deleted, or moved elsewhere (see
     // skipAutomaticPaymentRegeneration) — respect that instead of materializing a fresh replacement.
-    if (state.automaticPaymentSkips?.[linkId]) return;
+    if (state.automaticPaymentSkips?.[linkId]) {
+        removeRegeneratedSkippedAutomaticPayment(cardId, key, linkId);
+        return;
+    }
     // Defense-in-depth for the same case, independent of whether the skip flag above actually got
     // set — confirmed real bug, 2026-08-09: an automatic payment moved to a different month (via
     // syncCheckingOverrideToCard(), which does correctly set the skip flag when it moves the card
