@@ -5749,14 +5749,28 @@ function broadcastStateToSiblingTabs(reason) {
             const json = getSharedStateJson();
             if (json === _lastSharedDataJson) return;
             _lastSharedDataJson = json;
-            _budgetifyTabChannel.postMessage({ type: 'state', from: BUDGETIFY_TAB_ID, reason, json });
+            _budgetifyTabChannel.postMessage({ type: 'state', from: BUDGETIFY_TAB_ID, reason, json, syncSignatures: getSyncSignatures() });
         } catch (err) {
             console.warn('Could not share changes with other Budgetify tabs:', err);
         }
     }, reason === 'pull' ? 0 : 300);
 }
 
-function applySiblingTabState(json, reason) {
+// The every-month sync passes (Bill Tracker, mortgage, Savings Transfers) skip themselves while their
+// inputs match the signature of their last run. Data handed over by another tab already went through
+// those passes there, so adopting that tab's signatures lets this tab skip re-running them on the same
+// data. If the data changes afterward, the signatures no longer match and the passes run as normal.
+function getSyncSignatures() {
+    return { mortgage: _lastMortgageSyncSignature, billTracker: _lastBillTrackerSyncSignature, savingsTransfer: _lastSavingsTransferSyncSignature };
+}
+function adoptSiblingSyncSignatures(signatures) {
+    if (!signatures) return;
+    if (signatures.mortgage) _lastMortgageSyncSignature = signatures.mortgage;
+    if (signatures.billTracker) _lastBillTrackerSyncSignature = signatures.billTracker;
+    if (signatures.savingsTransfer) _lastSavingsTransferSyncSignature = signatures.savingsTransfer;
+}
+
+function applySiblingTabState(json, reason, syncSignatures) {
     let incoming;
     try { incoming = JSON.parse(json); } catch (err) { return; }
     if (validateImportedDatabase(incoming)) return;
@@ -5764,6 +5778,7 @@ function applySiblingTabState(json, reason) {
     try {
         _lastSharedDataJson = json;
         replaceStateKeepingTabView(incoming);
+        adoptSiblingSyncSignatures(syncSignatures);
         saveDatabase(true); // clears every derived cache; skipAutoSync — the sending tab owns the push
         renderAppImmediate();
         logSystem(reason === 'pull' ? 'Another Budgetify tab pulled fresh data from Google Drive — updated here too.' : 'Updated with changes made in another Budgetify tab.');
@@ -5772,10 +5787,35 @@ function applySiblingTabState(json, reason) {
     }
 }
 
+const BUDGETIFY_READY_LOCK_PREFIX = 'budgetify-ready-';
+let _holdsReadyLock = false;
+// Called once this tab holds confirmed data (Drive pull or handoff). The lock is released
+// automatically when the tab closes or navigates away.
+function announceTabReady() {
+    if (_holdsReadyLock || !navigator.locks?.request) return;
+    _holdsReadyLock = true;
+    navigator.locks.request(BUDGETIFY_READY_LOCK_PREFIX + BUDGETIFY_TAB_ID, () => new Promise(() => {})).catch(() => { _holdsReadyLock = false; });
+}
+// true/false when the Web Locks API can tell; null when it can't (older browser).
+async function isAnotherBudgetifyTabReady() {
+    if (!navigator.locks?.query) return null;
+    try {
+        const snapshot = await navigator.locks.query();
+        return (snapshot.held || []).some(lock => String(lock.name).startsWith(BUDGETIFY_READY_LOCK_PREFIX)
+            && lock.name !== BUDGETIFY_READY_LOCK_PREFIX + BUDGETIFY_TAB_ID);
+    } catch (err) {
+        return null;
+    }
+}
+
 // New tab startup: ask any open tab for its data. Resolves true if one answered (and its data is
-// now loaded here), false after a short wait otherwise — the caller then pulls from Drive.
-function requestStateFromSiblingTab(timeoutMs = 1200) {
-    if (!_budgetifyTabChannel) return Promise.resolve(false);
+// now loaded here), false otherwise — the caller then pulls from Drive. Returns immediately when no
+// other ready tab exists; otherwise waits up to 6s, since the other tab may be mid-render.
+async function requestStateFromSiblingTab() {
+    if (!_budgetifyTabChannel) return false;
+    const siblingReady = await isAnotherBudgetifyTabReady();
+    if (siblingReady === false) return false;
+    const timeoutMs = siblingReady ? 6000 : 1200;
     return new Promise(resolve => {
         let finished = false;
         const finish = result => {
@@ -5795,9 +5835,12 @@ function requestStateFromSiblingTab(timeoutMs = 1200) {
             _mobileMetricsDefaultApplied = false;
             _desktopBillsDefaultApplied = false;
             _lastSharedDataJson = msg.json;
+            adoptSiblingSyncSignatures(msg.syncSignatures);
             _driveSyncBaselineEstablished = true;
+            announceTabReady();
             saveDatabase(true);
-            renderAppImmediate();
+            // No render here: init() lands on the requested section right after this resolves, and
+            // rendering the default section first just doubled the wait.
             syncAutoSyncCheckboxesUI();
             logSuccess('Loaded data from another open Budgetify tab — no Google Drive download needed.');
             showSyncStatusFlag('success', 'Loaded from another open Budgetify tab.');
@@ -5817,14 +5860,14 @@ if (_budgetifyTabChannel) {
             // Only a tab holding confirmed data (from Drive or a handoff) may hand it out.
             if (!_driveSyncBaselineEstablished || _syncPullInProgress || _autoSyncKilledThisSession) return;
             try {
-                _budgetifyTabChannel.postMessage({ type: 'state-handoff', from: BUDGETIFY_TAB_ID, to: msg.from, json: getSharedStateJson() });
+                _budgetifyTabChannel.postMessage({ type: 'state-handoff', from: BUDGETIFY_TAB_ID, to: msg.from, json: getSharedStateJson(), syncSignatures: getSyncSignatures() });
             } catch (err) {
                 console.warn('Could not hand data to a new Budgetify tab:', err);
             }
         } else if (msg.type === 'state') {
             // A tab still starting up gets current data from its own handoff/pull instead.
             if (!_driveSyncBaselineEstablished || _autoSyncKilledThisSession) return;
-            applySiblingTabState(msg.json, msg.reason);
+            applySiblingTabState(msg.json, msg.reason, msg.syncSignatures);
         }
     });
 }
@@ -6181,6 +6224,7 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         // since both call this same function.
         renderAppImmediate();
         _driveSyncBaselineEstablished = true;
+        announceTabReady();
         broadcastStateToSiblingTabs('pull');
         syncAutoSyncCheckboxesUI();
         logSuccess('Loaded latest data from Google Drive.');
@@ -13028,7 +13072,11 @@ function renderAppImmediate() {
     relocateMobileSavingsListViewControls();
     populateCheckingAutocomplete();
     populateCCDropdowns();
-    renderSummaryCards();
+    // The Dashboard Metrics cards are only shown on the Checking (dashboard) tab (see hideGlobalSummary
+    // below), but were computed on every render of every tab — on a cold start that's ~1.3s of the
+    // first draw of Credit Cards, Loans, etc. (measured 2026-11-24). They're recomputed whenever the
+    // Checking tab renders, since switchToTab() always re-renders.
+    if ((document.body.dataset.activeTab || 'dashboard') === 'dashboard') renderSummaryCards();
     // Universal (not tab-scoped) — the top nav header's own collapse-toggle-btn lives outside every
     // .tab-view, so it needs applying here rather than from any one tab's render function.
     syncCollapseToggleButtons();
@@ -32251,7 +32299,34 @@ function getBillOccurrencePaymentAmount(bill) {
     return Math.abs(Number(bill.occurrencePaymentAmount) || 0);
 }
 
+// While syncBillTrackerBillsToAllMonths() runs, lookups come from this index (linkedBillId -> Set of
+// ledger rows) instead of rescanning every ledger. That pass calls this ~11,000 times (twice per bill
+// per month) and the full scan made it take ~4.8s on every page load — measured 2026-11-24 on real
+// data, 4.0s of it in this function alone. The index is built once at the start of the pass and kept
+// exact as rows change: removeBillLedgerEntries() drops what it removes and syncBillLedgerEntry() adds
+// what it creates (the only two places the pass adds or removes bill-linked rows). null = no pass
+// running, plain scan below.
+let _billLedgerIndex = null;
+function buildBillLedgerIndex() {
+    const index = new Map();
+    const add = tx => {
+        if (!tx || !tx.linkedBillId) return;
+        if (!index.has(tx.linkedBillId)) index.set(tx.linkedBillId, new Set());
+        index.get(tx.linkedBillId).add(tx);
+    };
+    Object.values(state.personalCalendar || {}).forEach(list => (list || []).forEach(add));
+    (state.jointRegister || []).forEach(add);
+    Object.values(state.asiaCalendar || {}).forEach(list => (list || []).forEach(add));
+    Object.values(state.cardCalendars || {}).forEach(calendar => Object.values(calendar || {}).forEach(list => (list || []).forEach(add)));
+    return index;
+}
+function indexBillLedgerRow(tx) {
+    if (!_billLedgerIndex || !tx || !tx.linkedBillId) return;
+    if (!_billLedgerIndex.has(tx.linkedBillId)) _billLedgerIndex.set(tx.linkedBillId, new Set());
+    _billLedgerIndex.get(tx.linkedBillId).add(tx);
+}
 function getBillLinkedLedgerEntries(billId) {
+    if (_billLedgerIndex) return [...(_billLedgerIndex.get(billId) || [])];
     const entries = [];
     Object.values(state.personalCalendar || {}).forEach(list => entries.push(...(list || []).filter(tx => tx.linkedBillId === billId)));
     entries.push(...(state.jointRegister || []).filter(tx => tx.linkedBillId === billId));
@@ -32277,7 +32352,7 @@ function removeBillLedgerEntries(billId, year, month, oldBill = null, force = fa
 
     const expectedDates = oldBill ? getBillOccurrenceDates(oldBill, year, month) : [];
     const expectedAmount = oldBill ? -getBillOccurrencePaymentAmount(oldBill) : 0;
-    const removeLinkedOrLegacy = tx => {
+    let removeLinkedOrLegacy = tx => {
         // Sacred Protection Rule 1: Never delete transfers, contributions, or manual entries!
         if (tx.type === 'contribution' || tx.transferId || tx.linkedManualTransferId || tx.isManualEntry || tx.manual) return true;
         // Sacred Protection Rule 2: Never delete unlinked transactions (manual user transactions without linkedBillId)
@@ -32305,6 +32380,15 @@ function removeBillLedgerEntries(billId, year, month, oldBill = null, force = fa
         }
         return true;
     };
+    if (_billLedgerIndex) {
+        const keepRow = removeLinkedOrLegacy;
+        // Same decision as before; additionally forget any row it removes from the active pass index.
+        removeLinkedOrLegacy = tx => {
+            const keep = keepRow(tx);
+            if (!keep && tx.linkedBillId) _billLedgerIndex.get(tx.linkedBillId)?.delete(tx);
+            return keep;
+        };
+    }
     if (state.personalCalendar[key]) state.personalCalendar[key] = state.personalCalendar[key].filter(removeLinkedOrLegacy);
     state.jointRegister = (state.jointRegister || []).filter(removeLinkedOrLegacy);
     if (state.asiaCalendar && state.asiaCalendar[key]) state.asiaCalendar[key] = state.asiaCalendar[key].filter(removeLinkedOrLegacy);
@@ -32391,17 +32475,25 @@ function syncBillLedgerEntry(rawBill, year, month, allowBackfill = false) {
         const common = { date, amount: -occurrenceAmount, linkedBillId: bill.id, linkedBillSeriesId: bill.recurringSeriesId || bill.id, billOccurrenceDate: date, splitterItem: true, owner: bill.ownership, isRecurring: !!bill.isRecurring, billType: bill.billType || 'bill', isPlaceholder: !!bill.isPlaceholder, placeholderType: bill.placeholderType || '', billOccurrenceOverridden: false, billOccurrenceDeleted: false };
         if (bill.paymentSource === 'jasonChecking') {
             if (!state.personalCalendar[key]) state.personalCalendar[key] = [];
-            state.personalCalendar[key].push({ id: 'p-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common });
+            const row = { id: 'p-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common };
+            state.personalCalendar[key].push(row);
+            indexBillLedgerRow(row);
         } else if (bill.paymentSource === 'jointChecking') {
-            state.jointRegister.push({ id: 'j-' + Math.random().toString(36).substr(2, 9), type: 'expense', name: bill.account, ...common });
+            const row = { id: 'j-' + Math.random().toString(36).substr(2, 9), type: 'expense', name: bill.account, ...common };
+            state.jointRegister.push(row);
+            indexBillLedgerRow(row);
         } else if (bill.paymentSource === 'asiaChecking') {
             if (!state.asiaCalendar[key]) state.asiaCalendar[key] = [];
-            state.asiaCalendar[key].push({ id: 'a-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common });
+            const row = { id: 'a-' + Math.random().toString(36).substr(2, 9), description: bill.account, ...common };
+            state.asiaCalendar[key].push(row);
+            indexBillLedgerRow(row);
         } else {
             if (!state.cardCalendars) state.cardCalendars = {};
             if (!state.cardCalendars[bill.paymentSource]) state.cardCalendars[bill.paymentSource] = {};
             if (!state.cardCalendars[bill.paymentSource][key]) state.cardCalendars[bill.paymentSource][key] = [];
-            state.cardCalendars[bill.paymentSource][key].push({ id: 'c-' + Math.random().toString(36).substr(2, 9), merchant: bill.account, description: bill.account, ...common });
+            const row = { id: 'c-' + Math.random().toString(36).substr(2, 9), merchant: bill.account, description: bill.account, ...common };
+            state.cardCalendars[bill.paymentSource][key].push(row);
+            indexBillLedgerRow(row);
         }
 
         // A mortgage has two accounting legs: the full payment (escrow + P&I + additional P&I)
@@ -32409,7 +32501,7 @@ function syncBillLedgerEntry(rawBill, year, month, allowBackfill = false) {
         if (mortgageLoan && mortgageLoanPayment > 0 && !mortgageLoanOverriddenDates.has(date)) {
             if (!state.cardCalendars[mortgageLoan.id]) state.cardCalendars[mortgageLoan.id] = {};
             if (!state.cardCalendars[mortgageLoan.id][key]) state.cardCalendars[mortgageLoan.id][key] = [];
-            state.cardCalendars[mortgageLoan.id][key].push({
+            const mortgageRow = {
                 id: `mortgage-loan-payment-${mortgageLoan.id}-${date}`,
                 date,
                 description: 'Automatic Mortgage P&I Payment',
@@ -32427,7 +32519,9 @@ function syncBillLedgerEntry(rawBill, year, month, allowBackfill = false) {
                 isAutomaticCardPayment: true,
                 isMortgageLoanPayment: true,
                 escrowExcluded: Math.max(0, Number(mortgageLoan.escrowAmount) || 0)
-            });
+            };
+            state.cardCalendars[mortgageLoan.id][key].push(mortgageRow);
+            indexBillLedgerRow(mortgageRow);
         }
     });
 }
@@ -40426,6 +40520,15 @@ function backfillBillTrackerSettingOccurrences(setting) {
 }
 
 function syncBillTrackerBillsToAllMonths() {
+    _billLedgerIndex = buildBillLedgerIndex();
+    try {
+        syncBillTrackerBillsToAllMonthsCore();
+    } finally {
+        _billLedgerIndex = null;
+    }
+}
+
+function syncBillTrackerBillsToAllMonthsCore() {
     const activeSettings = state.billTrackerSettings || [];
     _billTrackerScheduledAmountsByMonth = {};
 
