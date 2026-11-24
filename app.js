@@ -2099,6 +2099,8 @@ async function init() {
     if (versionMarker) versionMarker.textContent = 'Build ' + BUILD_VERSION;
 
     _measureScrollbarWidth();
+    // Read before the first render: once route syncing starts, the address bar tracks the view.
+    const initialRoute = parseBudgetifyRoute(location.hash);
 
     // Per user specification: On page load/refresh, Auto Sync starts OFF by default,
     // all local data automatically clears, and fresh data is pulled from Google Drive.
@@ -2132,6 +2134,7 @@ async function init() {
     state.dashboardType = 'personal';
     state.savingsPoolView = 'household';
     setupEventListeners();
+    setupSectionLinks();
 
     populateYearSelect();
     const monthSelectEl = document.getElementById('month-select');
@@ -2181,8 +2184,13 @@ async function init() {
         document.body.dataset.activeTab = 'dashboard';
     }
 
-    logSystem('Pulling latest data from Google Drive...');
-    await pullStateFromDrive(false);
+    // Another open Budgetify tab can hand over its data instantly; only download from Google Drive
+    // when none answers (see requestStateFromSiblingTab()).
+    const handedOffFromTab = await requestStateFromSiblingTab();
+    if (!handedOffFromTab) {
+        logSystem('Pulling latest data from Google Drive...');
+        await pullStateFromDrive(false);
+    }
 
     // pullStateFromDrive() just replaced `state` wholesale with whatever the Drive file's last
     // PUSH happened to have saved — including currentYear/currentMonth/ccYear/ccMonth/
@@ -2223,6 +2231,10 @@ async function init() {
         state.savingsPoolView = 'household';
         switchToTab(startupTab);
     }
+    // A section link (#credit-cards/amex etc.) wins over the default landing tab.
+    if (initialRoute && _driveSyncBaselineEstablished) applyBudgetifyRoute(initialRoute);
+    _routeSyncEnabled = true;
+    syncLocationHashToView();
 
     // Auto Sync only turns on if that pull actually confirmed real (or confirmed-empty) data —
     // pullStateFromDrive() sets _driveSyncBaselineEstablished itself on success. Do NOT force it on
@@ -2565,6 +2577,7 @@ function saveDatabase(skipAutoSync) {
             }, SYNC_DEBOUNCE_MS);
         }
     }
+    if (!skipAutoSync) broadcastStateToSiblingTabs('edit');
 }
 let _pendingSyncPushTimer = null;
 let _syncPushInProgress = false;
@@ -5680,6 +5693,245 @@ let _driveSyncBaselineEstablished = false;
 // incident described above — the literal "never push a null/0/placeholder state" fail-safe.
 let _freshResetStateSnapshot = null;
 
+// ---------------------------------------------------------------------------------------------
+// Multiple tabs + section links (added 2026-11-24, per explicit user request).
+//
+// 1. Section links: the address bar always shows the section being viewed (#checking/joint,
+//    #credit-cards/<cardId>, #loans/<loanId>, #savings/travel, #joint-transfers, ...). Opening such a
+//    link lands on that section, and Ctrl/Cmd-click or middle-click on a sidebar item (or a card/loan
+//    on the Credit Cards / Installment Loans pages) opens it in a new browser tab.
+// 2. Tab handoff: a new tab first asks any already-open Budgetify tab (same browser) for its data
+//    over a BroadcastChannel and, if one answers, starts from that copy instead of downloading the
+//    whole file from Google Drive again. With no other tab open it pulls from Drive exactly as before.
+// 3. Tabs stay in step: every real edit (a saveDatabase() that would auto-push) sends the updated data
+//    to the other open tabs, which swap it in and re-render while keeping their own view (section,
+//    month, filters, selected account). Only the tab where the edit happened pushes to Drive, so two
+//    tabs can no longer overwrite each other's changes with stale copies — which was possible before
+//    this, since every tab held its own independent copy and pushed the whole file.
+// ---------------------------------------------------------------------------------------------
+const BUDGETIFY_TAB_ID = Math.random().toString(36).slice(2, 10);
+const _budgetifyTabChannel = (typeof BroadcastChannel === 'function') ? new BroadcastChannel('budgetify-tabs-v1') : null;
+// Per-tab view/navigation fields — never copied from another tab.
+const TAB_LOCAL_STATE_KEYS = new Set([
+    ...VIEW_SETTING_STATE_KEYS,
+    'currentYear', 'currentMonth', 'selectedDate', 'ccYear', 'ccMonth', 'ccSelectedDate', 'deliveryWeekIndex',
+    'activeTab', 'dashboardType', 'savingsPoolView', 'ccSelectedCardId',
+    'vacationSelectedTripId', 'vacationViewMode', 'vacationWeekStartDate', 'vacationDayDate'
+]);
+let _tabBroadcastTimer = null;
+let _lastSharedDataJson = '';
+let _applyingSiblingTabState = false;
+
+// `state` minus this tab's own view fields, as JSON — what gets shared between tabs.
+function getSharedStateJson() {
+    return JSON.stringify(state, function (key, value) {
+        return (this === state && TAB_LOCAL_STATE_KEYS.has(key)) ? undefined : value;
+    });
+}
+
+// Swaps in another tab's data while keeping this tab's own view fields. Mutates `state` in place,
+// the same way pullStateFromDrive() does.
+function replaceStateKeepingTabView(incoming) {
+    const local = {};
+    TAB_LOCAL_STATE_KEYS.forEach(key => { if (state[key] !== undefined) local[key] = state[key]; });
+    Object.keys(state).forEach(key => delete state[key]);
+    Object.assign(state, incoming);
+    Object.assign(state, local);
+}
+
+// Called from saveDatabase() for real edits, and after a successful Drive pull. Debounced so a burst
+// of edits sends once; skipped when nothing but view fields changed since the last share.
+function broadcastStateToSiblingTabs(reason) {
+    if (!_budgetifyTabChannel || _applyingSiblingTabState || !_driveSyncBaselineEstablished || _autoSyncKilledThisSession) return;
+    clearTimeout(_tabBroadcastTimer);
+    _tabBroadcastTimer = setTimeout(() => {
+        try {
+            const json = getSharedStateJson();
+            if (json === _lastSharedDataJson) return;
+            _lastSharedDataJson = json;
+            _budgetifyTabChannel.postMessage({ type: 'state', from: BUDGETIFY_TAB_ID, reason, json });
+        } catch (err) {
+            console.warn('Could not share changes with other Budgetify tabs:', err);
+        }
+    }, reason === 'pull' ? 0 : 300);
+}
+
+function applySiblingTabState(json, reason) {
+    let incoming;
+    try { incoming = JSON.parse(json); } catch (err) { return; }
+    if (validateImportedDatabase(incoming)) return;
+    _applyingSiblingTabState = true;
+    try {
+        _lastSharedDataJson = json;
+        replaceStateKeepingTabView(incoming);
+        saveDatabase(true); // clears every derived cache; skipAutoSync — the sending tab owns the push
+        renderAppImmediate();
+        logSystem(reason === 'pull' ? 'Another Budgetify tab pulled fresh data from Google Drive — updated here too.' : 'Updated with changes made in another Budgetify tab.');
+    } finally {
+        _applyingSiblingTabState = false;
+    }
+}
+
+// New tab startup: ask any open tab for its data. Resolves true if one answered (and its data is
+// now loaded here), false after a short wait otherwise — the caller then pulls from Drive.
+function requestStateFromSiblingTab(timeoutMs = 1200) {
+    if (!_budgetifyTabChannel) return Promise.resolve(false);
+    return new Promise(resolve => {
+        let finished = false;
+        const finish = result => {
+            if (finished) return;
+            finished = true;
+            _budgetifyTabChannel.removeEventListener('message', onMessage);
+            resolve(result);
+        };
+        const onMessage = event => {
+            const msg = event.data || {};
+            if (msg.type !== 'state-handoff' || msg.to !== BUDGETIFY_TAB_ID) return;
+            let incoming;
+            try { incoming = JSON.parse(msg.json); } catch (err) { return; }
+            if (validateImportedDatabase(incoming)) return;
+            replaceStateKeepingTabView(incoming);
+            migrateDatabase();
+            _mobileMetricsDefaultApplied = false;
+            _desktopBillsDefaultApplied = false;
+            _lastSharedDataJson = msg.json;
+            _driveSyncBaselineEstablished = true;
+            saveDatabase(true);
+            renderAppImmediate();
+            syncAutoSyncCheckboxesUI();
+            logSuccess('Loaded data from another open Budgetify tab — no Google Drive download needed.');
+            showSyncStatusFlag('success', 'Loaded from another open Budgetify tab.');
+            finish(true);
+        };
+        _budgetifyTabChannel.addEventListener('message', onMessage);
+        _budgetifyTabChannel.postMessage({ type: 'request-state', from: BUDGETIFY_TAB_ID });
+        setTimeout(() => finish(false), timeoutMs);
+    });
+}
+
+if (_budgetifyTabChannel) {
+    _budgetifyTabChannel.addEventListener('message', event => {
+        const msg = event.data || {};
+        if (msg.from === BUDGETIFY_TAB_ID) return;
+        if (msg.type === 'request-state') {
+            // Only a tab holding confirmed data (from Drive or a handoff) may hand it out.
+            if (!_driveSyncBaselineEstablished || _syncPullInProgress || _autoSyncKilledThisSession) return;
+            try {
+                _budgetifyTabChannel.postMessage({ type: 'state-handoff', from: BUDGETIFY_TAB_ID, to: msg.from, json: getSharedStateJson() });
+            } catch (err) {
+                console.warn('Could not hand data to a new Budgetify tab:', err);
+            }
+        } else if (msg.type === 'state') {
+            // A tab still starting up gets current data from its own handoff/pull instead.
+            if (!_driveSyncBaselineEstablished || _autoSyncKilledThisSession) return;
+            applySiblingTabState(msg.json, msg.reason);
+        }
+    });
+}
+
+// --- Section links ---------------------------------------------------------------------------
+const ROUTE_SLUG_BY_TAB = {
+    dashboard: 'checking', creditcards: 'credit-cards', savings: 'savings', bills: 'joint-transfers',
+    vacation: 'vacation', billtracker: 'bills-expenses', loans: 'loans', delivery: 'delivery', sync: 'sync'
+};
+const ROUTE_TAB_BY_SLUG = Object.fromEntries(Object.entries(ROUTE_SLUG_BY_TAB).map(([tab, slug]) => [slug, tab]));
+let _routeSyncEnabled = false;
+
+function parseBudgetifyRoute(hash) {
+    const raw = String(hash || '').replace(/^#\/?/, '');
+    if (!raw) return null;
+    const [slug, ...rest] = raw.split('/');
+    const tab = ROUTE_TAB_BY_SLUG[decodeURIComponent(slug)];
+    if (!tab) return null;
+    return { tab, sub: decodeURIComponent(rest.join('/')) };
+}
+
+function buildBudgetifyRoute(tab, sub) {
+    const slug = ROUTE_SLUG_BY_TAB[tab] || 'checking';
+    return sub ? `${slug}/${encodeURIComponent(sub)}` : slug;
+}
+
+function buildBudgetifyRouteUrl(tab, sub) {
+    return `${location.href.split('#')[0]}#${buildBudgetifyRoute(tab, sub)}`;
+}
+
+function getCurrentBudgetifyRoute() {
+    const tab = document.body.dataset.activeTab || 'dashboard';
+    let sub = '';
+    if (tab === 'dashboard') sub = (state.dashboardType || 'personal') === 'personal' ? 'jason' : state.dashboardType;
+    else if (tab === 'savings') sub = (state.savingsPoolView || 'household') === 'household' ? 'jason' : state.savingsPoolView;
+    else if (tab === 'creditcards' || tab === 'loans') {
+        const account = (state.loans || []).find(l => l.id === state.ccSelectedCardId);
+        if (account && account.type === (tab === 'loans' ? 'loan' : 'credit')) sub = account.id;
+    }
+    return buildBudgetifyRoute(tab, sub);
+}
+
+// Keeps the address bar on the section being viewed (replaceState — no extra Back-button entries).
+function syncLocationHashToView() {
+    if (!_routeSyncEnabled) return;
+    const route = getCurrentBudgetifyRoute();
+    if (decodeURIComponent(location.hash.replace(/^#/, '')) === decodeURIComponent(route)) return;
+    try { history.replaceState(null, '', `#${route}`); } catch (err) { /* e.g. sandboxed embed — links just won't update */ }
+}
+
+// Opens a section the same way the sidebar would; returns false if the route isn't usable.
+function applyBudgetifyRoute(route) {
+    if (!route) return false;
+    if (route.tab === 'dashboard') {
+        if ((document.body.dataset.activeTab || 'dashboard') !== 'dashboard') switchToTab('dashboard');
+        const type = route.sub === 'jason' ? 'personal' : route.sub;
+        if (['personal', 'joint', 'asia'].includes(type)) document.querySelector(`#dashboard-toggle-container [data-type="${type}"]`)?.click();
+    } else if (route.tab === 'savings') {
+        if ((document.body.dataset.activeTab || 'dashboard') !== 'savings') switchToTab('savings');
+        const pool = route.sub === 'jason' ? 'household' : route.sub;
+        if (pool && SAVINGS_TRACKER_REGISTRY[pool]) document.querySelector(`#savings-pool-toggle [data-savings-pool="${pool}"]`)?.click();
+    } else if (route.tab === 'creditcards' || route.tab === 'loans') {
+        const wantedType = route.tab === 'loans' ? 'loan' : 'credit';
+        const account = (state.loans || []).find(l => l.id === route.sub && l.type === wantedType);
+        state.ccSelectedCardId = account ? account.id : '';
+        switchToTab(route.tab);
+    } else {
+        switchToTab(route.tab);
+    }
+    renderApp();
+    return true;
+}
+
+// Ctrl/Cmd-click or middle-click → open that section in a new browser tab. Returns true if handled.
+function openRouteInNewTabIfRequested(event, tab, sub) {
+    const wantsNewTab = event.metaKey || event.ctrlKey || event.button === 1;
+    if (!wantsNewTab) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    window.open(buildBudgetifyRouteUrl(tab, sub), '_blank');
+    return true;
+}
+
+function setupSectionLinks() {
+    const nav = document.querySelector('.sidebar-nav');
+    const routeForNavTarget = el => {
+        const navBtn = el.closest('.nav-btn[data-tab]');
+        if (navBtn) return [navBtn.dataset.tab, ''];
+        const dashSub = el.closest('[data-nav-dashboard-type]');
+        if (dashSub) return ['dashboard', dashSub.dataset.navDashboardType === 'personal' ? 'jason' : dashSub.dataset.navDashboardType];
+        const poolSub = el.closest('[data-nav-savings-pool]');
+        if (poolSub) return ['savings', poolSub.dataset.navSavingsPool === 'household' ? 'jason' : poolSub.dataset.navSavingsPool];
+        return null;
+    };
+    const handler = event => {
+        const target = routeForNavTarget(event.target);
+        if (target) openRouteInNewTabIfRequested(event, target[0], target[1]);
+    };
+    // Capture phase so the normal same-tab click handlers never run for a new-tab click.
+    nav?.addEventListener('click', handler, true);
+    nav?.addEventListener('auxclick', handler, true);
+    window.addEventListener('hashchange', () => {
+        const route = parseBudgetifyRoute(location.hash);
+        if (route && buildBudgetifyRoute(route.tab, route.sub) !== getCurrentBudgetifyRoute()) applyBudgetifyRoute(route);
+    });
+}
+
 // HARD LOCK — added 2026-07-27, re-affirmed then reversed 2026-08-01, re-affirmed again
 // 2026-08-06 (Asia's Checking feature just landed and the user wants to verify it thoroughly
 // before this device syncs with anyone else's copy). Flipped back to `false` 2026-08-10 per
@@ -5929,6 +6181,7 @@ async function pullStateFromDrive(respectAutoSyncToggle = false) {
         // since both call this same function.
         renderAppImmediate();
         _driveSyncBaselineEstablished = true;
+        broadcastStateToSiblingTabs('pull');
         syncAutoSyncCheckboxesUI();
         logSuccess('Loaded latest data from Google Drive.');
         showSyncStatusFlag('success', 'Loaded latest data from Google Drive.');
@@ -6414,7 +6667,12 @@ function switchToTab(tabName) {
 
     if (state.activeTab !== tabName) {
         state.activeTab = tabName;
-        saveDatabase();
+        // skipAutoSync — which tab is open is a per-device view setting, not data. A plain
+        // saveDatabase() here queued a full upload of the whole file to Google Drive on every tab
+        // switch, including the one init() makes right after the startup pull (the landing tab always
+        // differs from whatever tab the last push saved), so every page load re-uploaded unchanged
+        // data ~10s later. Confirmed by tracing saveDatabase() calls on load, 2026-11-24.
+        saveDatabase(true);
     }
 
     const selectedDebtAccount = (state.loans || []).find(item => item.id === state.ccSelectedCardId);
@@ -12740,6 +12998,7 @@ function updateHeaderPeriodNavAndToday(activeTab, isCC, isLoans) {
 }
 
 function renderAppImmediate() {
+    queueMicrotask(syncLocationHashToView);
     // Idempotent — safe to call on every render. Keeps the CSS-facing `.is-mobile-screen` body class
     // in sync with isMobileViewport()'s own (now screen-based, not zoom-based) determination — every
     // former `@media (max-width: 900px)` rule in index.css was converted to `body.is-mobile-screen`
@@ -24169,6 +24428,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
         card.style.cursor = 'pointer';
         card.addEventListener('click', event => {
             if (event.target.closest('button, a, input, .account-icon-clickable')) return;
+            if (openRouteInNewTabIfRequested(event, isLoanType ? 'loans' : 'creditcards', account.id)) return;
             state.ccSelectedCardId = account.id;
             if (isLoanType) renderLoansTab();
             else renderCreditCardsTab();
@@ -24213,6 +24473,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
         row.style.cursor = 'pointer';
         row.addEventListener('click', event => {
             if (event.target.closest('button, a, input, .account-icon-clickable')) return;
+            if (openRouteInNewTabIfRequested(event, isLoanType ? 'loans' : 'creditcards', account.id)) return;
             state.ccSelectedCardId = account.id;
             if (isLoanType) renderLoansTab();
             else renderCreditCardsTab();
@@ -24258,6 +24519,7 @@ function renderDebtOverview(type, listContainerId, tableBodyId) {
 }
 
 function renderLoansTab() {
+    queueMicrotask(syncLocationHashToView);
     const selectedLoan = state.loans.find(item => item.id === state.ccSelectedCardId && item.type === 'loan');
     const overviewLayout = document.getElementById('loans-overview-layout');
     const detailLayout = document.getElementById('cc-dashboard-layout');
@@ -24275,6 +24537,7 @@ function renderLoansTab() {
 }
 
 function renderCreditCardsTab() {
+    queueMicrotask(syncLocationHashToView);
     placeDebtDashboardLayout('credit');
     reconcileCardCurrentBalances();
     const selectedCard = state.loans.find(item => item.id === state.ccSelectedCardId && item.type === 'credit');
