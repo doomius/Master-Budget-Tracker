@@ -2135,6 +2135,7 @@ async function init() {
     state.savingsPoolView = 'household';
     setupEventListeners();
     setupSectionLinks();
+    setupSidebarAccordion();
 
     populateYearSelect();
     const monthSelectEl = document.getElementById('month-select');
@@ -5910,8 +5911,50 @@ function getCurrentBudgetifyRoute() {
     return buildBudgetifyRoute(tab, sub);
 }
 
+// Browser tab title for the section on screen ("Jason's Checking · Budgetify", "Amex · Budgetify"),
+// so several open tabs can be told apart. Per explicit user request, 2026-11-24. Accounts use their
+// short Mobile Nickname when one is set. Returns null until real data has loaded (the page keeps its
+// default title while starting up).
+function getViewTabTitle() {
+    if (!_driveSyncBaselineEstablished) return null;
+    const tab = document.body.dataset.activeTab || 'dashboard';
+    const accountLabel = account => (account.mobileNickname || '').trim() || account.name;
+    switch (tab) {
+        case 'dashboard': {
+            const type = state.dashboardType || 'personal';
+            return type === 'joint' ? 'Joint Checking' : type === 'asia' ? "Asia's Checking" : "Jason's Checking";
+        }
+        case 'creditcards':
+        case 'loans': {
+            const account = (state.loans || []).find(l => l.id === state.ccSelectedCardId && l.type === (tab === 'loans' ? 'loan' : 'credit'));
+            return account ? accountLabel(account) : (tab === 'loans' ? 'Installment Loans' : 'Credit Cards');
+        }
+        case 'savings': {
+            const pool = SAVINGS_TRACKER_REGISTRY[state.savingsPoolView] || SAVINGS_TRACKER_REGISTRY.household;
+            return pool ? pool.fullLabel : 'Savings';
+        }
+        case 'vacation': {
+            const trip = (state.vacationTrips || []).find(t => t.id === state.vacationSelectedTripId);
+            return trip?.name ? `${trip.name} (Vacation)` : 'Vacation Planner';
+        }
+        case 'bills': return 'Joint Transfers';
+        case 'billtracker': return 'Bills & Expenses';
+        case 'delivery': return 'Delivery Earnings';
+        case 'sync': return 'Sync Settings';
+        default: return null;
+    }
+}
+
+function syncDocumentTitleToView() {
+    const label = getViewTabTitle();
+    if (!label) return;
+    const title = `${label} · Budgetify`;
+    if (document.title !== title) document.title = title;
+}
+
 // Keeps the address bar on the section being viewed (replaceState — no extra Back-button entries).
 function syncLocationHashToView() {
+    syncDocumentTitleToView();
     if (!_routeSyncEnabled) return;
     const route = getCurrentBudgetifyRoute();
     if (decodeURIComponent(location.hash.replace(/^#/, '')) === decodeURIComponent(route)) return;
@@ -5949,6 +5992,34 @@ function openRouteInNewTabIfRequested(event, tab, sub) {
     event.stopPropagation();
     window.open(buildBudgetifyRouteUrl(tab, sub), '_blank');
     return true;
+}
+
+// Sidebar accordion (Checking / Savings Tracker): clicking the parent item only expands or collapses
+// its account list — it no longer jumps to Jason's page; picking Jason/Joint/Asia (or a savings pool)
+// is what navigates. Per explicit user request, 2026-11-24. A group follows the active tab until the
+// user toggles it; after that it stays the way they left it.
+const _navGroupUserOpen = {};
+function isNavGroupOpen(parentTab, activeTab) {
+    return Object.prototype.hasOwnProperty.call(_navGroupUserOpen, parentTab) ? _navGroupUserOpen[parentTab] : parentTab === activeTab;
+}
+function setupSidebarAccordion() {
+    const nav = document.querySelector('.sidebar-nav');
+    // Capture phase: runs before the nav buttons' own switchToTab() click handlers, which it stops.
+    nav?.addEventListener('click', event => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; // new-tab clicks: setupSectionLinks()
+        const subItem = event.target.closest('.nav-subgroup [data-nav-dashboard-type], .nav-subgroup [data-nav-savings-pool]');
+        if (subItem) {
+            _navGroupUserOpen[subItem.closest('.nav-subgroup').dataset.parentTab] = true;
+            return;
+        }
+        const parentBtn = event.target.closest('.nav-btn[data-tab]');
+        if (!parentBtn || !document.querySelector(`.nav-subgroup[data-parent-tab="${parentBtn.dataset.tab}"]`)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const parentTab = parentBtn.dataset.tab;
+        _navGroupUserOpen[parentTab] = !isNavGroupOpen(parentTab, document.body.dataset.activeTab || 'dashboard');
+        syncSidebarAccountSubnav();
+    }, true);
 }
 
 function setupSectionLinks() {
@@ -12769,7 +12840,9 @@ function syncSidebarAccountSubnav() {
     const savingsPool = (state.savingsPoolView && typeof SAVINGS_TRACKER_REGISTRY !== 'undefined' && SAVINGS_TRACKER_REGISTRY[state.savingsPoolView])
         ? state.savingsPoolView : 'household';
     document.querySelectorAll('.nav-subgroup').forEach(group => {
-        group.classList.toggle('open', group.dataset.parentTab === activeTab);
+        const open = isNavGroupOpen(group.dataset.parentTab, activeTab);
+        group.classList.toggle('open', open);
+        document.querySelector(`.nav-btn[data-tab="${group.dataset.parentTab}"]`)?.classList.toggle('expanded', open);
     });
     document.querySelectorAll('[data-nav-dashboard-type]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.navDashboardType === (state.dashboardType || 'personal'));
