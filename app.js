@@ -1,10 +1,12 @@
 // Budgetify - Application Logic (app.js)
 
-// Bumped by hand on each regeneration of Master Budget Unified.html. Shown in the sidebar footer so
-// it's possible to tell, just by looking at the page, whether a given deployment (GitHub Pages,
-// Google Sites, a phone's cached copy, etc.) is actually running the latest code — rather than
-// guessing from behavior alone whether a reported bug is a real regression or a stale cache.
-const BUILD_VERSION = '2026-10-18 09:28';
+// Shown in the sidebar footer so it's possible to tell, just by looking at the page, whether a given
+// deployment (GitHub Pages, Google Sites, a phone's cached copy, etc.) is actually running the latest
+// code. Since 2026-11-24 the footer shows app.js's own Last-Modified date as reported by the server
+// (see showBuildStamp()), which updates by itself on every upload — this hand-typed value is only
+// the fallback when that header isn't available (e.g. opening the file straight from disk). It had
+// been left at 2026-10-18 through more than a month of uploads, which is why it moved to automatic.
+const BUILD_VERSION = '2026-11-24 10:41';
 
 // --- CONFIG & STATE ---
 const CONFIG = {
@@ -2090,13 +2092,32 @@ function _measureScrollbarWidth() {
     document.documentElement.style.setProperty('--scrollbar-width', `${width}px`);
 }
 
+// Sidebar footer build stamp: when app.js was last uploaded, per the server's Last-Modified header
+// (GitHub Pages sends it), in local time. Falls back to BUILD_VERSION if the header can't be read.
+function showBuildStamp() {
+    const marker = document.getElementById('build-version-marker');
+    if (!marker) return;
+    marker.textContent = 'Build ' + BUILD_VERSION;
+    const script = [...document.scripts].find(s => /(^|\/)app\.js(\?|$)/.test(s.src));
+    if (!script || !/^https?:/.test(script.src)) return;
+    fetch(script.src, { method: 'HEAD', cache: 'no-store' })
+        .then(resp => {
+            const modified = resp.ok ? resp.headers.get('Last-Modified') : null;
+            const when = modified ? new Date(modified) : null;
+            if (!when || Number.isNaN(when.getTime())) return;
+            const pad = n => String(n).padStart(2, '0');
+            marker.textContent = `Build ${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+            marker.title = 'When app.js was last uploaded';
+        })
+        .catch(() => { /* offline or blocked — keep the fallback */ });
+}
+
 async function init() {
     // Set before anything else paints — avoids a flash of the wrong (zoom-based-media-query-era)
     // layout between first paint and the first renderAppImmediate() call, which is what normally
     // keeps this in sync afterward (see _syncMobileScreenClass()'s own comment).
     _syncMobileScreenClass();
-    const versionMarker = document.getElementById('build-version-marker');
-    if (versionMarker) versionMarker.textContent = 'Build ' + BUILD_VERSION;
+    showBuildStamp();
 
     _measureScrollbarWidth();
     // Read before the first render: once route syncing starts, the address bar tracks the view.
@@ -5884,19 +5905,45 @@ let _routeSyncEnabled = false;
 function parseBudgetifyRoute(hash) {
     const raw = String(hash || '').replace(/^#\/?/, '');
     if (!raw) return null;
-    const [slug, ...rest] = raw.split('/');
+    const [slug, sub = '', date = ''] = raw.split('/');
     const tab = ROUTE_TAB_BY_SLUG[decodeURIComponent(slug)];
     if (!tab) return null;
-    return { tab, sub: decodeURIComponent(rest.join('/')) };
+    const day = decodeURIComponent(date);
+    return { tab, sub: decodeURIComponent(sub), date: /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : '' };
 }
 
-function buildBudgetifyRoute(tab, sub) {
+// `date` (yyyy-mm-dd, optional) is only used for links to one card/loan's payment — it isn't kept in
+// the address bar while browsing.
+function buildBudgetifyRoute(tab, sub, date) {
     const slug = ROUTE_SLUG_BY_TAB[tab] || 'checking';
-    return sub ? `${slug}/${encodeURIComponent(sub)}` : slug;
+    if (!sub) return slug;
+    return date ? `${slug}/${encodeURIComponent(sub)}/${date}` : `${slug}/${encodeURIComponent(sub)}`;
 }
 
-function buildBudgetifyRouteUrl(tab, sub) {
-    return `${location.href.split('#')[0]}#${buildBudgetifyRoute(tab, sub)}`;
+function buildBudgetifyRouteUrl(tab, sub, date) {
+    return `${location.href.split('#')[0]}#${buildBudgetifyRoute(tab, sub, date)}`;
+}
+
+// Turns an in-app link (e.g. "View in Installment Loans" in the Edit Transaction dialog) into a real
+// link: its href is the section's own URL, so right-click → Open in New Tab, Ctrl/Cmd-click and
+// middle-click all open that exact account in a new browser tab, while a plain click still
+// navigates inside this tab via `navigate`. Before this, these links were href="#" with a click
+// handler that always cancelled the click — Ctrl-click did nothing and "Open in New Tab" opened
+// the default page instead of the account. Per user report, 2026-11-24.
+function wireSectionLink(link, tab, sub, date, navigate) {
+    if (!link) return;
+    link.href = buildBudgetifyRouteUrl(tab, sub, date);
+    link.onclick = event => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; // browser opens the href
+        event.preventDefault();
+        navigate();
+    };
+}
+
+// The account a card/loan payment link should open, with the right section for its type.
+function getDebtAccountRoute(accountId) {
+    const account = (state.loans || []).find(l => l.id === accountId);
+    return { tab: account?.type === 'loan' ? 'loans' : 'creditcards', account };
 }
 
 function getCurrentBudgetifyRoute() {
@@ -5976,6 +6023,15 @@ function applyBudgetifyRoute(route) {
         const wantedType = route.tab === 'loans' ? 'loan' : 'credit';
         const account = (state.loans || []).find(l => l.id === route.sub && l.type === wantedType);
         state.ccSelectedCardId = account ? account.id : '';
+        if (account && route.date) {
+            const day = new Date(route.date + 'T00:00:00');
+            if (!Number.isNaN(day.getTime())) {
+                state.ccViewMode = 'calendar';
+                state.ccYear = day.getFullYear();
+                state.ccMonth = MONTH_ORDER[day.getMonth()];
+                state.ccSelectedDate = route.date;
+            }
+        }
         switchToTab(route.tab);
     } else {
         switchToTab(route.tab);
@@ -18047,10 +18103,9 @@ function applyEditTxCardPaymentNotice(tx) {
         document.getElementById('edit-tx-desc').disabled = true;
     }
     if (link) {
-        link.onclick = (e) => {
-            e.preventDefault();
-            goToCardPaymentInCreditCards(tx.payoffTargetId, tx.date);
-        };
+        const { tab } = getDebtAccountRoute(tx.payoffTargetId);
+        link.textContent = tab === 'loans' ? 'View in Installment Loans' : 'View in Credit Cards';
+        wireSectionLink(link, tab, tx.payoffTargetId, tx.date, () => goToCardPaymentInCreditCards(tx.payoffTargetId, tx.date));
     }
 }
 
@@ -21699,39 +21754,29 @@ function openBillSplitterEditor(bill, cycleKey) {
 
     if (isCardPayment) {
         const cardLink = document.getElementById('link-to-card-payment');
-        if (cardLink) {
-            cardLink.onclick = (e) => {
-                e.preventDefault();
-                goToCardPaymentInCreditCards(bill.payoffTargetId, bill.linkedPaymentDate);
-            };
-        }
+        const { tab: cardTab } = getDebtAccountRoute(bill.payoffTargetId);
+        wireSectionLink(cardLink, cardTab, bill.payoffTargetId, bill.linkedPaymentDate, () => goToCardPaymentInCreditCards(bill.payoffTargetId, bill.linkedPaymentDate));
     }
 
     if (isMortgage) {
-        const link = document.getElementById('link-to-mortgage-settings');
-        if (link) {
-            link.onclick = (e) => {
-                e.preventDefault();
-                document.getElementById('joint-bill-dialog')?.close();
-                switchToTab('loans');
-                state.ccSelectedCardId = '';
-                renderLoansTab();
-                openEditLoanModal(bill.mortgageLoanId);
-            };
-        }
+        // A new tab opens the mortgage loan itself; the settings dialog only opens on a plain click.
+        wireSectionLink(document.getElementById('link-to-mortgage-settings'), 'loans', bill.mortgageLoanId, '', () => {
+            document.getElementById('joint-bill-dialog')?.close();
+            switchToTab('loans');
+            state.ccSelectedCardId = '';
+            renderLoansTab();
+            openEditLoanModal(bill.mortgageLoanId);
+        });
     }
 
     if (isBillTrackerSynced) {
-        const link = document.getElementById('link-to-bill-tracker-settings');
-        if (link) {
-            link.onclick = (e) => {
-                e.preventDefault();
-                document.getElementById('joint-bill-dialog')?.close();
-                switchToTab('billtracker');
-                renderBillTrackerTab();
-                openEditBillSettingModal(bill.billTrackerSettingId);
-            };
-        }
+        // A new tab opens Bills & Expenses; the bill's settings dialog only opens on a plain click.
+        wireSectionLink(document.getElementById('link-to-bill-tracker-settings'), 'billtracker', '', '', () => {
+            document.getElementById('joint-bill-dialog')?.close();
+            switchToTab('billtracker');
+            renderBillTrackerTab();
+            openEditBillSettingModal(bill.billTrackerSettingId);
+        });
     }
 
     document.getElementById('joint-bill-dialog')?.showModal();
