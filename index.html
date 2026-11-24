@@ -132,23 +132,26 @@
                     <span id="sync-status-flag-label">Sync status</span>
                 </button>
             </nav>
-            <div id="sync-status-detail" class="sync-status-detail hidden">
-                <div id="sync-status-detail-message" class="sync-status-detail-message"></div>
-                <div class="sync-status-detail-actions">
-                    <button type="button" id="btn-sync-status-push" class="action-btn small-btn solid-btn">Sync Now</button>
-                    <!-- Hidden except while a pull/push is actually in flight — see
-                         stopCurrentSync()/showSyncStatusFlag() in app.js. -->
-                    <button type="button" id="btn-sync-status-stop" class="action-btn small-btn danger-btn hidden">Stop Sync</button>
-                    <button type="button" id="btn-sync-status-pull" class="action-btn small-btn outline-btn">Pull Fresh</button>
-                </div>
-                <div id="sync-status-detail-time" class="sync-status-detail-time"></div>
-            </div>
-
             <div class="sidebar-footer">
                 <button type="button" class="action-btn small-btn outline-btn" id="btn-reset-view-settings" style="width:100%;" title="Resets every view/filter/sort/collapsed-panel preference back to its default — does not touch your bills, transactions, or other data">↺ Reset to Default View</button>
                 <div id="build-version-marker" style="text-align:center; font-size:0.7rem; color:var(--text-secondary); opacity:0.5; margin-top:0.5rem;"></div>
             </div>
         </aside>
+        <!-- Sync status popover (opened from the sidebar's "Synced" badge). Lives outside the sidebar on
+             purpose: the sidebar scrolls (overflow) and has a backdrop-filter, which would clip or re-anchor
+             this position:fixed panel that sits just to its right. -->
+        <div id="sync-status-detail" class="sync-status-detail hidden">
+            <div id="sync-status-detail-message" class="sync-status-detail-message"></div>
+            <div class="sync-status-detail-actions">
+                <button type="button" id="btn-sync-status-push" class="action-btn small-btn solid-btn">Sync Now</button>
+                <!-- Hidden except while a pull/push is actually in flight — see
+                     stopCurrentSync()/showSyncStatusFlag() in app.js. -->
+                <button type="button" id="btn-sync-status-stop" class="action-btn small-btn danger-btn hidden">Stop Sync</button>
+                <button type="button" id="btn-sync-status-pull" class="action-btn small-btn outline-btn">Pull Fresh</button>
+            </div>
+            <div id="sync-status-detail-time" class="sync-status-detail-time"></div>
+        </div>
+
 
         <!-- Main Content Area -->
         <main class="app-main">
