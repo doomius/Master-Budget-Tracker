@@ -145,6 +145,15 @@ h1, h2, h3, h4, h5, h6 {
     height: 100vh;
     height: 100dvh;
     z-index: 10;
+    /* Scrolls when its contents (e.g. Checking's expanded account list) are taller than the window,
+       so the footer and build stamp at the bottom are always reachable. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.app-sidebar > * {
+    flex-shrink: 0;
 }
 
 .sidebar-brand {
