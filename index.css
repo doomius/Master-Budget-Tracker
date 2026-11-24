@@ -241,7 +241,7 @@ h1, h2, h3, h4, h5, h6 {
     opacity: 0.6;
     transition: transform 0.15s ease;
 }
-.nav-btn.active .nav-chevron {
+.nav-btn.expanded .nav-chevron {
     transform: rotate(90deg);
 }
 .nav-subgroup {
